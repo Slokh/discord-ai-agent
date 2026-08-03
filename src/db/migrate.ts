@@ -10,11 +10,19 @@ export function resolveMigrationsDir(cwd = process.cwd()) {
 export async function runMigrations(databaseUrl?: string) {
   const config = loadConfig();
   const pool = createPool({ ...config, databaseUrl: databaseUrl ?? config.databaseUrl });
+  try {
+    await runMigrationsWithPool(pool);
+  } finally {
+    await pool.end();
+  }
+}
+
+export async function runMigrationsWithPool(pool: ReturnType<typeof createPool>, lockScope = "application") {
   const client = await pool.connect();
   let lockAcquired = false;
 
   try {
-    await client.query("SELECT pg_advisory_lock(hashtext('discord_ai_agent_schema_migrations'))");
+    await client.query("SELECT pg_advisory_lock(hashtext($1))", [`discord_ai_agent_schema_migrations:${lockScope}`]);
     lockAcquired = true;
 
     await client.query("BEGIN");
@@ -45,10 +53,9 @@ export async function runMigrations(databaseUrl?: string) {
     throw error;
   } finally {
     if (lockAcquired) {
-      await client.query("SELECT pg_advisory_unlock(hashtext('discord_ai_agent_schema_migrations'))").catch(() => undefined);
+      await client.query("SELECT pg_advisory_unlock(hashtext($1))", [`discord_ai_agent_schema_migrations:${lockScope}`]).catch(() => undefined);
     }
     client.release();
-    await pool.end();
   }
 }
 

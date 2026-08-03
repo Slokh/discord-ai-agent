@@ -1,13 +1,13 @@
 import { createHash, randomUUID } from "node:crypto";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
-import { loadConfig } from "../../src/config/env.js";
 import { AgentRuntimeRepository } from "../../src/db/agentRuntimeRepository.js";
 import { DeliveryObligationsRepository } from "../../src/db/deliveryObligationsRepository.js";
-import { createPool, type DbPool } from "../../src/db/pool.js";
+import type { DbPool } from "../../src/db/pool.js";
 import { runConversationCompactionOnce } from "../../src/db/conversationCompaction.js";
 import { createAppDatabase, type DiscordAiAgentRepository } from "../../src/db/repositories.js";
 import { runDataRetentionOnce } from "../../src/observability/dataRetention.js";
 import { passingRandomCanaryChannel, passingStatsCanaryChannel, passingWebCanaryChannel } from "../../src/observability/postDeployCanaryEvidence.js";
+import { createIsolatedTestDatabase, type IsolatedTestDatabase } from "./testDatabase.js";
 
 const runDbTests = process.env.DISCORD_AI_AGENT_DB_TESTS === "true";
 
@@ -16,9 +16,11 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
   let repo: DiscordAiAgentRepository;
   let agentRuntimeRepo: AgentRuntimeRepository;
   let obligationsRepo: DeliveryObligationsRepository;
+  let database: IsolatedTestDatabase;
 
-  beforeAll(() => {
-    pool = createPool(loadConfig());
+  beforeAll(async () => {
+    database = await createIsolatedTestDatabase("repository");
+    pool = database.pool;
     repo = createAppDatabase(pool);
     agentRuntimeRepo = new AgentRuntimeRepository(pool);
     obligationsRepo = new DeliveryObligationsRepository(pool);
@@ -30,7 +32,7 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
 
   afterAll(async () => {
     await cleanupTestRows(pool);
-    await pool.end();
+    await database.cleanup();
   });
 
   it("includes parent-visible public threads but not parent-visible private threads", async () => {

@@ -1,16 +1,9 @@
 import { Client, GatewayIntentBits, Partials } from "discord.js";
 import { assertDiscordConfig, assertExecutionConfig, assertOpenRouterConfig, assertPaymentConfig, assertTaskCallbackConfig, loadConfig } from "./config/env.js";
 import { startInternalApi } from "./control/internalApiServer.js";
-import { BudgetRepository } from "./db/budgetRepository.js";
-import { RngRepository } from "./db/rngRepository.js";
-import { DeliveryObligationsRepository } from "./db/deliveryObligationsRepository.js";
 import { runMigrations } from "./db/migrate.js";
-import { createPool } from "./db/pool.js";
-import { AgentRuntimeRepository } from "./db/agentRuntimeRepository.js";
-import { createAppDatabase } from "./db/repositories.js";
 import { createExecutionBackend } from "./execution/backend.js";
 import { startSandboxReconciler } from "./execution/reconciler.js";
-import { OpenRouterClient } from "./models/openrouter.js";
 import { embedStoredMessage, embedStoredMessages } from "./memory/embedding.js";
 import { DiscordCrawler } from "./discord/crawler.js";
 import { createDiscordAiAgentBot } from "./discord/client.js";
@@ -19,10 +12,8 @@ import { startJobs } from "./jobs/queue.js";
 import { startStaleRunReconciler } from "./observability/staleRuns.js";
 import { logger } from "./util/logger.js";
 import { createAgentRuntimeRunner } from "./discord/agentRuntimeRunner.js";
-import { PaymentRepository } from "./db/paymentRepository.js";
-import { PrivyTempoWalletProvider } from "./payments/privyTempoWalletProvider.js";
-import { WalletService } from "./payments/walletService.js";
 import { startPaymentReconciler } from "./payments/reconciler.js";
+import { createApplicationServices } from "./runtime/applicationServices.js";
 
 async function main() {
   const config = loadConfig();
@@ -84,24 +75,20 @@ async function main() {
     logger.info("Skipping startup database migrations");
   }
 
-  const pool = createPool(config);
+  const services = createApplicationServices({ config, enableWalletRuntime: startsPaymentRuntime });
+  const {
+    pool,
+    repo,
+    agentRuntime: agentRuntimeRepo,
+    budget: budgetRepo,
+    rng: rngRepo,
+    payments: paymentRepo,
+    deliveryObligations: deliveryObligationsRepo,
+    openRouter,
+    wallet: walletService,
+  } = services;
   logger.debug("Postgres pool created");
-  const repo = createAppDatabase(pool);
-  const agentRuntimeRepo = new AgentRuntimeRepository(pool);
-  const budgetRepo = new BudgetRepository(pool);
-  const rngRepo = new RngRepository(pool);
-  const paymentRepo = new PaymentRepository(pool);
-  const deliveryObligationsRepo = new DeliveryObligationsRepository(pool);
-  const openRouter = new OpenRouterClient(config.openRouter);
   const executionBackend = startsTaskWorker ? createExecutionBackend(config) : undefined;
-  const walletProvider = startsPaymentRuntime && config.payments.walletEnabled
-    ? new PrivyTempoWalletProvider({
-        appId: config.payments.privyAppId!,
-        appSecret: config.payments.privyAppSecret!,
-        network: config.payments.tempoNetwork
-      })
-    : undefined;
-  const walletService = walletProvider ? new WalletService(config.payments, paymentRepo, walletProvider) : undefined;
   const client =
     startsDiscordClient
       ? new Client({
@@ -198,7 +185,7 @@ async function main() {
     await jobs.stop().catch(() => undefined);
     runtime?.destroy();
     if (!runtime) client?.destroy();
-    await pool.end().catch(() => undefined);
+    await services.close().catch(() => undefined);
     process.exit(0);
   };
 

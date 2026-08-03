@@ -1,18 +1,20 @@
 import { randomUUID } from "node:crypto";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
-import { loadConfig } from "../../src/config/env.js";
-import { createPool, type DbPool } from "../../src/db/pool.js";
+import type { DbPool } from "../../src/db/pool.js";
 import { RngRepository, type RngSessionRecord } from "../../src/db/rngRepository.js";
 import { generateServerSeed, rngCommitment } from "../../src/rng/provable.js";
+import { createIsolatedTestDatabase, type IsolatedTestDatabase } from "./testDatabase.js";
 
 const runDbTests = process.env.DISCORD_AI_AGENT_DB_TESTS === "true";
 
 describe.skipIf(!runDbTests)("RngRepository database behavior", () => {
   let pool: DbPool;
   let rngRepo: RngRepository;
+  let database: IsolatedTestDatabase;
 
-  beforeAll(() => {
-    pool = createPool(loadConfig());
+  beforeAll(async () => {
+    database = await createIsolatedTestDatabase("rng");
+    pool = database.pool;
     rngRepo = new RngRepository(pool);
   });
 
@@ -22,7 +24,7 @@ describe.skipIf(!runDbTests)("RngRepository database behavior", () => {
 
   afterAll(async () => {
     await pool.query("DELETE FROM rng_sessions WHERE guild_id LIKE 'guild-%'");
-    await pool.end();
+    await database.cleanup();
   });
 
   function sessionInput() {

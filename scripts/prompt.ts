@@ -44,14 +44,7 @@ async function main() {
     { ensureAgentRuntimePromptExecution, finishAgentRuntimePromptExecution },
     { loadConfig },
     { runMigrations },
-    { createPool },
-    { createAppDatabase },
-    { AgentRuntimeRepository },
-    { RngRepository },
-    { PaymentRepository },
-    { OpenRouterClient },
-    { PrivyTempoWalletProvider },
-    { WalletService },
+    { createApplicationServices },
     { startJobs },
     { runWithTrace }
   ] = await Promise.all([
@@ -59,14 +52,7 @@ async function main() {
     import("../src/agent/runtimeLedger.js"),
     import("../src/config/env.js"),
     import("../src/db/migrate.js"),
-    import("../src/db/pool.js"),
-    import("../src/db/repositories.js"),
-    import("../src/db/agentRuntimeRepository.js"),
-    import("../src/db/rngRepository.js"),
-    import("../src/db/paymentRepository.js"),
-    import("../src/models/openrouter.js"),
-    import("../src/payments/privyTempoWalletProvider.js"),
-    import("../src/payments/walletService.js"),
+    import("../src/runtime/applicationServices.js"),
     import("../src/jobs/queue.js"),
     import("../src/util/trace.js")
   ]);
@@ -77,22 +63,8 @@ async function main() {
   }
   if (config.runMigrations) await runMigrations(config.databaseUrl);
 
-  const pool = createPool(config);
-  const repo = createAppDatabase(pool);
-  const agentRuntime = new AgentRuntimeRepository(pool);
-  const rngRepo = new RngRepository(pool);
-  const paymentRepo = new PaymentRepository(pool);
-  const openRouter = new OpenRouterClient(config.openRouter);
-  const walletProvider = config.payments.walletEnabled && config.payments.privyAppId && config.payments.privyAppSecret
-    ? new PrivyTempoWalletProvider({
-        appId: config.payments.privyAppId,
-        appSecret: config.payments.privyAppSecret,
-        network: config.payments.tempoNetwork
-      })
-    : undefined;
-  const walletService = walletProvider
-    ? new WalletService(config.payments, paymentRepo, walletProvider)
-    : undefined;
+  const services = createApplicationServices({ config, enableWalletRuntime: true });
+  const { pool, repo, agentRuntime, rng: rngRepo, openRouter, wallet: walletService } = services;
   const jobs = await startJobs({
     config,
     repo,
@@ -349,7 +321,7 @@ async function main() {
     }
   } finally {
     await jobs.stop().catch(() => undefined);
-    await pool.end().catch(() => undefined);
+    await services.close().catch(() => undefined);
   }
 }
 

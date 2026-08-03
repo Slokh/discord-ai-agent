@@ -1,7 +1,9 @@
 node_modules
 dist
 target
+**/target
 coverage
+coverage-*
 .env
 .env.*
 !.env.example
@@ -10,6 +12,7 @@ coverage
 *.log
 .discord-ai-agent
 .terraform
+**/.terraform
 terraform.tfstate
 terraform.tfstate.*
 *.tfvars

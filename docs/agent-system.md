@@ -48,7 +48,7 @@ Configuration is validated in `src/config/env.ts`:
 - Code updates default to Terra with medium reasoning.
 - Owner/ops may set a per-guild conversational override to Sol or Luna through the guarded model tool.
 
-Public-web research crosses the typed `web__run` application capability. Its focused handler offers only the OpenRouter hosted search, fetch, or time capabilities requested by the typed operation and requires hosted execution; it records the nested provider request, usage, sources, and failure in the same runtime ledger. NanoCodex's provider-specific standalone search is disabled so the agent cannot bypass the configured provider or its application telemetry.
+Public-web research crosses the typed `web__run` application capability. Its focused handler offers only the OpenRouter hosted search, fetch, or time capabilities requested by the typed operation, directs each operation to execute once, and rejects responses without recorded hosted execution and readable evidence. It records the nested provider request, usage, sources, and failure in the same runtime ledger. NanoCodex's provider-specific standalone search is disabled so the agent cannot bypass the configured provider or its application telemetry.
 
 Embeddings, image generation, and transcription are also direct provider-backed tools. They are not alternate agent engines.
 

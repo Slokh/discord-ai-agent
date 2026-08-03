@@ -14,6 +14,7 @@ import { createPool } from "../src/db/pool.js";
 import { resolveGitHubTaskToken } from "../src/execution/githubAuth.js";
 import { parseGitHubRepository } from "../src/github/repository.js";
 import { deploymentToolset } from "../src/tools/toolScope.js";
+import { extractPromptJson } from "./promptJson.js";
 
 const execFileAsync = promisify(execFile);
 const config = loadConfig();
@@ -54,7 +55,8 @@ const { stdout } = await execFileAsync(process.execPath, [
   timeout: 7 * 60 * 1_000,
   maxBuffer: 2 * 1024 * 1024,
 });
-const output = promptJson(stdout);
+const output = extractPromptJson(stdout);
+if (typeof output.traceId !== "string") throw new Error("Post-deploy canary prompt result is missing its trace ID.");
 if (!output.content.includes("POST_DEPLOY_CANARY_OK")) throw new Error("Conversation canary did not return its completion marker.");
 
 const pool = createPool(config);
@@ -189,13 +191,4 @@ function kubernetesStatus(error: unknown) {
   if (typeof error !== "object" || error == null) return undefined;
   const candidate = error as { code?: unknown; statusCode?: unknown; response?: { statusCode?: unknown } };
   return Number(candidate.code ?? candidate.statusCode ?? candidate.response?.statusCode);
-}
-
-function promptJson(stdout: string): { traceId: string; content: string } {
-  const start = stdout.indexOf("{");
-  const end = stdout.lastIndexOf("}");
-  if (start < 0 || end <= start) throw new Error("Post-deploy canary prompt returned no JSON result.");
-  const value = JSON.parse(stdout.slice(start, end + 1)) as Record<string, unknown>;
-  if (typeof value.traceId !== "string" || typeof value.content !== "string") throw new Error("Post-deploy canary prompt result is incomplete.");
-  return { traceId: value.traceId, content: value.content };
 }

@@ -75,7 +75,11 @@ describe("eval runner", () => {
   });
 
   it("extracts prompt JSON even when surrounding output exists", () => {
-    expect(extractPromptJson('noise\n{"runId":"local-1","content":"hello","durationMs":42}\n').content).toBe("hello");
+    expect(extractPromptJson([
+      '{"level":30,"message":"started {worker}"}',
+      '{"runId":"local-1","content":"hello {world}","durationMs":42}',
+      '{"level":30,"message":"stopped"}',
+    ].join("\n"))).toMatchObject({ runId: "local-1", content: "hello {world}", durationMs: 42 });
   });
 
   it("derives selected and requested tools from trace metadata", () => {

@@ -1,5 +1,8 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { spawn, type ChildProcess, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { mkdtemp, rename, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { basename, join } from "node:path";
 import { createInterface } from "node:readline";
 import type { FunctionToolDefinition } from "../models/openrouter.js";
 
@@ -57,6 +60,7 @@ type RuntimeInput = {
   instructions: string;
   prompt: string;
   session_id: string;
+  result_directory: string;
   workspace?: string;
   resume?: NanoCodexSessionSnapshot;
   tools: NanoCodexToolDefinition[];
@@ -81,6 +85,7 @@ type RuntimeOutput =
       call_id: string;
       name: string;
       arguments: unknown;
+      result_file: string;
     }
   | {
       type: "tool_result_accepted";
@@ -128,6 +133,8 @@ export async function runNanoCodexRuntime(input: {
   processEnv?: NodeJS.ProcessEnv;
   spawnProcess?: (binary: string, options: { cwd?: string; env?: NodeJS.ProcessEnv }) => RuntimeProcess;
 }): Promise<NanoCodexRuntimeResult> {
+  const resultDirectory = await mkdtemp(join(tmpdir(), "discord-agent-nanocodex-"));
+  try {
   const child = (input.spawnProcess ?? spawnRuntimeProcess)(input.binary ?? NANOCODEX_RUNTIME_BINARY, {
     cwd: input.processCwd,
     env: input.processEnv,
@@ -173,7 +180,8 @@ export async function runNanoCodexRuntime(input: {
           case "ready":
             if (started) throw new Error("NanoCodex runtime emitted ready more than once");
             started = true;
-            await send(runInput(input));
+            await send(runInput(input, resultDirectory));
+            child.protocolInput.end();
             return;
           case "event":
             assertRequestId(input.requestId, message.request_id);
@@ -196,8 +204,7 @@ export async function runNanoCodexRuntime(input: {
               name: message.name,
               arguments: message.arguments,
             });
-            await send({
-              type: "tool_result",
+            await writeToolResult(resultDirectory, message.result_file, {
               call_id: message.call_id,
               success: result.success,
               output: result.output,
@@ -247,6 +254,9 @@ export async function runNanoCodexRuntime(input: {
       exit = { code, signal };
     });
   });
+  } finally {
+    await rm(resultDirectory, { recursive: true, force: true });
+  }
 }
 
 export function nanoCodexModel(model: string): NanoCodexModel {
@@ -279,7 +289,7 @@ export function nanoCodexToolDefinitions(tools: FunctionToolDefinition[]): NanoC
   }));
 }
 
-function runInput(input: Parameters<typeof runNanoCodexRuntime>[0]): RuntimeInput {
+function runInput(input: Parameters<typeof runNanoCodexRuntime>[0], resultDirectory: string): RuntimeInput {
   return {
     type: "run",
     request_id: input.requestId,
@@ -295,10 +305,21 @@ function runInput(input: Parameters<typeof runNanoCodexRuntime>[0]): RuntimeInpu
     instructions: input.instructions,
     prompt: input.prompt,
     session_id: input.sessionId,
+    result_directory: resultDirectory,
     ...(input.workspace ? { workspace: input.workspace } : {}),
     ...(input.resume ? { resume: input.resume } : {}),
     tools: nanoCodexToolDefinitions(input.tools),
   };
+}
+
+async function writeToolResult(resultDirectory: string, resultFile: string, result: unknown): Promise<void> {
+  if (basename(resultFile) !== resultFile || !resultFile.startsWith("result-") || !resultFile.endsWith(".json")) {
+    throw new Error(`NanoCodex runtime emitted invalid result filename: ${resultFile}`);
+  }
+  const finalPath = join(resultDirectory, resultFile);
+  const temporaryPath = join(resultDirectory, `.tmp-${randomUUID()}`);
+  await writeFile(temporaryPath, JSON.stringify(result), { encoding: "utf8", mode: 0o600, flag: "wx" });
+  await rename(temporaryPath, finalPath);
 }
 
 function responsesApiBase(baseUrl: string): string {

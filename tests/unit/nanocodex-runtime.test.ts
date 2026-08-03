@@ -1,4 +1,5 @@
 import { EventEmitter } from "node:events";
+import { readFile } from "node:fs/promises";
 import { PassThrough } from "node:stream";
 import { describe, expect, it, vi } from "vitest";
 import {
@@ -92,6 +93,7 @@ describe("NanoCodex native runtime protocol", () => {
       workspace_tools: false,
       tools: [{ type: "function", name: "lookup" }],
     });
+    const resultDirectory = (child.received[0] as { result_directory: string }).result_directory;
 
     child.send({
       type: "event",
@@ -107,15 +109,16 @@ describe("NanoCodex native runtime protocol", () => {
       call_id: "call-1",
       name: "lookup",
       arguments: { id: "abc" },
+      result_file: "result-1.json",
     });
-    await vi.waitFor(() => expect(child.received).toHaveLength(2));
-    expect(executeTool).toHaveBeenCalledWith({ callId: "call-1", name: "lookup", arguments: { id: "abc" } });
-    expect(child.received[1]).toEqual({
-      type: "tool_result",
+    await vi.waitFor(() => expect(executeTool).toHaveBeenCalledWith({
+      callId: "call-1", name: "lookup", arguments: { id: "abc" },
+    }));
+    await vi.waitFor(async () => expect(JSON.parse(await readFile(`${resultDirectory}/result-1.json`, "utf8"))).toEqual({
       call_id: "call-1",
       success: true,
       output: "verified result",
-    });
+    }));
     child.send({
       type: "tool_result_accepted",
       protocol_version: 1,
@@ -243,10 +246,14 @@ describe("NanoCodex native runtime protocol", () => {
       call_id: "call-fast",
       name: "lookup",
       arguments: {},
+      result_file: "result-2.json",
     });
 
     await vi.waitFor(() => expect(executeTool).toHaveBeenCalledOnce());
-    expect(child.received).toContainEqual(expect.objectContaining({ type: "tool_result", call_id: "call-fast" }));
+    const resultDirectory = (child.received[0] as { result_directory: string }).result_directory;
+    await vi.waitFor(async () => expect(JSON.parse(await readFile(`${resultDirectory}/result-2.json`, "utf8"))).toMatchObject({
+      call_id: "call-fast",
+    }));
 
     child.send({
       type: "completed",
@@ -281,6 +288,7 @@ describe("NanoCodex native runtime protocol", () => {
       spawnProcess: () => child as never,
     });
     child.send({ type: "ready", protocol_version: 1 });
+    await vi.waitFor(() => expect(child.received).toHaveLength(1));
     child.stderr.write("native failure");
     child.emit("exit", 2, null);
     child.stdout.end();

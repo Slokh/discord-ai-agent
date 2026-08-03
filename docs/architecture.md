@@ -37,7 +37,7 @@ Code-change tool call
 - NanoCodex is the only agent engine. Chat runs in the application; only repository changes enter a sandbox.
 - `agent_runtime_*` is the canonical execution ledger for chat and code-update attempts.
 - Discord delivery obligations describe what still needs to be rendered; they are not a second execution ledger.
-- The model receives one stable tool schema narrowed only by deployment capability. It chooses tools directly.
+- The model receives one stable tool schema narrowed only by each contract's declarative deployment-availability predicate. It chooses tools directly.
 - `src/agent/` is capability-agnostic. Installed product behavior enters through the capability session, tool contracts, and tool handlers rather than feature imports or tool-name branches in the model loop.
 - Every tool call is revalidated against its canonical schema, current deployment, requester scope, and access policy.
 - The current requester and current-turn intent are immutable authority.
@@ -50,7 +50,7 @@ Code-change tool call
 1. `src/discord/client.ts` wires Discord events. `messageIngress.ts` and `turnPreparation.ts` decide whether to respond, persist the message, resolve reply context, and create the runtime session/execution.
 2. `src/agent/runtimeEnvelope.ts` stores a replayable, requester-scoped turn envelope and input artifact. `runtimeControlPlane.ts` enqueues the execution.
 3. `src/discord/agentRuntimeRunner.ts` composes Discord delivery and installed feature services around the generic executor; `runtimeExecutor.ts` invokes the agent runtime.
-4. `src/capabilities/index.ts` prepares one per-turn capability session. Installed modules may contribute model selection, bounded prompt context, tool-result observation, final-response obligations, and timeout-recovery constraints.
+4. `src/capabilities/catalog.ts` is the installation manifest: it groups each tool contract and handler under a product capability and declares optional per-turn hooks. Optional contracts own their configuration predicate through `available`; there is no central feature-name switch. `src/capabilities/index.ts` prepares hooks into one capability session.
 5. `nanocodexAgentRuntime.ts` consumes only that generic session, builds the prompt, resumes a compatible opaque NanoCodex snapshot, exposes the deployment tool contract, and handles model/tool events.
 6. `toolDispatcher.ts` validates and gates the selected local tool, then dispatches through focused adapters in `src/tools/handlers/`.
 7. Tools write files, tables, footers, or semantic Discord presentation to one turn output. Successful mutations are retained so a later model failure or timeout can still return the committed result.
@@ -87,11 +87,11 @@ See [Code updates](code-updates.md) for publication and sandbox details.
 | --- | --- |
 | Agent sessions, executions, transcript, events, artifacts, snapshots | `src/db/agentRuntimeRepository.ts` and `agentRuntimeArtifactRepository.ts` |
 | Discord archive, attachments, aliases, exclusions, crawl cursors | Focused repositories under `src/db/`, especially `discordArchiveRepository.ts` |
-| Retrieval and aggregates | `retrievalRepository.ts` and `retrievalStatsRepository.ts` |
+| Retrieval and aggregates | `retrievalRepository.ts`, `retrievalAttachmentRepository.ts`, and `retrievalStatsRepository.ts` |
 | Conversation continuity | `conversationMemoryRepository.ts` and `conversationCompaction.ts` |
 | Pending final rendering | `deliveryObligationsRepository.ts` |
 | Code-update task projection and reads | `agentTaskRepository.ts` and focused task read repositories |
-| Wallets, transfers, wagers, receipts | `paymentRepository.ts` and focused payment repositories |
+| Wallets, transfers, wagers, receipts | `paymentRepository.ts`, `paymentOperationsRepository.ts`, and focused payment/service modules |
 | Random sessions and draws | `rngRepository.ts` |
 | Server prompt overlays | `serverOverlayRepository.ts` |
 | Per-guild agent model selection | `agentSettingsRepository.ts` |
@@ -104,7 +104,7 @@ See [Code updates](code-updates.md) for publication and sandbox details.
 | --- | --- | --- |
 | Generic prompt and NanoCodex execution | `src/agent/capabilityRuntime.ts`, `nanocodexAgentRuntime.ts`, `promptBuilder.ts` | architecture, NanoCodex runtime, prompt, and agent integration tests |
 | Installed capability lifecycle and feature orchestration | `src/capabilities/` | focused capability tests plus architecture boundary tests |
-| Tool contract and dispatch | `src/tools/contracts/`, `registry.ts`, `src/tools/handlers/` | registry, contract-validation, handler-conformance tests |
+| Tool contract and dispatch | `src/capabilities/catalog.ts`, `toolContracts.ts`, `src/tools/contracts/`, `src/tools/handlers/` | capability-catalog, registry, contract-validation, handler-conformance tests |
 | Discord ingress and delivery | `src/discord/client.ts`, `messageIngress.ts`, `agentDelivery.ts`, `responseSink.ts` | Discord client/delivery/response-sink tests |
 | Discord data and retrieval | `src/discord/crawler.ts`, `src/db/*Repository.ts`, `src/memory/`, retrieval tools | crawler/search/tool tests and DB integration tests |
 | Control plane and console | `src/control/internalApiServer.ts`, `src/control/`, `src/control/console/` | internal API, observability, and console tests |
@@ -115,7 +115,7 @@ See [Code updates](code-updates.md) for publication and sandbox details.
 
 ## Observability
 
-Important model, tool, provider, queue, sandbox, mutation, and delivery transitions are typed events. Large or sensitive details are retained as redacted artifacts rather than event metadata. The console, `runs:inspect`, `discord:debug`, task status, and metrics all project the same underlying ledger.
+Important model, tool, provider, queue, sandbox, mutation, and delivery transitions are typed events. `runtimeEventSchema.ts` maps registered event namespaces and terminal segments to controlled category/phase dimensions; exceptional events may provide an explicit phase, while unknown names stay `system/progress` rather than being guessed from words embedded in a name. Large or sensitive details are retained as redacted artifacts rather than event metadata. The console, `runs:inspect`, `discord:debug`, task status, and metrics all project the same underlying ledger. Quality metrics group answer latency/cost/status by model and deployed revision, tool outcomes by typed status, reviewed feedback by failure mode, and recovered deliveries.
 
 Observability may expose model inputs/outputs and deterministic decisions after permission checks and redaction. It never claims to expose private chain of thought.
 

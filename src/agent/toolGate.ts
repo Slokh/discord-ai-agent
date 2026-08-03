@@ -14,11 +14,7 @@ export async function restrictedToolGate(ctx: ToolContext, toolName: ToolName): 
     return { allowed: false, message: "This input cannot authorize a mutating action because explicit current-message authority is missing. Ask the user to state that action in a new Discord message." };
   }
   const opsIds = ctx.config.allowlists?.opsUserIds ?? [];
-  if (tool?.accessPolicy === "ops" && !isAllowed(ctx, opsIds)) return denied();
   if (tool?.accessPolicy === "strict_ops" && !isStrictlyAllowed(ctx, opsIds)) return denied();
-  if (tool?.accessPolicy === "configured_ops" && tool.accessPolicyEnabled?.(ctx.config) && !isAllowed(ctx, opsIds)) {
-    return denied(tool.accessDeniedMessage);
-  }
   return { allowed: true };
 }
 
@@ -27,13 +23,6 @@ function denied(message?: string): ToolGateDecision {
     allowed: false,
     message: message ?? "That action is restricted to the configured bot owner or ops allowlist.",
   };
-}
-
-function isAllowed(ctx: ToolContext, configuredIds: string[]) {
-  const owner = ctx.config.allowlists?.ownerUserId;
-  if (owner && ctx.userId === owner) return true;
-  const allowlist = configuredIds.length > 0 ? configuredIds : owner ? [owner] : [];
-  return allowlist.length === 0 || allowlist.includes(ctx.userId);
 }
 
 function isStrictlyAllowed(ctx: ToolContext, configuredIds: string[]) {

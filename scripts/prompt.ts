@@ -73,7 +73,7 @@ async function main() {
   if (!config.openRouter.apiKey) {
     throw new Error("OPENROUTER_API_KEY is required for local prompting.");
   }
-  await runMigrations(config.databaseUrl);
+  if (config.runMigrations) await runMigrations(config.databaseUrl);
 
   const pool = createPool(config);
   const repo = createAppDatabase(pool);

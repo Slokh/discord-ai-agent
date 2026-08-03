@@ -1,6 +1,31 @@
 import { describe, expect, it } from "vitest";
 import { uiAuthSessionToken, verifyUiAuthorization } from "../../src/control/internalApiAuth.js";
 import { renderMetrics } from "../../src/control/internalApiMetrics.js";
+import { parseRunFeedbackBody } from "../../src/control/internalApiParsers.js";
+
+describe("run feedback parsing", () => {
+  it("normalizes executable regression assertions", () => {
+    expect(parseRunFeedbackBody({
+      rating: "bad",
+      failureMode: "wrong_tool",
+      expectedTools: "searchDiscordHistory\nsearchDiscordHistory",
+      forbiddenTools: ["openrouter:web_search"],
+      mustContain: "source",
+      captureEval: true,
+    })).toEqual(expect.objectContaining({
+      failureMode: "wrong_tool",
+      expectedTools: ["searchDiscordHistory"],
+      forbiddenTools: ["openrouter:web_search"],
+      mustContain: ["source"],
+      captureEval: true,
+    }));
+  });
+
+  it("rejects stale tool names and unsupported classifications", () => {
+    expect(() => parseRunFeedbackBody({ rating: "bad", expectedTools: ["deletedTool"] })).toThrow(/unknown tools/i);
+    expect(() => parseRunFeedbackBody({ rating: "bad", failureMode: "model_was_bad" })).toThrow(/not supported/i);
+  });
+});
 
 describe("internal API UI authorization", () => {
   it("allows UI access when no password is configured", () => {
@@ -49,6 +74,10 @@ describe("internal API metrics", () => {
         toolCalls: 3,
         conversationSessions: 1,
         estimatedCostUsd: 0.25,
+        answerQuality: [{ model: "model-a", revision: "rev-a", status: "succeeded", count: 2, durationSumMs: 500, durationCount: 2, estimatedCostUsd: 0.01 }],
+        toolQuality: [{ toolName: "searchDiscordHistory", status: "succeeded", count: 1 }],
+        feedbackQuality: [{ rating: "bad", failureMode: "unnecessary_refusal", count: 1 }],
+        deliveryRecoveries: 1,
         runtimeTelemetry: [{ category: "model", calls: 2, errors: 1, durationSumMs: 1500, durationCount: 2, buckets: [{ le: 100, count: 0 }, { le: 500, count: 1 }], estimatedCostUsd: 0.02, inputTokens: 100, outputTokens: 20, cachedInputTokens: 40 }]
       }),
       getAgentTaskMetrics: async () => ({
@@ -56,7 +85,6 @@ describe("internal API metrics", () => {
         agentTaskBacklog: [{ backend: "kubernetes-sandbox", status: "queued", count: 2, oldestAgeSeconds: 42 }],
         sandboxRunsByStatus: [],
         taskPhaseDurations: [],
-        sandboxCacheEvents: []
       })
     };
 
@@ -68,5 +96,9 @@ describe("internal API metrics", () => {
     expect(metrics).toContain('discord_ai_agent_agent_task_backlog_oldest_age_seconds{backend="kubernetes-sandbox",status="queued"} 42');
     expect(metrics).toContain('discord_ai_agent_runtime_duration_ms_bucket{category="model",le="500"} 1');
     expect(metrics).toContain('discord_ai_agent_runtime_tokens{category="model",type="cached_input"} 40');
+    expect(metrics).toContain('discord_ai_agent_answers_total{model="model-a",revision="rev-a",status="succeeded"} 2');
+    expect(metrics).toContain('discord_ai_agent_tool_results_total{tool="searchDiscordHistory",status="succeeded"} 1');
+    expect(metrics).toContain('discord_ai_agent_feedback_total{rating="bad",failure_mode="unnecessary_refusal"} 1');
+    expect(metrics).toContain("discord_ai_agent_delivery_recoveries_total 1");
   });
 });

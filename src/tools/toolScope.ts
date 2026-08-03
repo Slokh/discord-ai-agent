@@ -1,5 +1,4 @@
 import type { AppConfig } from "../config/env.js";
-import { isToolCapabilityDeployed } from "../capabilities/toolAvailability.js";
 import {
   openRouterServerToolRegistry,
   toolRegistry,
@@ -25,5 +24,5 @@ export function deploymentToolset(config: AppConfig): DeploymentToolset {
 }
 
 function isToolDeploymentAvailable(tool: ToolRegistryEntry, config: AppConfig) {
-  return isToolCapabilityDeployed(tool.deploymentRequirement, config);
+  return tool.available?.(config) ?? true;
 }

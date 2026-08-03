@@ -27,7 +27,8 @@ import {
   resolveCodeUpdateTarget,
   sandboxCachePaths
 } from "./repoWorkspace.js";
-import { loadSandboxEnv, parseGitHubRepository, type SandboxEnv, type TaskTimings } from "./sandboxEnv.js";
+import { loadSandboxEnv, type SandboxEnv, type TaskTimings } from "./sandboxEnv.js";
+import { parseGitHubRepository } from "../github/repository.js";
 import { conciseError, formatDuration, uniqueStrings } from "./sandboxUtils.js";
 
 type CacheSummary = {
@@ -176,7 +177,7 @@ export async function runCodeUpdate(env: SandboxEnv, timings: TaskTimings, total
 
     const toolShimDir = path.join(workRoot, "tool-shims");
     await timedPhase(env, timings, "toolShims", "Installing sandbox helper tool shims for the codegen harness.", async () => {
-      const shims = await writeSandboxToolShims(toolShimDir);
+      const shims = await writeSandboxToolShims(toolShimDir, env);
       cacheSummary.toolShims = shims;
       await progress(env, "tool_shims_ready", "Sandbox helper tools are available for NanoCodex.", { toolShims: shims, harness: NANOCODEX_RUNTIME_LABEL });
     });
@@ -551,29 +552,19 @@ async function recordAgentAttemptSummary(env: SandboxEnv, name: string, summary:
   });
 }
 
-export async function writeSandboxToolShims(toolShimDir: string): Promise<string[]> {
+export async function writeSandboxToolShims(toolShimDir: string, env: SandboxEnv): Promise<string[]> {
   await fs.mkdir(toolShimDir, { recursive: true });
   const shims = {
     "agent-task-context": [
       "#!/bin/sh",
-      "cat <<EOF",
-      "Task ID: ${TASK_ID}",
-      "Trace ID: ${TRACE_ID}",
-      "Requested by: ${REQUESTED_BY}",
-      "Repository: ${GITHUB_REPOSITORY}",
-      "Base branch: ${GITHUB_BASE_BRANCH}",
-      "Cache dir: ${SANDBOX_CACHE_DIR}",
-      "EOF",
+      "printf '%s\\n' \"Task ID: $TASK_ID\" \"Trace ID: $TRACE_ID\" \"Requested by: $REQUESTED_BY\"",
+      `printf '%s\\n' ${shellQuote(`Repository: ${env.githubRepository}`)} ${shellQuote(`Base branch: ${env.githubBaseBranch}`)} ${shellQuote(`Cache dir: ${env.sandboxCacheDir}`)}`,
       ""
     ].join("\n"),
     "agent-cache-info": [
       "#!/bin/sh",
       "set -eu",
-      "cache_dir=${SANDBOX_CACHE_DIR:-}",
-      "if [ -z \"$cache_dir\" ]; then",
-      "  echo 'SANDBOX_CACHE_DIR is not set'",
-      "  exit 0",
-      "fi",
+      `cache_dir=${shellQuote(env.sandboxCacheDir)}`,
       "echo \"Cache dir: $cache_dir\"",
       "for name in repos npm node_modules locks; do",
       "  path=\"$cache_dir/$name\"",
@@ -596,7 +587,7 @@ export async function writeSandboxToolShims(toolShimDir: string): Promise<string
       "const [step, message] = process.argv.slice(1);",
       "const taskId = process.env.TASK_ID;",
       "const token = process.env.AGENT_TASK_TOKEN;",
-      "const baseUrl = (process.env.CONTROL_PLANE_INTERNAL_URL || \"\").replace(/\\/$/, \"\");",
+      `const baseUrl = ${JSON.stringify(env.controlPlaneInternalUrl.replace(/\/$/, ""))};`,
       "if (!taskId || !token || !baseUrl) { console.error(\"Missing task callback environment.\"); process.exit(1); }",
       "const url = `${baseUrl}/internal/tasks/${encodeURIComponent(taskId)}/events`;",
       "const body = JSON.stringify({ step, message, metadata: { source: \"agent-progress\" } });",
@@ -613,4 +604,8 @@ export async function writeSandboxToolShims(toolShimDir: string): Promise<string
     })
   );
   return Object.keys(shims);
+}
+
+function shellQuote(value: string) {
+  return `'${value.replaceAll("'", `'"'"'`)}'`;
 }

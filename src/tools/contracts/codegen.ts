@@ -1,6 +1,7 @@
-import { defineTool, type ToolRegistryEntry } from "../toolDefinition.js";
+import { codeUpdatesAvailable } from "../../capabilities/codeUpdates.js";
+import { defineTool, installToolsWhen, type ToolRegistryEntry } from "../toolDefinition.js";
 
-export const codegenToolContracts = [
+export const codegenToolContracts = installToolsWhen(codeUpdatesAvailable, [
   defineTool({
     name: "runCodingAgent",
     category: "coding",
@@ -152,4 +153,4 @@ export const codegenToolContracts = [
       additionalProperties: false
     }
   }),
-] satisfies ToolRegistryEntry[];
+] satisfies ToolRegistryEntry[]);

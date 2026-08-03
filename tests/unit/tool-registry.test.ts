@@ -5,68 +5,11 @@ import {
   toolDefinitionsForModel,
   toolRegistry
 } from "../../src/tools/registry.js";
+import { TOOL_NAMES } from "../../src/tools/toolDefinition.js";
 
 describe("toolRegistry", () => {
   it("contains the local milestone tools", () => {
-    expect(toolRegistry.map((tool) => tool.name)).toEqual([
-      "loadSkillContext",
-      "composeDiscordResponse",
-      "findDiscordUsers",
-      "findDiscordChannels",
-      "searchDiscordHistory",
-      "getRecentAgentMemory",
-      "getAgentMemoryStats",
-      "getRecentDiscordMessages",
-      "getDiscordMessageContext",
-      "listDiscordBugMarkers",
-      "searchDiscordAttachments",
-      "inspectDiscordFile",
-      "inspectDiscordImages",
-      "getDiscordUserAvatar",
-      "getDiscordStats",
-      "getDiscordChannelTopics",
-      "summarizeDiscordHistory",
-      "summarizeDiscordThread",
-      "generateImage",
-      "readGeneratedFile",
-      "queryGeneratedCsv",
-      "queryGeneratedTable",
-      "runCodingAgent",
-      "getAgentTaskStatus",
-      "listAgentTasks",
-      "retryAgentTask",
-      "cancelAgentTask",
-      "getDeploymentStatus",
-      "getSpendSummary",
-      "undoConversationTurns",
-      "inspectAgentLogs",
-      "reportStatus",
-      "getWalletBalance",
-      "listWalletBalances",
-      "getWagerHistory",
-      "transferWalletFunds",
-      "requestStarterFunds",
-      "adminTransferWalletFunds",
-      "adminSetWalletStarterAmount",
-      "getWalletFeeSummary",
-      "reconcileWalletTransfers",
-      "getSpotifyPlaylistTracks",
-      "getSpotifyAlbumTracks",
-      "getSpotifyArtistDiscography",
-      "getSpotifyPlaylistStats",
-      "compareSpotifyPlaylists",
-      "searchSpotify",
-      "getSpotifyItem",
-      "addDiscordReaction",
-      "createDiscordPoll",
-      "createDiscordEmoji",
-      "updateBotAvatar",
-      "setAgentModel",
-      "drawRandom",
-      "awaitRandomWagerAction",
-      "settleRandomWager",
-      "revealRandomness"
-    ]);
+    expect(toolRegistry.map((tool) => tool.name)).toEqual(TOOL_NAMES);
   });
 
   it("reuses compiled model definitions for the stable deployment toolset", () => {

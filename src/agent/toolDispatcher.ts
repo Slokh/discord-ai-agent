@@ -4,11 +4,11 @@ import { bindToolHandlers } from "../tools/toolDefinition.js";
 import type { AgentToolRoute } from "./routerShared.js";
 import { restrictedToolGate } from "./toolGate.js";
 import { invalidToolCallResponse } from "../tools/toolContractValidation.js";
-import { handlerDefinitions } from "../tools/handlers/index.js";
+import { installedToolHandlers } from "../capabilities/catalog.js";
 
 export { stringArgument, stringArrayArgument } from "../tools/handlers/arguments.js";
 
-const localToolHandlers = bindToolHandlers(toolRegistry, handlerDefinitions);
+const localToolHandlers = bindToolHandlers(toolRegistry, installedToolHandlers);
 
 export async function executeLocalToolRoute(ctx: ToolContext, route: AgentToolRoute, originalText: string): Promise<AgentResponse> {
   ctx.abortSignal?.throwIfAborted();

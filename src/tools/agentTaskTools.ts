@@ -3,7 +3,7 @@ import { resolveGitHubTaskToken } from "../github/appToken.js";
 import { parseGitHubRepository } from "../github/repository.js";
 import { summarizeForAudit, truncateForDiscord } from "../util/text.js";
 import type { AgentTaskRecord, AgentTaskStatus, SandboxCommandEvent, TaskEvent } from "../db/repositories.js";
-import { missingCodegenConfig } from "../capabilities/toolAvailability.js";
+import { missingCodeUpdateConfig } from "../capabilities/codeUpdates.js";
 import type { AgentResponse, ToolContext } from "./types.js";
 import {
   agentTaskAuditSummary,
@@ -156,7 +156,7 @@ async function getTaskStatusEvents(ctx: ToolContext, task: AgentTaskRecord, limi
 async function getTaskPullRequestStatus(ctx: ToolContext, task: AgentTaskRecord): Promise<string> {
   if (!task.prUrl) return "";
   const githubConfig = ctx.config.github;
-  if (!githubConfig?.repository) return "GitHub PR status: unavailable; GITHUB_REPOSITORY is not configured.";
+  if (!githubConfig?.repository) return "GitHub PR status: unavailable; the versioned repository target is missing.";
 
   const parsedPullRequest = parsePullRequestUrl(task.prUrl);
   if (!parsedPullRequest) return "GitHub PR status: unavailable; could not parse the PR URL.";
@@ -497,7 +497,6 @@ export async function getDeploymentStatus(ctx: ToolContext): Promise<string> {
     `- Agent tasks: ${taskMetrics.tasksByStatus.map((row) => `${row.status}=${row.count}`).join(", ") || "none"}`,
     `- Agent backlog: ${formatAgentTaskBacklogSummary(taskMetrics.agentTaskBacklog)}`,
     `- Codegen timings: ${formatCodegenMetricSummary(taskMetrics.taskPhaseDurations)}`,
-    `- Sandbox cache: ${formatCacheMetricSummary(taskMetrics.sandboxCacheEvents)}`,
     activeTasks.length ? "Active code updates:" : "Active code updates: none",
     ...activeTasks.map((task) => `- ${formatActiveAgentTaskLine(task, nowMs)}`),
     recentTasks.length ? "Recent tasks:" : "Recent tasks: none",
@@ -538,7 +537,7 @@ export function formatSandboxCommandEvents(events: SandboxCommandEvent[]) {
 }
 
 function codegenNotConfiguredMessage(ctx: ToolContext): string | null {
-  const missing = missingCodegenConfig(ctx.config);
+  const missing = missingCodeUpdateConfig(ctx.config);
   if (missing.length === 0) return null;
   return [
     "Code-update tasks are not configured on this bot, so I can't start one.",
@@ -591,11 +590,6 @@ function formatCodegenMetricSummary(rows: Array<{ phase: string; count: number; 
     .filter((row): row is { phase: string; count: number; avgMs: number; maxMs: number } => Boolean(row))
     .map((row) => `${row.phase} avg=${formatDurationMs(row.avgMs)} max=${formatDurationMs(row.maxMs)}`)
     .join(", ");
-}
-
-function formatCacheMetricSummary(rows: Array<{ cacheType: string; cacheStatus: string; count: number }>) {
-  if (rows.length === 0) return "none yet";
-  return rows.map((row) => `${row.cacheType}.${row.cacheStatus}=${row.count}`).join(", ");
 }
 
 function formatAgentTaskBacklogSummary(rows: Array<{ backend: string; status: string; count: number; oldestAgeSeconds: number }>) {

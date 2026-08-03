@@ -1,5 +1,5 @@
 import type { ToolContext } from "../tools/types.js";
-import type { ToolName } from "../tools/registry.js";
+import type { ToolName } from "../tools/toolDefinition.js";
 import { recordAgentEvent } from "./runtimeTranscript.js";
 
 export type AgentToolRoute = {

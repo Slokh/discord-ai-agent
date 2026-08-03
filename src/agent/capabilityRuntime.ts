@@ -1,5 +1,5 @@
 import type { AgentResponse } from "../tools/types.js";
-import type { ToolName } from "../tools/registry.js";
+import type { ToolName } from "../tools/toolDefinition.js";
 
 export type AgentPromptContribution = {
   section: string;
@@ -15,3 +15,5 @@ export type AgentCapabilityRuntime = {
   finalizeResponse(response: AgentResponse): Promise<AgentResponse>;
   blocksTimeoutRecovery(): boolean;
 };
+
+export type PreparedAgentCapability = Partial<AgentCapabilityRuntime>;

@@ -62,7 +62,7 @@ Each local tool is defined in a focused file under `src/tools/contracts/` and de
 - deployment requirement and access policy;
 - output promise, permission requirements, audit events, and examples.
 
-`src/tools/registry.ts` aggregates contracts. It must not become a switchboard for behavior. `toolContractValidation.ts` compiles the advertised schemas and validates canonical examples. `src/tools/handlers/` binds every registered tool to exactly one focused adapter; startup fails for missing, duplicate, or unknown handlers.
+`src/capabilities/toolContracts.ts` is the dependency-safe contract manifest consumed by `src/tools/registry.ts`; `src/capabilities/catalog.ts` assigns those contracts and focused handlers to installed product capabilities. Neither becomes a behavioral switchboard. `toolContractValidation.ts` compiles the advertised schemas and validates canonical examples. Startup fails for missing, duplicate, or unknown contracts and handlers.
 
 ## Capability boundary
 
@@ -72,7 +72,7 @@ Features integrate through three explicit layers:
 2. `src/tools/contracts/` owns each model-visible capability's schema, examples, access policy, deployment narrowing, output promise, and audit contract.
 3. `src/tools/handlers/` adapts a validated tool call to its focused implementation in `src/tools/`, `src/payments/`, `src/execution/`, or another owning domain.
 
-Adding a capability should not require editing `nanocodexAgentRuntime.ts`, `promptBuilder.ts`, `toolDispatcher.ts`, `toolDeployment.ts`, or `toolScope.ts`. Add a focused contract and handler; add a capability-session contribution only when the feature truly needs non-tool per-turn lifecycle behavior. Keep provider clients and durable business rules in their owning domain, not in the handler or generic loop.
+Adding a capability should not require editing `nanocodexAgentRuntime.ts`, `promptBuilder.ts`, `toolDispatcher.ts`, `toolDeployment.ts`, or `toolScope.ts`. Add focused contracts and handlers, assign their names to one capability in `toolDefinition.ts`, and declare that capability once in `catalog.ts`. Add a per-turn hook only when the feature truly needs prompt context, model selection, result observation, finalization, or timeout behavior. Keep provider clients and durable business rules in their owning domain, not in the catalog, handler, or generic loop.
 
 The architecture test rejects known feature/tool names in the generic runtime and rejects reintroducing `src/agent/toolHandlers/`. This makes the boundary executable rather than relying on convention.
 

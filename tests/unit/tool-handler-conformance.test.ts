@@ -1,7 +1,28 @@
 import { describe, expect, it } from "vitest";
-import { handlerDefinitions, handlerFamilies } from "../../src/tools/handlers/index.js";
+import { installedToolHandlers } from "../../src/capabilities/catalog.js";
+import { coreToolHandlers } from "../../src/tools/handlers/core.js";
+import { discordRetrievalToolHandlers } from "../../src/tools/handlers/discord-retrieval.js";
+import { opsToolHandlers } from "../../src/tools/handlers/ops.js";
+import { discordActionToolHandlers } from "../../src/tools/handlers/discord-action.js";
+import { codegenToolHandlers } from "../../src/tools/handlers/codegen.js";
+import { imageToolHandlers } from "../../src/tools/handlers/image.js";
+import { generatedDataToolHandlers } from "../../src/tools/handlers/generated-data.js";
+import { spotifyToolHandlers } from "../../src/tools/handlers/spotify.js";
+import { walletToolHandlers } from "../../src/tools/handlers/wallet.js";
 import { toolRegistry, type ToolName } from "../../src/tools/registry.js";
 import { bindToolHandlers } from "../../src/tools/toolDefinition.js";
+
+const handlerFamilies = {
+  core: coreToolHandlers,
+  discordRetrieval: discordRetrievalToolHandlers,
+  ops: opsToolHandlers,
+  discordAction: discordActionToolHandlers,
+  codegen: codegenToolHandlers,
+  image: imageToolHandlers,
+  generatedData: generatedDataToolHandlers,
+  spotify: spotifyToolHandlers,
+  wallet: walletToolHandlers,
+} as const;
 
 const expectedFamilyTools = {
   core: ["loadSkillContext"],
@@ -44,13 +65,13 @@ describe("tool handler conformance", () => {
     const handled = Object.values(handlerFamilies).flatMap((family) => Object.keys(family));
     expect(new Set(handled).size).toBe(handled.length);
     expect(new Set(handled)).toEqual(new Set(toolRegistry.map((tool) => tool.name)));
-    expect(() => bindToolHandlers(toolRegistry, handlerDefinitions)).not.toThrow();
+    expect(() => bindToolHandlers(toolRegistry, installedToolHandlers)).not.toThrow();
   });
 
   it("fails fast when an adapter is missing or unknown", () => {
-    const missingHandler: Partial<typeof handlerDefinitions> = { ...handlerDefinitions };
+    const missingHandler = { ...installedToolHandlers };
     delete missingHandler.loadSkillContext;
-    const unknownHandler = { ...handlerDefinitions, unknownTool: handlerDefinitions.loadSkillContext };
+    const unknownHandler = { ...installedToolHandlers, unknownTool: installedToolHandlers.loadSkillContext };
     expect(() => bindToolHandlers(toolRegistry, missingHandler)).toThrow(/missing: loadSkillContext/);
     expect(() => bindToolHandlers(toolRegistry, unknownHandler))
       .toThrow(/unknown: unknownTool/);

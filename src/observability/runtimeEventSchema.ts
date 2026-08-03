@@ -5,6 +5,46 @@ export type RuntimeEventCategory = (typeof runtimeEventCategories)[number];
 export const runtimeEventPhases = ["started", "progress", "completed", "failed"] as const;
 export type RuntimeEventPhase = (typeof runtimeEventPhases)[number];
 
+type RuntimeEventFamily = {
+  category: RuntimeEventCategory;
+  prefixes?: readonly string[];
+  kinds?: readonly string[];
+};
+
+/**
+ * Runtime event classification is a telemetry contract, not language parsing.
+ * Add a family here when introducing a new event namespace; callers can always
+ * provide an explicit category/phase for an exceptional event.
+ */
+const runtimeEventFamilies: readonly RuntimeEventFamily[] = [
+  { category: "model", prefixes: ["agent.model.", "agent.synthesis."], kinds: ["model"] },
+  { category: "tool", prefixes: ["agent.tool."], kinds: ["tool"] },
+  { category: "retrieval", prefixes: ["retrieval.", "memory.search."] },
+  { category: "ingress", prefixes: ["discord.mention.", "budget.ingress."] },
+  { category: "delivery", prefixes: ["discord.", "delivery.", "agent.delivery."] },
+  { category: "context", prefixes: ["memory.", "permissions.", "context.", "agent.context.", "agent.execution.context_"] },
+  { category: "task", prefixes: ["agent.task.", "task.", "codegen.", "sandbox."] },
+];
+
+const runtimeEventTerminalPhases: Readonly<Record<string, RuntimeEventPhase>> = {
+  failed: "failed",
+  error: "failed",
+  rejected: "failed",
+  enqueue_failed: "failed",
+  complete: "completed",
+  completed: "completed",
+  handled: "completed",
+  ready: "completed",
+  resolved: "completed",
+  stored: "completed",
+  sent: "completed",
+  acquired: "completed",
+  started: "started",
+  received: "started",
+  queued: "started",
+  enqueued: "started",
+};
+
 const runtimeEnvelope = {
   schemaVersion: z.literal(1),
   category: z.enum(runtimeEventCategories),
@@ -99,21 +139,13 @@ export function normalizeRuntimeEventMetadata(input: {
 }
 
 export function runtimeEventCategory(eventName: string, kind?: string | null): RuntimeEventCategory {
-  if (eventName.startsWith("agent.model") || eventName.includes("synthesis") || kind === "model") return "model";
-  if (eventName.startsWith("agent.tool") || kind === "tool") return "tool";
-  if (eventName.startsWith("retrieval.") || eventName.startsWith("memory.search")) return "retrieval";
-  if (eventName.startsWith("discord.mention") || eventName.startsWith("budget.ingress")) return "ingress";
-  if (eventName.startsWith("discord.") || eventName.includes("delivery")) return "delivery";
-  if (eventName.startsWith("memory.") || eventName.startsWith("permissions.") || eventName.includes("context")) return "context";
-  if (eventName.startsWith("agent.task") || eventName.startsWith("task.") || eventName.startsWith("codegen.") || eventName.startsWith("sandbox.")) return "task";
-  return "system";
+  return runtimeEventFamilies.find((family) =>
+    family.kinds?.includes(kind ?? "") || family.prefixes?.some((prefix) => eventName.startsWith(prefix))
+  )?.category ?? "system";
 }
 
 export function runtimeEventPhase(eventName: string, metadata?: Record<string, unknown>): RuntimeEventPhase {
   const explicit = metadata?.phase;
   if (typeof explicit === "string" && runtimeEventPhases.includes(explicit as RuntimeEventPhase)) return explicit as RuntimeEventPhase;
-  if (/\.(failed|error|rejected|enqueue_failed)$/.test(eventName)) return "failed";
-  if (/\.(complete|completed|handled|ready|resolved|stored|sent|acquired)$/.test(eventName)) return "completed";
-  if (/\.(started|received|queued|enqueued)$/.test(eventName)) return "started";
-  return "progress";
+  return runtimeEventTerminalPhases[eventName.split(".").at(-1) ?? ""] ?? "progress";
 }

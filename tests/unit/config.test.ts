@@ -69,8 +69,9 @@ describe("config", () => {
     });
   });
 
-  it("ignores removed tuning variables", () => {
+  it("rejects removed tuning variables so deployment drift is visible", () => {
     withEnv({
+      NODE_ENV: "production",
       OPENROUTER_CHAT_MODEL: "anthropic/claude-sonnet-5",
       GITHUB_REPOSITORY: "somewhere/else",
       CODEGEN_EXECUTION_BACKEND: "local-process",
@@ -78,12 +79,7 @@ describe("config", () => {
       WALLET_BALANCES_PUBLIC: "false",
       TEMPO_NETWORK: "moderato"
     }, () => {
-      const config = loadConfig();
-      expect(config.openRouter.chatModel).toBe("openai/gpt-5.6-luna");
-      expect(config.github.repository).toBe(productConfig.github.repository);
-      expect(config.worker.taskEnabled).toBe(true);
-      expect(config.payments.balancesPublic).toBe(true);
-      expect(config.payments.tempoNetwork).toBe("mainnet");
+      expect(() => loadConfig()).toThrow(/Removed environment variables.*CODEGEN_EXECUTION_BACKEND.*GITHUB_REPOSITORY.*OPENROUTER_CHAT_MODEL/);
     });
   });
 
@@ -102,7 +98,12 @@ describe("config", () => {
   });
 
   it("does not run migrations inside production application pods", () => {
-    withEnv({ NODE_ENV: "production" }, () => expect(loadConfig().runMigrations).toBe(false));
+    withEnv({
+      NODE_ENV: "production",
+      OPENROUTER_CHAT_MODEL: undefined,
+      OPENROUTER_UTILITY_MODEL: undefined,
+      GITHUB_REPOSITORY: undefined,
+    }, () => expect(loadConfig().runMigrations).toBe(false));
   });
 });
 
@@ -126,10 +127,13 @@ function withCleanEnv(callback: () => void) {
   }, callback);
 }
 
-function withEnv(values: Record<string, string>, callback: () => void) {
+function withEnv(values: Record<string, string | undefined>, callback: () => void) {
   const previous = new Map(Object.keys(values).map((name) => [name, process.env[name]]));
   try {
-    for (const [name, value] of Object.entries(values)) process.env[name] = value;
+    for (const [name, value] of Object.entries(values)) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
     callback();
   } finally {
     for (const [name, value] of previous) {

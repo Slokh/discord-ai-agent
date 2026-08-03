@@ -161,7 +161,6 @@ describe("model-led mutating tools", () => {
     const response = await createAgentUpdateFromRequest(ctx, "add a calendar integration");
 
     expect(response.content).toContain("Code-update tasks are not configured on this bot");
-    expect(response.content).toContain("GITHUB_REPOSITORY");
     expect(response.content).toContain("TASK_SIGNING_SECRET");
     expect(response.status).toBe("error");
     expect(enqueueAgentTask).not.toHaveBeenCalled();
@@ -1865,7 +1864,6 @@ describe("getDeploymentStatus", () => {
           agentTaskBacklog: [{ backend: "kubernetes-sandbox", status: "running", count: 1, oldestAgeSeconds: 125 }],
           sandboxRunsByStatus: [],
           taskPhaseDurations: [],
-          sandboxCacheEvents: []
         })),
         listAgentTasks: vi.fn(async () => []),
         auditTool
@@ -1910,7 +1908,6 @@ describe("getDeploymentStatus", () => {
           sandboxRunsByStatus: [],
           sandboxLeases: [],
           taskPhaseDurations: [],
-          sandboxCacheEvents: []
         })),
         listAgentTasks,
         auditTool

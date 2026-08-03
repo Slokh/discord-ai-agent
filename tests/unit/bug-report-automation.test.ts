@@ -21,6 +21,9 @@ describe("Discord bug report automation", () => {
       discordResponseMessageId: expect.anything(),
     }));
     expect(harness.repo.attachDiscordBugReportTask).toHaveBeenCalledWith(expect.objectContaining({ statusMessageId: null }));
+    expect(harness.repo.captureRunFeedbackForEval).toHaveBeenCalledWith(expect.objectContaining({
+      runId: "execution-1",
+    }));
     expect(harness.message.reply).not.toHaveBeenCalled();
   });
 });
@@ -39,6 +42,7 @@ function fakeHarness(created: boolean) {
   const repo = {
     findAgentRuntimeChatExecutionByTraceId: vi.fn(async () => execution),
     createDiscordBugReport: vi.fn(async (value) => ({ created, report: value })),
+    captureRunFeedbackForEval: vi.fn(async (value) => value),
     markDiscordBugReportFailed: vi.fn(async () => undefined),
     getTraceEvents: vi.fn(async () => [{ eventName: "agent.completed", level: "info", summary: "done" }]),
     getToolAuditLogs: vi.fn(async () => []),

@@ -232,9 +232,8 @@ export async function getAgentTaskMetrics(pool: DbPool, ): Promise<{
     agentTaskBacklog: Array<{ backend: string; status: string; count: number; oldestAgeSeconds: number }>;
     sandboxRunsByStatus: Array<{ status: string; count: number }>;
     taskPhaseDurations: Array<{ phase: string; count: number; avgMs: number; maxMs: number }>;
-    sandboxCacheEvents: Array<{ cacheType: string; cacheStatus: string; count: number }>;
   }> {
-    const [tasks, taskBacklog, sandboxRuns, phaseDurations, cacheEvents] = await Promise.all([
+    const [tasks, taskBacklog, sandboxRuns, phaseDurations] = await Promise.all([
       pool.query("SELECT status, count(*)::int AS count FROM agent_tasks GROUP BY status ORDER BY status"),
       pool.query(`
         SELECT
@@ -260,18 +259,6 @@ export async function getAgentTaskMetrics(pool: DbPool, ): Promise<{
           AND (metadata->>'step') ~ '_complete$'
         GROUP BY phase
         ORDER BY phase
-      `),
-      pool.query(`
-        SELECT
-          metadata->>'cacheType' AS cache_type,
-          metadata->>'cacheStatus' AS cache_status,
-          count(*)::int AS count
-        FROM agent_runtime_events
-        WHERE event_name = 'agent.task.progress'
-          AND metadata ? 'cacheType'
-          AND metadata ? 'cacheStatus'
-        GROUP BY cache_type, cache_status
-        ORDER BY cache_type, cache_status
       `)
     ]);
     return {
@@ -288,11 +275,6 @@ export async function getAgentTaskMetrics(pool: DbPool, ): Promise<{
         count: Number(row.count),
         avgMs: Number(row.avg_ms),
         maxMs: Number(row.max_ms)
-      })),
-      sandboxCacheEvents: cacheEvents.rows.map((row) => ({
-        cacheType: String(row.cache_type),
-        cacheStatus: String(row.cache_status),
-        count: Number(row.count)
       }))
     };
   }

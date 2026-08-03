@@ -1,9 +1,9 @@
 import type { FunctionToolDefinition, OpenRouterServerToolDefinition, ToolDefinition } from "../models/openrouter.js";
 import type { ToolClass, ToolGroup, ToolName, ToolRegistryEntry } from "./toolDefinition.js";
-import { localToolContracts } from "./contracts/index.js";
+import { installedToolContracts } from "../capabilities/toolContracts.js";
 export type { ToolClass, ToolGroup, ToolName, ToolRegistryEntry } from "./toolDefinition.js";
 
-export const toolRegistry: ToolRegistryEntry[] = [...localToolContracts];
+export const toolRegistry: ToolRegistryEntry[] = [...installedToolContracts];
 const toolByNameIndex = new Map(toolRegistry.map((tool) => [tool.name, tool]));
 const localDefinitionCache = new WeakMap<ToolRegistryEntry, FunctionToolDefinition>();
 const localDefinitionListCache = new WeakMap<ToolRegistryEntry[], FunctionToolDefinition[]>();

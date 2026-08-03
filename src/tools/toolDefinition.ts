@@ -1,21 +1,33 @@
 import type { FunctionToolDefinition } from "../models/openrouter.js";
 import type { AppConfig } from "../config/env.js";
 
-export const TOOL_NAMES = [
-  "loadSkillContext", "composeDiscordResponse", "findDiscordUsers", "findDiscordChannels",
-  "searchDiscordHistory", "getRecentAgentMemory", "getAgentMemoryStats", "getRecentDiscordMessages", "getDiscordMessageContext",
-  "listDiscordBugMarkers", "searchDiscordAttachments", "inspectDiscordFile", "inspectDiscordImages", "getDiscordUserAvatar",
-  "getDiscordStats", "getDiscordChannelTopics", "summarizeDiscordHistory", "summarizeDiscordThread", "generateImage",
-  "readGeneratedFile", "queryGeneratedCsv", "queryGeneratedTable", "runCodingAgent",
-  "getAgentTaskStatus", "listAgentTasks", "retryAgentTask", "cancelAgentTask", "getDeploymentStatus", "getSpendSummary",
-  "undoConversationTurns", "inspectAgentLogs", "reportStatus", "getWalletBalance", "listWalletBalances", "getWagerHistory",
-  "transferWalletFunds", "requestStarterFunds", "adminTransferWalletFunds", "adminSetWalletStarterAmount",
-  "getWalletFeeSummary", "reconcileWalletTransfers", "getSpotifyPlaylistTracks",
-  "getSpotifyAlbumTracks", "getSpotifyArtistDiscography", "getSpotifyPlaylistStats", "compareSpotifyPlaylists", "searchSpotify",
-  "getSpotifyItem", "addDiscordReaction", "createDiscordPoll", "createDiscordEmoji", "updateBotAvatar", "setAgentModel", "drawRandom",
-  "awaitRandomWagerAction", "settleRandomWager", "revealRandomness",
-] as const;
-export type ToolName = typeof TOOL_NAMES[number];
+/** The complete model-facing surface, grouped by the capability that owns it. */
+export const TOOL_NAMES_BY_CAPABILITY = {
+  foundation: ["loadSkillContext"],
+  discordContext: [
+    "composeDiscordResponse", "findDiscordUsers", "findDiscordChannels", "searchDiscordHistory",
+    "getRecentAgentMemory", "getAgentMemoryStats", "getRecentDiscordMessages", "getDiscordMessageContext",
+    "listDiscordBugMarkers", "searchDiscordAttachments", "inspectDiscordFile", "getDiscordStats",
+    "getDiscordChannelTopics", "summarizeDiscordHistory", "summarizeDiscordThread",
+  ],
+  images: ["inspectDiscordImages", "getDiscordUserAvatar", "generateImage"],
+  generatedData: ["readGeneratedFile", "queryGeneratedCsv", "queryGeneratedTable"],
+  operations: ["getDeploymentStatus", "getSpendSummary", "inspectAgentLogs", "reportStatus", "setAgentModel"],
+  codeUpdates: ["runCodingAgent", "getAgentTaskStatus", "listAgentTasks", "retryAgentTask", "cancelAgentTask"],
+  discordActions: ["undoConversationTurns", "addDiscordReaction", "createDiscordPoll", "createDiscordEmoji", "updateBotAvatar"],
+  randomGames: ["drawRandom", "awaitRandomWagerAction", "settleRandomWager", "revealRandomness"],
+  wallets: [
+    "getWalletBalance", "listWalletBalances", "getWagerHistory", "transferWalletFunds", "requestStarterFunds",
+    "adminTransferWalletFunds", "adminSetWalletStarterAmount", "getWalletFeeSummary", "reconcileWalletTransfers",
+  ],
+  spotify: [
+    "getSpotifyPlaylistTracks", "getSpotifyAlbumTracks", "getSpotifyArtistDiscography", "getSpotifyPlaylistStats",
+    "compareSpotifyPlaylists", "searchSpotify", "getSpotifyItem",
+  ],
+} as const;
+
+export type ToolName = (typeof TOOL_NAMES_BY_CAPABILITY)[keyof typeof TOOL_NAMES_BY_CAPABILITY][number];
+export const TOOL_NAMES: readonly ToolName[] = Object.values(TOOL_NAMES_BY_CAPABILITY).flat();
 
 export type ToolGroup = "core" | "discord-retrieval" | "generated-data" | "presentation" | "discord-action" | "image" | "spotify" | "codegen" | "ops" | "external";
 
@@ -27,10 +39,8 @@ export type ToolRegistryEntry = {
   mutates: boolean;
   category: "discord" | "generation" | "memory" | "ops" | "coding" | "external";
   group: ToolGroup;
-  deploymentRequirement: "always" | "spotify" | "codegen" | "wallet" | "user_wallet";
-  accessPolicy: "default" | "ops" | "strict_ops" | "configured_ops";
-  accessPolicyEnabled?: (config: AppConfig) => boolean;
-  accessDeniedMessage?: string;
+  available?: (config: AppConfig) => boolean;
+  accessPolicy: "default" | "strict_ops";
   scopeForDeployment?: (tool: ToolRegistryEntry, config: AppConfig) => ToolRegistryEntry;
   toolClass: ToolClass;
   outputContract: string[];
@@ -41,8 +51,8 @@ export type ToolRegistryEntry = {
   parameters: FunctionToolDefinition["function"]["parameters"];
 };
 
-type ToolDefinitionInput = Omit<ToolRegistryEntry, "outputContract" | "permissionRequirements" | "auditEvents" | "argumentExamples" | "deploymentRequirement" | "accessPolicy"> &
-  Partial<Pick<ToolRegistryEntry, "outputContract" | "permissionRequirements" | "auditEvents" | "argumentExamples" | "deploymentRequirement" | "accessPolicy">>;
+type ToolDefinitionInput = Omit<ToolRegistryEntry, "outputContract" | "permissionRequirements" | "auditEvents" | "argumentExamples" | "accessPolicy"> &
+  Partial<Pick<ToolRegistryEntry, "outputContract" | "permissionRequirements" | "auditEvents" | "argumentExamples" | "accessPolicy">>;
 
 const outputContractByToolClass: Record<ToolClass, string[]> = {
   resolver: ["resolved IDs", "display names", "match confidence or ambiguity notes", "result count"],
@@ -61,9 +71,6 @@ const outputContractByToolClass: Record<ToolClass, string[]> = {
 export function defineTool<const T extends ToolDefinitionInput>(definition: T): T & ToolRegistryEntry {
   return {
     ...definition,
-    deploymentRequirement: definition.deploymentRequirement ?? (
-      definition.group === "spotify" ? "spotify" : definition.group === "codegen" ? "codegen" : "always"
-    ),
     accessPolicy: definition.accessPolicy ?? "default",
     outputContract: definition.outputContract ?? outputContractByToolClass[definition.toolClass],
     permissionRequirements: definition.permissionRequirements ?? (
@@ -76,6 +83,14 @@ export function defineTool<const T extends ToolDefinitionInput>(definition: T): 
     auditEvents: definition.auditEvents ?? ["tool_audit_logs", "trace_events"],
     argumentExamples: definition.argumentExamples ?? [],
   };
+}
+
+/** Applies one capability-owned deployment predicate to a focused contract family. */
+export function installToolsWhen<const T extends readonly ToolRegistryEntry[]>(
+  available: (config: AppConfig) => boolean,
+  tools: T,
+): T {
+  return tools.map((tool) => ({ ...tool, available })) as unknown as T;
 }
 
 /** Binds contracts to execution handlers once at startup and fails fast on drift. */

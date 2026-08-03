@@ -20,6 +20,7 @@ const basePrompt: EvalPrompt = {
   prompt: "what did people say about jobs?",
   notes: undefined,
   expectedTools: [],
+  forbiddenTools: [],
   expectedRequestedTools: [],
   mustContain: [],
   mustNotContain: [],
@@ -137,6 +138,7 @@ describe("eval runner", () => {
         {
           ...basePrompt,
           expectedTools: ["getDiscordStats"],
+          forbiddenTools: ["searchDiscordHistory"],
           expectedRequestedTools: ["openrouter:web_search"],
           mustContain: ["ranked"],
           mustNotContain: ["Sources:"],
@@ -158,6 +160,7 @@ describe("eval runner", () => {
       )
     ).toEqual([
       "expected tool getDiscordStats was not observed",
+      "forbidden tool searchDiscordHistory was observed",
       "expected requested tool openrouter:web_search was not observed",
       "answer did not contain required text: ranked",
       "answer contained forbidden text: Sources:",

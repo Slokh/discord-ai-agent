@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { AppConfig } from "../config/env.js";
+import { hasGitHubTaskCredential } from "../config/env.js";
 import type { AgentRuntimeRepository, AgentRuntimeSessionRecord } from "../db/agentRuntimeRepository.js";
 import type { DiscordAiAgentRepository } from "../db/repositories.js";
 import { codegenExecutionSelection } from "../execution/codegenSelection.js";
@@ -10,6 +11,17 @@ export type AgentRuntimeCodeUpdateEnqueueResult = {
   taskId: string;
   jobId: string | null;
 };
+
+export function missingCodeUpdateConfig(config: AppConfig): string[] {
+  const missing: string[] = [];
+  if (!hasGitHubTaskCredential(config)) missing.push("GITHUB_TOKEN (or GITHUB_APP_ID + GITHUB_APP_PRIVATE_KEY + GITHUB_APP_INSTALLATION_ID)");
+  if (!config.execution?.taskSigningSecret) missing.push("TASK_SIGNING_SECRET");
+  return missing;
+}
+
+export function codeUpdatesAvailable(config: AppConfig) {
+  return missingCodeUpdateConfig(config).length === 0;
+}
 
 export async function enqueueAgentRuntimeCodeUpdateTask(input: {
   config: AppConfig;

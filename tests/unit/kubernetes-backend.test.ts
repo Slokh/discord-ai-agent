@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { loadConfig, productConfig } from "../../src/config/env.js";
+import { loadConfig } from "../../src/config/env.js";
 import { createExecutionBackend, KubernetesExecutionBackend, type KubernetesExecutionClients } from "../../src/execution/backend.js";
 import type { AgentTaskJob } from "../../src/execution/types.js";
 import type { SandboxRunRecord } from "../../src/db/repositories.js";
@@ -27,7 +27,7 @@ describe("KubernetesExecutionBackend", () => {
     });
   });
 
-  it("passes fixed product configuration into an isolated task", async () => {
+  it("passes only task-specific configuration into an isolated task", async () => {
     await withExecutionEnv(async () => {
       const clients = fakeClients();
       const backend = new KubernetesExecutionBackend(loadConfig(), clients);
@@ -40,14 +40,13 @@ describe("KubernetesExecutionBackend", () => {
 
       expect(clients.core.createNamespacedConfigMap).toHaveBeenCalledWith(expect.objectContaining({
         body: expect.objectContaining({ data: expect.objectContaining({
-          OPENROUTER_CODEGEN_MODEL: "openai/gpt-5.6-terra",
-          GITHUB_REPOSITORY: productConfig.github.repository,
-          GITHUB_BASE_BRANCH: "main",
-          SANDBOX_CACHE_DIR: "/tmp/discord-ai-agent-cache",
           TARGET_BRANCH: "kartik/follow-up",
           TARGET_PULL_REQUEST_NUMBER: "120"
         }) })
       }));
+      const config = vi.mocked(clients.core.createNamespacedConfigMap).mock.calls[0]?.[0].body.data;
+      expect(config).not.toHaveProperty("GITHUB_REPOSITORY");
+      expect(config).not.toHaveProperty("GITHUB_BASE_BRANCH");
       const job = vi.mocked(clients.batch.createNamespacedJob).mock.calls[0]?.[0].body;
       expect(job?.spec?.template.spec?.containers[0]?.image).toBe("registry.example/sandbox:test");
       expect(job?.spec?.template.spec).not.toHaveProperty("volumes");

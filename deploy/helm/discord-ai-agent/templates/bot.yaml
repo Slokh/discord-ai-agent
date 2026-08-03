@@ -35,8 +35,6 @@ spec:
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           command: ["node", "dist/src/index.js", "bot"]
           env:
-            - name: DISCORD_AI_AGENT_PROCESS_ROLE
-              value: bot
             {{- include "discord-ai-agent.commonEnv" . | nindent 12 }}
             {{- include "discord-ai-agent.controlUiPublicEnv" . | nindent 12 }}
             {{- include "discord-ai-agent.databaseEnv" . | nindent 12 }}

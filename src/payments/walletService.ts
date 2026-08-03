@@ -13,8 +13,9 @@ import type {
   WagerReservation
 } from "./types.js";
 import { getStarterTargetUsd as readStarterTargetUsd, getWalletFeeSummary, setStarterTargetAndRebalance as updateStarterTargetAndRebalance, type WalletAdministrationDependencies } from "./walletAdministration.js";
-import { activeManagedWallet, checkedAddress, checkedHash, errorMessage, mapWithConcurrency, networkExternalId, transactionHashFromError } from "./walletRuntimeHelpers.js";
+import { activeManagedWallet, checkedAddress, checkedHash, errorMessage, networkExternalId, transactionHashFromError } from "./walletRuntimeHelpers.js";
 import { readPostTransferBalances } from "./postTransferBalances.js";
+import { listExistingUserWalletSummaries, recordBotWalletHealth } from "./walletReadOperations.js";
 
 type SubmittedWalletTransfer = WalletTransfer & { confirmedBlockNumber?: bigint };
 export class WalletService {
@@ -100,26 +101,7 @@ export class WalletService {
   }
 
   async listExistingUserWalletSummaries(input: { guildId: string; userIds?: string[] }) {
-    const userIds = input.userIds ? [...new Set(input.userIds.filter(Boolean))] : undefined;
-    const wallets = await this.repo.listUserWallets({
-      guildId: input.guildId,
-      userIds,
-      chainId: this.provider.chainId
-    });
-    const token = await this.usdToken();
-    return mapWithConcurrency(wallets, 8, async (wallet) => {
-      try {
-        const amountAtomic = await this.provider.getBalance({ wallet: activeManagedWallet(wallet), token });
-        return {
-          userId: wallet.discordUserId!,
-          wallet,
-          balance: { token, amountAtomic, formatted: atomicToUsd(amountAtomic, token.decimals) },
-          error: null
-        };
-      } catch (error) {
-        return { userId: wallet.discordUserId!, wallet, balance: null, error: errorMessage(error) };
-      }
-    });
+    return listExistingUserWalletSummaries({ repo: this.repo, provider: this.provider, usdToken: () => this.usdToken() }, input);
   }
 
   async getStarterTargetUsd(guildId: string): Promise<number> {
@@ -264,35 +246,13 @@ export class WalletService {
     network: string;
     chainId: number;
   }> {
-    const wallet = await this.ensureBotWallet(SHARED_BOT_GUILD_ID, record);
-    const balance = await this.getBalance(wallet);
-    const balanceNumber = Number(balance.formatted);
-    const thresholdUsd = this.config.initialGrantUsd;
-    const status = balanceNumber < thresholdUsd ? "low_balance" : "ok";
-    const details = {
-      walletId: wallet.id,
-      address: wallet.address,
-      chainId: wallet.chainId,
+    return recordBotWalletHealth({
+      repo: this.repo,
+      initialGrantUsd: this.config.initialGrantUsd,
       network: this.config.tempoNetwork,
-      token: balance.token.symbol,
-      balanceUsd: balance.formatted,
-      alertThresholdUsd: thresholdUsd
-    };
-    await this.repo.upsertRuntimeHealth({ key: "shared_bot_wallet", status, details });
-    await emit(record, {
-      eventName: "wallet.health.checked",
-      summary: status === "ok" ? "Shared bot wallet balance is healthy" : "Shared bot wallet balance is below the configured operating threshold",
-      level: status === "ok" ? "info" : "warn",
-      metadata: details
-    });
-    return {
-      status,
-      balanceUsd: balance.formatted,
-      token: balance.token.symbol,
-      address: wallet.address ?? "",
-      network: this.config.tempoNetwork,
-      chainId: wallet.chainId
-    };
+      ensureBotWallet: (guildId, eventRecord) => this.ensureBotWallet(guildId, eventRecord),
+      getBalance: (wallet) => this.getBalance(wallet),
+    }, SHARED_BOT_GUILD_ID, record);
   }
 
   resolveToken(token: string): Promise<TokenInfo> {

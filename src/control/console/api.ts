@@ -71,7 +71,7 @@ export async function fetchRunFeedback(runId: string): Promise<RunFeedback | nul
   return ((await response.json()) as { feedback: RunFeedback | null }).feedback;
 }
 
-export async function saveRunFeedback(input: { runId: string; rating: "good" | "bad"; note: string; expectedBehavior: string; captureEval: boolean }): Promise<RunFeedback> {
+export async function saveRunFeedback(input: Omit<RunFeedback, "note" | "expectedBehavior" | "createdAt" | "updatedAt"> & { note: string; expectedBehavior: string }): Promise<RunFeedback> {
   if (useFixtures) return { ...input, note: input.note || null, expectedBehavior: input.expectedBehavior || null, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
   const response = await fetch(`/api/runs/${encodeURIComponent(input.runId)}/feedback`, {
     method: "POST",

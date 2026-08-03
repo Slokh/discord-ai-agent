@@ -430,7 +430,7 @@ export async function startJobs(input: {
               const message = error instanceof Error ? error.message : String(error);
               await input.repo?.markAgentTaskFailed({
                 taskId: job.data.taskId,
-                status: isNoChangesTaskError(message) ? "no_changes" : "failed",
+                status: "failed",
                 error: message,
                 metadata: { backend: backendName, failedStep: "sandbox_start", ...runtimeParentMetadata }
               });
@@ -605,10 +605,6 @@ export function embeddingPriorityForMessageTimestamp(createdTimestamp: number | 
 function normalizeEmbeddingPriority(priority: number | undefined) {
   if (priority == null || !Number.isFinite(priority)) return 0;
   return Math.max(0, Math.min(2_147_483_647, Math.trunc(priority)));
-}
-
-function isNoChangesTaskError(message: string) {
-  return /produced no diff|no diff|no changes/i.test(message);
 }
 
 function isTerminalProcessRunStatus(status: string) {

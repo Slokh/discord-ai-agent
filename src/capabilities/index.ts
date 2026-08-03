@@ -1,35 +1,22 @@
-import type { AgentCapabilityRuntime, AgentPromptContribution } from "../agent/capabilityRuntime.js";
+import type { AgentCapabilityRuntime } from "../agent/capabilityRuntime.js";
 import type { ToolContext } from "../tools/types.js";
-import { prepareAgentModelCapability } from "./agentModel.js";
-import { prepareDiscordEmojiCapability } from "./discordEmoji.js";
-import { freshDataPromptContribution } from "./freshData.js";
-import { imageContextPromptContribution } from "./imageContext.js";
-import { prepareRandomGameCapability } from "./randomGames.js";
+import { finalizeCapabilityResponse, prepareInstalledCapabilities } from "./catalog.js";
 
 /** Installs product capabilities behind the one extension surface consumed by the generic agent loop. */
 export async function prepareAgentCapabilities(
   ctx: ToolContext,
   userText: string,
 ): Promise<AgentCapabilityRuntime> {
-  const [modelCapability, emojiContribution, randomGame] = await Promise.all([
-    prepareAgentModelCapability(ctx),
-    prepareDiscordEmojiCapability(ctx, userText),
-    prepareRandomGameCapability(ctx, userText),
-  ]);
-  const promptContributions: Array<AgentPromptContribution | undefined> = [
-    freshDataPromptContribution(),
-    modelCapability.promptContribution,
-    emojiContribution,
-    imageContextPromptContribution(ctx),
-    randomGame.promptContribution(),
-  ];
+  const prepared = await prepareInstalledCapabilities(ctx, userText);
+  const models = prepared.flatMap((capability) => capability.model ? [capability.model] : []);
+  if (new Set(models).size > 1) throw new Error("Installed capabilities selected conflicting agent models.");
   return {
-    model: modelCapability.model,
-    promptContributions: promptContributions.filter(
-      (contribution): contribution is AgentPromptContribution => contribution !== undefined,
-    ),
-    observeToolResult: (toolName, result) => randomGame.observeToolResult(toolName, result),
-    finalizeResponse: (response) => randomGame.finalizeResponse(response),
-    blocksTimeoutRecovery: () => randomGame.blocksTimeoutRecovery(),
+    model: models[0],
+    promptContributions: prepared.flatMap((capability) => capability.promptContributions ?? []),
+    observeToolResult: (toolName, result) => {
+      for (const capability of prepared) capability.observeToolResult?.(toolName, result);
+    },
+    finalizeResponse: (response) => finalizeCapabilityResponse(prepared, response),
+    blocksTimeoutRecovery: () => prepared.some((capability) => capability.blocksTimeoutRecovery?.() === true),
   };
 }

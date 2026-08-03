@@ -1,6 +1,6 @@
 import { compareSpotifyPlaylists, getSpotifyAlbumTracks, getSpotifyArtistDiscography, getSpotifyItem, getSpotifyPlaylistStats, getSpotifyPlaylistTracks, searchSpotify } from "../spotify/spotifyTools.js";
 import { cleanAgentResponse, stringArgument, stringArrayArgument, numberArgument } from "./arguments.js";
-import type { ToolName } from "../registry.js";
+import type { ToolName } from "../toolDefinition.js";
 import type { LocalToolHandler } from "./types.js";
 
 // Uniform signatures intentionally expose only the inputs each tool needs.

@@ -1,13 +1,13 @@
-import { defineTool, type ToolRegistryEntry } from "../toolDefinition.js";
+import { userWalletsAvailable } from "../../capabilities/wallets.js";
+import { defineTool, installToolsWhen, type ToolRegistryEntry } from "../toolDefinition.js";
 
-export const walletAdminToolContracts = [
+export const walletAdminToolContracts = installToolsWhen(userWalletsAvailable, [
   defineTool({
     name: "adminTransferWalletFunds",
     description:
       "Perform an explicit payment-admin rebalancing or corrective transfer between any two managed wallets in the current Discord server: bot to user, user to bot, or user to user. Never accepts an external address. Use only when the bot owner or payment ops requester explicitly asks to rebalance, fund, reimburse, revert, or correct wallet state. Both user endpoints must be resolved to Discord IDs first. A reason is mandatory and the requester remains durably attributed.",
     mutates: true,
     group: "external",
-    deploymentRequirement: "user_wallet",
     accessPolicy: "strict_ops",
     category: "ops",
     toolClass: "ops",
@@ -36,7 +36,6 @@ export const walletAdminToolContracts = [
       "Change this Discord server's durable starter-wallet target. Set rebalanceExisting only when the requester also wants every existing member wallet adjusted to the new target. Code enforces owner/payment-ops permission, validates the typed amount, reads every balance live, and uses receipt-verified managed transfers; excess returns to the AI treasury and shortfalls are funded by it.",
     mutates: true,
     group: "external",
-    deploymentRequirement: "user_wallet",
     accessPolicy: "strict_ops",
     category: "ops",
     toolClass: "ops",
@@ -62,7 +61,6 @@ export const walletAdminToolContracts = [
       "Read an authoritative server-wide total of network fees for confirmed managed-wallet transfers. Fetches current Tempo receipts for durable transfer hashes, computes fee-token charges using Tempo's receipt gas values, and states that the AI treasury sponsored member transfers. Use whenever an authorized payment admin asks about historical gas, fee, or transaction costs; never estimate from transfer count.",
     mutates: false,
     group: "external",
-    deploymentRequirement: "user_wallet",
     accessPolicy: "strict_ops",
     category: "ops",
     toolClass: "ops",
@@ -79,7 +77,6 @@ export const walletAdminToolContracts = [
       "Reconcile pending or uncertain managed-wallet transfers against Tempo and expire stale wager reservations. Use only when an authorized payment admin explicitly asks to reconcile or repair wallet state. Routine reconciliation runs automatically.",
     mutates: true,
     group: "external",
-    deploymentRequirement: "user_wallet",
     accessPolicy: "strict_ops",
     category: "ops",
     toolClass: "ops",
@@ -89,4 +86,4 @@ export const walletAdminToolContracts = [
     auditEvents: ["tool_audit_logs", "wallet.reconciliation.completed"],
     parameters: { type: "object", properties: {}, additionalProperties: false }
   }),
-] satisfies ToolRegistryEntry[];
+] satisfies ToolRegistryEntry[]);

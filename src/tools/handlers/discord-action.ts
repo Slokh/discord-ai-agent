@@ -7,7 +7,7 @@ import { createDiscordEmoji } from "../guildEmojiTools.js";
 import { composeDiscordResponse } from "../discordPresentationTools.js";
 import { cleanToolResponse } from "../responseFormatting.js";
 import { booleanArgument, stringArgument, stringArrayArgument, numberArgument, recordArgument } from "./arguments.js";
-import type { ToolName } from "../registry.js";
+import type { ToolName } from "../toolDefinition.js";
 import type { LocalToolHandler } from "./types.js";
 
 export const discordActionToolHandlers = {

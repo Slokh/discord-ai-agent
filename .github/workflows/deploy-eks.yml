@@ -85,3 +85,18 @@ jobs:
             --wait \
             --timeout 10m \
             "${helm_args[@]}"
+      - name: Verify deployed revision and capabilities
+        run: |
+          for component in api bot worker; do
+            deployment="$HELM_RELEASE-$component"
+            kubectl --namespace "$K8S_NAMESPACE" rollout status "deployment/$deployment" --timeout=2m
+            image="$(kubectl --namespace "$K8S_NAMESPACE" get deployment "$deployment" -o jsonpath='{.spec.template.spec.containers[0].image}')"
+            revision="$(kubectl --namespace "$K8S_NAMESPACE" get deployment "$deployment" -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name=="APP_REVISION")].value}')"
+            test "${image##*:}" = "$IMAGE_TAG"
+            test "$revision" = "$IMAGE_TAG"
+          done
+          kubectl auth can-i create jobs.batch \
+            --namespace "$K8S_NAMESPACE" \
+            --as="system:serviceaccount:$K8S_NAMESPACE:$HELM_RELEASE-worker" | grep -qx yes
+          timeout 8m kubectl --namespace "$K8S_NAMESPACE" exec "deployment/$HELM_RELEASE-worker" -- \
+            node dist/scripts/postDeployCanary.js

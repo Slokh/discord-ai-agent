@@ -124,6 +124,11 @@ export type RunFeedback = {
   rating: "good" | "bad";
   note: string | null;
   expectedBehavior: string | null;
+  failureMode: "wrong_answer" | "unnecessary_refusal" | "wrong_tool" | "missing_evidence" | "permission" | "delivery" | "latency" | "other" | null;
+  expectedTools: string[];
+  forbiddenTools: string[];
+  mustContain: string[];
+  mustNotContain: string[];
   captureEval: boolean;
   createdAt: string;
   updatedAt: string;

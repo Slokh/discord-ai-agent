@@ -11,7 +11,7 @@ import {
 } from "../walletTools.js";
 import { awaitRandomWagerAction } from "../gameSessionTools.js";
 import { cleanToolResponse } from "../responseFormatting.js";
-import type { ToolName } from "../registry.js";
+import type { ToolName } from "../toolDefinition.js";
 import type { AgentResponse } from "../types.js";
 import { numberArgument, recordArgument, stringArgument, stringArrayArgument } from "./arguments.js";
 import type { LocalToolHandler } from "./types.js";

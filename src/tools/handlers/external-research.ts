@@ -1,13 +1,12 @@
 import { runObservedModelCall } from "../../agent/modelCallTelemetry.js";
 import { openRouterServerToolDefinitionsForModel } from "../registry.js";
 import type { ToolName } from "../toolDefinition.js";
-import { stringArgument, stringArrayArgument } from "./arguments.js";
 import type { LocalToolHandler } from "./types.js";
 
 export const externalResearchToolHandlers = {
-  researchWeb: async (ctx, route, _originalText) => {
-    const question = stringArgument(route.arguments, "question")!;
-    const urls = stringArrayArgument(route.arguments, "urls") ?? [];
+  web__run: async (ctx, route, originalText) => {
+    const operations = route.arguments ?? {};
+    const commands = JSON.stringify(operations);
     let response;
     try {
       response = await runObservedModelCall(ctx, {
@@ -18,14 +17,11 @@ export const externalResearchToolHandlers = {
             {
               role: "system",
               content:
-                "Research the user's public-web question with the available hosted tools. Return concise grounded findings. Include the source URLs in the answer when the provider exposes them. State limitations instead of inventing facts.",
+                "Execute the supplied public-web operations with the matching hosted tools. Return concise grounded findings. Include source URLs when the provider exposes them. State limitations instead of inventing facts.",
             },
             {
               role: "user",
-              content: [
-                `Question: ${question}`,
-                urls.length ? `URLs to inspect:\n${urls.join("\n")}` : "",
-              ].filter(Boolean).join("\n\n"),
+              content: `Original request:\n${originalText}\n\nWeb operations:\n${commands}`,
             },
           ],
           tools: openRouterServerToolDefinitionsForModel(),
@@ -33,7 +29,7 @@ export const externalResearchToolHandlers = {
           reasoningEffort: "low",
           retryPolicy: "cheap",
         },
-        metadata: { requestedUrlCount: urls.length },
+        metadata: { operationNames: Object.keys(operations).sort() },
       });
     } catch {
       return evidenceFailure("Hosted web research failed before returning current external evidence.");

@@ -54,7 +54,7 @@ const expectedFamilyTools = {
     "transferWalletFunds", "requestStarterFunds", "adminTransferWalletFunds",
     "adminSetWalletStarterAmount", "getWalletFeeSummary", "reconcileWalletTransfers",
   ],
-  externalResearch: ["researchWeb"],
+  externalResearch: ["web__run"],
 } satisfies Record<keyof typeof handlerFamilies, ToolName[]>;
 
 describe("tool handler conformance", () => {

@@ -9,7 +9,7 @@ describe("deployment toolset", () => {
     expect(names).toContain("loadSkillContext");
     expect(names).toContain("composeDiscordResponse");
     expect(names).toContain("drawRandom");
-    expect(names).toContain("researchWeb");
+    expect(names).toContain("web__run");
     expect(names).not.toContain("requestAdditionalTools");
   });
 

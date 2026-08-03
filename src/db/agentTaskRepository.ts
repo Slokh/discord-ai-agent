@@ -151,12 +151,13 @@ export async function markAgentTaskRunning(pool: DbPool, input: {
           WITH updated_execution AS (
             UPDATE agent_runtime_executions
             SET status = 'running',
+                event_sequence = event_sequence + 1,
                 metadata = metadata || $2::jsonb,
                 started_at = coalesce(started_at, now()),
                 updated_at = now()
             WHERE task_id = $1
               AND status NOT IN ('succeeded', 'failed', 'no_changes', 'cancelled')
-            RETURNING session_id, execution_id, trace_id, metadata->>'runtime' = 'agent' AS is_agent_runtime
+            RETURNING session_id, execution_id, trace_id, event_sequence AS sequence
           ),
           session_update AS (
             UPDATE agent_runtime_sessions
@@ -164,17 +165,6 @@ export async function markAgentTaskRunning(pool: DbPool, input: {
                 started_at = coalesce(started_at, now()),
                 updated_at = now()
             WHERE session_id IN (SELECT session_id FROM updated_execution)
-          ),
-          next_sequence AS (
-            SELECT
-              updated_execution.session_id,
-              updated_execution.execution_id,
-              updated_execution.trace_id,
-              updated_execution.is_agent_runtime,
-              coalesce(max(agent_runtime_events.sequence), 0) + 1 AS sequence
-            FROM updated_execution
-            LEFT JOIN agent_runtime_events ON agent_runtime_events.execution_id = updated_execution.execution_id
-            GROUP BY updated_execution.session_id, updated_execution.execution_id, updated_execution.trace_id, updated_execution.is_agent_runtime
           )
           INSERT INTO agent_runtime_events(session_id, execution_id, trace_id, sequence, kind, level, event_name, summary, metadata)
           SELECT
@@ -187,7 +177,7 @@ export async function markAgentTaskRunning(pool: DbPool, input: {
             'agent.task.started',
             $3,
             jsonb_build_object('taskId', $1, 'step', $4::text) || $2::jsonb
-          FROM next_sequence
+          FROM updated_execution
         `,
         [
           input.taskId,
@@ -236,24 +226,14 @@ export async function markAgentTaskProgress(pool: DbPool, input: {
       .query(
         `
           WITH target AS (
-            SELECT
+            UPDATE agent_runtime_executions
+            SET event_sequence = event_sequence + 1
+            WHERE task_id = $1
+            RETURNING
               session_id,
               execution_id,
               trace_id,
-              metadata->>'runtime' = 'agent' AS is_agent_runtime
-            FROM agent_runtime_executions
-            WHERE task_id = $1
-          ),
-          next_sequence AS (
-            SELECT
-              target.session_id,
-              target.execution_id,
-              target.trace_id,
-              target.is_agent_runtime,
-              coalesce(max(agent_runtime_events.sequence), 0) + 1 AS sequence
-            FROM target
-            LEFT JOIN agent_runtime_events ON agent_runtime_events.execution_id = target.execution_id
-            GROUP BY target.session_id, target.execution_id, target.trace_id, target.is_agent_runtime
+              event_sequence AS sequence
           )
           INSERT INTO agent_runtime_events(session_id, execution_id, trace_id, sequence, kind, level, event_name, summary, metadata)
           SELECT
@@ -273,7 +253,7 @@ export async function markAgentTaskProgress(pool: DbPool, input: {
             'agent.task.progress',
             $3,
             jsonb_build_object('taskId', $1, 'step', $2) || $4::jsonb
-          FROM next_sequence
+          FROM target
         `,
         [input.taskId, input.step, input.statusMessage, JSON.stringify(input.metadata ?? {})]
       )
@@ -423,6 +403,7 @@ export async function markAgentTaskSucceeded(pool: DbPool, input: {
           WITH updated_execution AS (
             UPDATE agent_runtime_executions
             SET status = 'succeeded',
+                event_sequence = event_sequence + 1,
                 branch_name = $2,
                 pr_url = $3,
                 draft = $4,
@@ -432,7 +413,7 @@ export async function markAgentTaskSucceeded(pool: DbPool, input: {
                 completed_at = coalesce(completed_at, now()),
                 updated_at = now()
             WHERE task_id = $1
-            RETURNING session_id, execution_id, trace_id, metadata->>'runtime' = 'agent' AS is_agent_runtime
+            RETURNING session_id, execution_id, trace_id, event_sequence AS sequence
           ),
           session_update AS (
             UPDATE agent_runtime_sessions
@@ -440,17 +421,6 @@ export async function markAgentTaskSucceeded(pool: DbPool, input: {
                 completed_at = coalesce(completed_at, now()),
                 updated_at = now()
             WHERE session_id IN (SELECT session_id FROM updated_execution)
-          ),
-          next_sequence AS (
-            SELECT
-              updated_execution.session_id,
-              updated_execution.execution_id,
-              updated_execution.trace_id,
-              updated_execution.is_agent_runtime,
-              coalesce(max(agent_runtime_events.sequence), 0) + 1 AS sequence
-            FROM updated_execution
-            LEFT JOIN agent_runtime_events ON agent_runtime_events.execution_id = updated_execution.execution_id
-            GROUP BY updated_execution.session_id, updated_execution.execution_id, updated_execution.trace_id, updated_execution.is_agent_runtime
           )
           INSERT INTO agent_runtime_events(session_id, execution_id, trace_id, sequence, kind, level, event_name, summary, metadata)
           SELECT
@@ -463,7 +433,7 @@ export async function markAgentTaskSucceeded(pool: DbPool, input: {
             'agent.task.completed',
             'Opened pull request.',
             jsonb_build_object('taskId', $1, 'status', 'succeeded') || $6::jsonb
-          FROM next_sequence
+          FROM updated_execution
         `,
         [input.taskId, input.branchName, input.prUrl, input.draft, input.verifyPassed, JSON.stringify(input.metadata ?? {})]
       )
@@ -514,12 +484,13 @@ export async function markAgentTaskFailed(pool: DbPool, input: {
           WITH updated_execution AS (
             UPDATE agent_runtime_executions
             SET status = $2,
+                event_sequence = event_sequence + 1,
                 error = $3,
                 metadata = metadata || $4::jsonb,
                 completed_at = coalesce(completed_at, now()),
                 updated_at = now()
             WHERE task_id = $1
-            RETURNING session_id, execution_id, trace_id, metadata->>'runtime' = 'agent' AS is_agent_runtime
+            RETURNING session_id, execution_id, trace_id, event_sequence AS sequence
           ),
           session_update AS (
             UPDATE agent_runtime_sessions
@@ -527,17 +498,6 @@ export async function markAgentTaskFailed(pool: DbPool, input: {
                 completed_at = coalesce(completed_at, now()),
                 updated_at = now()
             WHERE session_id IN (SELECT session_id FROM updated_execution)
-          ),
-          next_sequence AS (
-            SELECT
-              updated_execution.session_id,
-              updated_execution.execution_id,
-              updated_execution.trace_id,
-              updated_execution.is_agent_runtime,
-              coalesce(max(agent_runtime_events.sequence), 0) + 1 AS sequence
-            FROM updated_execution
-            LEFT JOIN agent_runtime_events ON agent_runtime_events.execution_id = updated_execution.execution_id
-            GROUP BY updated_execution.session_id, updated_execution.execution_id, updated_execution.trace_id, updated_execution.is_agent_runtime
           )
           INSERT INTO agent_runtime_events(session_id, execution_id, trace_id, sequence, kind, level, event_name, summary, metadata)
           SELECT
@@ -550,7 +510,7 @@ export async function markAgentTaskFailed(pool: DbPool, input: {
             'agent.task.completed',
             $3,
             jsonb_build_object('taskId', $1, 'status', $2, 'error', $3) || $4::jsonb
-          FROM next_sequence
+          FROM updated_execution
         `,
         [input.taskId, input.status ?? "failed", input.error, JSON.stringify(input.metadata ?? {})]
       )

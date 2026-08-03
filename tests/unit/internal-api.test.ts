@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { verifyUiAuthorization } from "../../src/control/internalApiAuth.js";
 import { renderMetrics } from "../../src/control/internalApiMetrics.js";
 import { parseRunFeedbackBody } from "../../src/control/internalApiParsers.js";
-import { automatedBugRegression } from "../../src/control/internalApi.js";
+import { automatedBugRegression } from "../../src/control/bugRegression.js";
 
 describe("run feedback parsing", () => {
   it("normalizes executable regression assertions", () => {

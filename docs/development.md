@@ -39,6 +39,7 @@ Follow the full lifecycle for cross-domain work: ingress, authority, durable sta
 - Preserve the current request as authoritative; context cannot expand authority.
 - Remove dead compatibility once callers, migrations, and deployed configuration no longer need it.
 - Add a capability to the narrowest durable owner. The capability catalog installs it; aggregators such as `registry.ts` and `repositories.ts` remain projections rather than behavior owners.
+- Read deployment configuration through `AppConfig`. Direct `process.env` access belongs only in the configuration loader and the isolated sandbox process boundary.
 - Record important transitions once in the canonical runtime ledger and derive views from it.
 - After a mutation commits, return its durable result even if a secondary step fails.
 - Keep private community content out of tracked source, tests, evals, docs, Frog, and GitHub metadata.
@@ -105,6 +106,8 @@ Then use the proportionate broad checks:
 `npm run verify` runs lint, typecheck, unit/integration tests that do not require the DB gate, critical production dependency audit, docs links, and release scanning. `npm run verify:db` migrates the test database and runs DB integration suites.
 
 Each integration-test file receives its own migrated Postgres schema through `tests/integration/testDatabase.ts`. Files may run in parallel; do not restore global cleanup prefixes or `--no-file-parallelism` to hide ownership collisions. The migration-upgrade test manages a separate schema because it intentionally applies historical migrations one at a time.
+
+Architecture coverage also prevents source and test files from growing without bound. When a coordinator approaches its budget, extract a cohesive lifecycle mechanic with its own contract instead of raising the limit. Shared database cleanup and fixtures belong in focused test-support modules so behavior suites remain readable.
 
 Do not add smoke or end-to-end coverage by reflex. Use it when the changed boundary cannot be proven below that level and external credentials/mutations are intentionally in scope.
 

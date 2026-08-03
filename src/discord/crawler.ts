@@ -10,7 +10,8 @@ import {
 } from "discord.js";
 import type { AppConfig } from "../config/env.js";
 import type { DiscordAiAgentRepository } from "../db/repositories.js";
-import { embeddingPriorityForMessageTimestamp, type MessageEmbeddingEnqueueOptions } from "../jobs/queue.js";
+import { embeddingPriorityForMessageTimestamp } from "../jobs/embeddingPriority.js";
+import type { MessageEmbeddingEnqueueOptions } from "../jobs/queue.js";
 import { channelRecordFromChannel, persistDiscordMessage } from "./messagePersistence.js";
 import { logger } from "../util/logger.js";
 

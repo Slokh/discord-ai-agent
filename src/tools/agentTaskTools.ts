@@ -467,12 +467,7 @@ export async function getDeploymentStatus(ctx: ToolContext): Promise<string> {
     })
   ]);
 
-  const revision =
-    process.env.GITHUB_SHA ??
-    process.env.RENDER_GIT_COMMIT ??
-    process.env.K_REVISION ??
-    process.env.HOSTNAME ??
-    "unknown";
+  const revision = ctx.config.appRevision;
 
   await ctx.repo.auditTool({
     guildId: ctx.guildId,

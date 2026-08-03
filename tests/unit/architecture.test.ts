@@ -2,7 +2,8 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 
-const SOURCE_LINE_LIMIT = 775;
+const SOURCE_LINE_LIMIT = 760;
+const TEST_LINE_LIMIT = 3_350;
 
 const requiredArchitectureGuides = [
   "docs/README.md",
@@ -30,6 +31,22 @@ describe("architecture guardrails", () => {
     }
   });
 
+  it("keeps private production regression output out of GitHub artifacts and detailed logs", async () => {
+    const scheduled = await fs.readFile(
+      path.join(process.cwd(), ".github/workflows/private-regressions.yml"),
+      "utf8",
+    );
+    const deployment = await fs.readFile(
+      path.join(process.cwd(), ".github/workflows/deploy-eks.yml"),
+      "utf8",
+    );
+    for (const workflow of [scheduled, deployment]) {
+      expect(workflow).toContain("--safe-summary");
+      expect(workflow).toContain("--private-only");
+    }
+    expect(scheduled).not.toContain("upload-artifact");
+  });
+
   it("keeps consolidated architecture guides present", async () => {
     for (const readme of requiredArchitectureGuides) {
       await expect(
@@ -49,6 +66,22 @@ describe("architecture guardrails", () => {
       if (lines > SOURCE_LINE_LIMIT) oversized.push({ file: relative, lines });
     }
 
+    expect(oversized).toEqual([]);
+  });
+
+  it("prevents test suites from becoming unbounded repositories of unrelated behavior", async () => {
+    const testFiles = await listSourceFiles(path.join(process.cwd(), "tests"));
+    const oversized: Array<{ file: string; lines: number }> = [];
+    for (const file of testFiles) {
+      const content = await fs.readFile(file, "utf8");
+      const lines = content.split(/\r?\n/).length;
+      if (lines > TEST_LINE_LIMIT) {
+        oversized.push({
+          file: normalizePath(path.relative(process.cwd(), file)),
+          lines,
+        });
+      }
+    }
     expect(oversized).toEqual([]);
   });
 
@@ -100,6 +133,32 @@ describe("architecture guardrails", () => {
         expect(content, `${path.relative(process.cwd(), file)} should not import ${importPath}`).not.toContain(importPath);
       }
     }
+  });
+
+  it("keeps tool contracts independent from execution handlers", async () => {
+    const contractFiles = await listSourceFiles(
+      path.join(process.cwd(), "src/tools/contracts"),
+    );
+    for (const file of contractFiles) {
+      const content = await fs.readFile(file, "utf8");
+      expect(
+        content,
+        `${normalizePath(path.relative(process.cwd(), file))} must not import handlers`,
+      ).not.toMatch(/from\s+["'][^"']*handlers(?:\/|["'])/);
+    }
+  });
+
+  it("centralizes production environment access", async () => {
+    const sourceFiles = await listSourceFiles(path.join(process.cwd(), "src"));
+    const allowedPrefixes = ["src/config/", "src/execution/"];
+    const offenders: string[] = [];
+    for (const file of sourceFiles) {
+      const relative = normalizePath(path.relative(process.cwd(), file));
+      if (allowedPrefixes.some((prefix) => relative.startsWith(prefix))) continue;
+      const content = await fs.readFile(file, "utf8");
+      if (/\bprocess\.env\b/.test(content)) offenders.push(relative);
+    }
+    expect(offenders).toEqual([]);
   });
 
   it("uses one installed capability composition root", async () => {

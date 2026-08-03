@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { KeyedSerialQueue } from "../../src/jobs/queue.js";
+import { KeyedSerialQueue } from "../../src/jobs/keyedSerialQueue.js";
 
 describe("keyed prompt concurrency", () => {
   it("serializes one Discord thread while allowing different threads to overlap", async () => {

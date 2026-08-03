@@ -20,6 +20,7 @@ const KNOWN_EVAL_TOOLS = new Set<string>([
 const evalPromptSchema = z.object({
   id: z.string().min(1),
   category: z.string().min(1),
+  sourceRevision: z.string().min(1).optional(),
   prompt: z.string().min(1),
   notes: z.string().optional(),
   expectedTools: z.array(z.string().min(1)).default([]),
@@ -77,6 +78,7 @@ export type EvalArgs = {
   dryRun: boolean;
   list: boolean;
   json: boolean;
+  safeSummary: boolean;
   promptTimeoutMs: number;
 };
 
@@ -93,6 +95,7 @@ export type EvalTraceEvidence = {
 export type EvalCaseResult = {
   id: string;
   category: string;
+  sourceRevision?: string;
   prompt: string;
   status: "passed" | "failed" | "error" | "skipped";
   durationMs: number;
@@ -175,6 +178,11 @@ async function main() {
   const comparison = args.comparePath ? compareEvalReports(await loadEvalReport(args.comparePath), report, args.comparePath) : null;
   const outputPath = await writeEvalReport(report, args.outputDir, comparison);
   const hasFailures = report.totals.failed > 0 || report.totals.error > 0;
+  if (args.safeSummary) {
+    process.stdout.write(`${JSON.stringify(safeEvalSummary(report), null, 2)}\n`);
+    process.exitCode = hasFailures ? 1 : 0;
+    return;
+  }
   if (args.json) {
     process.stdout.write(`${JSON.stringify({ outputPath, comparison, ...report }, null, 2)}\n`);
     process.exitCode = hasFailures ? 1 : 0;
@@ -194,6 +202,7 @@ export function parseEvalArgs(argv: string[]): EvalArgs {
     dryRun: false,
     list: false,
     json: false,
+    safeSummary: false,
     promptTimeoutMs: DEFAULT_TIMEOUT_MS
   };
 
@@ -212,6 +221,9 @@ export function parseEvalArgs(argv: string[]): EvalArgs {
       args.dirs.push(valueAfterEquals(arg));
     } else if (arg === "--include-private") {
       args.includePrivate = true;
+    } else if (arg === "--private-only") {
+      args.includePrivate = true;
+      args.dirs = [DEFAULT_PRIVATE_EVAL_DIR];
     } else if (arg === "--output-dir") {
       args.outputDir = requiredNext(argv, ++index, arg);
     } else if (arg.startsWith("--output-dir=")) {
@@ -234,6 +246,8 @@ export function parseEvalArgs(argv: string[]): EvalArgs {
       args.list = true;
     } else if (arg === "--json") {
       args.json = true;
+    } else if (arg === "--safe-summary") {
+      args.safeSummary = true;
     } else if (arg === "--prompt-timeout-ms") {
       args.promptTimeoutMs = positiveInteger(requiredNext(argv, ++index, arg), arg);
     } else if (arg.startsWith("--prompt-timeout-ms=")) {
@@ -243,7 +257,9 @@ export function parseEvalArgs(argv: string[]): EvalArgs {
     }
   }
 
-  if (args.includePrivate) args.dirs.push(DEFAULT_PRIVATE_EVAL_DIR);
+  if (args.includePrivate && !args.dirs.includes(DEFAULT_PRIVATE_EVAL_DIR)) {
+    args.dirs.push(DEFAULT_PRIVATE_EVAL_DIR);
+  }
   return args;
 }
 
@@ -322,6 +338,7 @@ async function runEvalPrompt(
     return {
       id: prompt.id,
       category: prompt.category,
+      sourceRevision: prompt.sourceRevision,
       prompt: prompt.prompt,
       status: "skipped",
       durationMs: 0,
@@ -345,6 +362,7 @@ async function runEvalPrompt(
     return {
       id: prompt.id,
       category: prompt.category,
+      sourceRevision: prompt.sourceRevision,
       prompt: prompt.prompt,
       status: "error",
       durationMs,
@@ -366,6 +384,7 @@ async function runEvalPrompt(
     return {
       id: prompt.id,
       category: prompt.category,
+      sourceRevision: prompt.sourceRevision,
       prompt: prompt.prompt,
       status: "error",
       durationMs,
@@ -391,6 +410,7 @@ async function runEvalPrompt(
   return {
     id: prompt.id,
     category: prompt.category,
+    sourceRevision: prompt.sourceRevision,
     prompt: prompt.prompt,
     status: failures.length === 0 ? "passed" : "failed",
     durationMs: output.durationMs ?? durationMs,
@@ -405,11 +425,14 @@ async function runEvalPrompt(
 }
 
 export function buildPromptCommand(prompt: EvalPrompt): { command: string; args: string[] } {
-  const args = ["run", "prompt", "--", "--json"];
+  const compiled = import.meta.url.endsWith(".js") && import.meta.url.includes("/dist/");
+  const args = compiled
+    ? [fileURLToPath(new URL("./prompt.js", import.meta.url)), "--json"]
+    : ["run", "prompt", "--", "--json"];
   if (prompt.noMemory) args.push("--no-memory");
   if (prompt.useDiscordMemory) args.push("--use-discord-memory");
   args.push(...prompt.promptArgs, prompt.prompt);
-  return { command: "npm", args };
+  return { command: compiled ? process.execPath : "npm", args };
 }
 
 export function evaluatePromptAssertions(
@@ -534,6 +557,44 @@ export function formatEvalSummary(report: EvalRunReport, outputPath: string, com
     lines.push("", ...formatEvalComparison(comparison));
   }
   return `${lines.join("\n")}\n`;
+}
+
+/** Aggregate-only output suitable for CI logs containing private regression runs. */
+export function safeEvalSummary(report: EvalRunReport) {
+  type Group = {
+    revision: string;
+    category: string;
+    passed: number;
+    failed: number;
+    error: number;
+    skipped: number;
+    total: number;
+  };
+  const groups = new Map<string, Group>();
+  for (const result of report.results) {
+    const revision = result.sourceRevision ?? "committed";
+    const key = `${revision}\u0000${result.category}`;
+    const group = groups.get(key) ?? {
+      revision,
+      category: result.category,
+      passed: 0,
+      failed: 0,
+      error: 0,
+      skipped: 0,
+      total: 0,
+    };
+    group[result.status] += 1;
+    group.total += 1;
+    groups.set(key, group);
+  }
+  return {
+    generatedAt: report.generatedAt,
+    durationMs: report.durationMs,
+    totals: report.totals,
+    groups: [...groups.values()].sort((left, right) =>
+      left.revision.localeCompare(right.revision)
+      || left.category.localeCompare(right.category)),
+  };
 }
 
 export function compareEvalReports(baseline: EvalRunReport, current: EvalRunReport, baselinePath: string): EvalComparisonReport {
@@ -747,6 +808,7 @@ Options:
   --file <path>              Load one eval suite JSON file. Repeatable.
   --dir <path>               Load all JSON suites under a directory. Defaults to evals/prompts.
   --include-private          Also load .discord-ai-agent/evals, which is gitignored.
+  --private-only             Load only the private production regression suite.
   --output-dir <path>        Report output directory. Defaults to .eval-runs.
   --compare <path>           Compare against a previous results.json file or eval run directory.
   --filter <text>            Keep prompts whose id, category, prompt, or notes include text.
@@ -755,6 +817,7 @@ Options:
   --list                     List selected prompts without running them.
   --dry-run                  Validate selected prompts without running them.
   --json                     Print the final report as JSON.
+  --safe-summary             Print only counts grouped by source revision and category.
 `);
 }
 

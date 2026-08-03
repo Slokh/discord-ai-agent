@@ -1,5 +1,13 @@
 import { createHash } from "node:crypto";
 import { inflateRawSync } from "node:zlib";
+import {
+  decodeText,
+  detectedTextType,
+  extractPrintableStrings,
+  extractUtf16Strings,
+  normalizeExtractedText,
+  normalizeText,
+} from "./fileTextExtraction.js";
 
 export type FileInspection = {
   parser: string;
@@ -10,7 +18,6 @@ export type FileInspection = {
   sha256: string;
 };
 
-const MAX_EXTRACTED_CHARS = 20_000;
 const MAX_ARCHIVE_ENTRIES = 100;
 const MAX_ARCHIVE_ENTRY_BYTES = 2 * 1024 * 1024;
 const MAX_ARCHIVE_TOTAL_BYTES = 4 * 1024 * 1024;
@@ -634,72 +641,6 @@ function decodeCharacterReference(match: string, code: string, radix: number): s
   return String.fromCodePoint(point);
 }
 
-function decodeText(data: Buffer, declaredContentType?: string | null, responseContentType?: string | null) {
-  if (data.length === 0) return { value: "", encoding: "utf-8" };
-  if (data.subarray(0, 2).equals(Buffer.from([0xff, 0xfe]))) return { value: data.subarray(2).toString("utf16le"), encoding: "utf-16le" };
-  if (data.subarray(0, 2).equals(Buffer.from([0xfe, 0xff]))) return { value: swapUtf16Bytes(data.subarray(2)).toString("utf16le"), encoding: "utf-16be" };
-
-  const mime = `${declaredContentType ?? ""} ${responseContentType ?? ""}`.toLowerCase();
-  const utf16Likely = oddNullRatio(data) > 0.3 && evenPrintableRatio(data) > 0.6;
-  if (utf16Likely) return { value: data.toString("utf16le"), encoding: "utf-16le" };
-
-  try {
-    const value = new TextDecoder("utf-8", { fatal: true }).decode(data);
-    if (mime.includes("text/") || mime.includes("json") || mime.includes("xml") || printableRatio(value) > 0.85) {
-      return { value, encoding: "utf-8" };
-    }
-  } catch {
-    return null;
-  }
-  return null;
-}
-
-function normalizeText(value: string, extension: string) {
-  const trimmed = value.replace(/\0/g, "").trim();
-  if (extension === "json") {
-    try {
-      return normalizeExtractedText(JSON.stringify(JSON.parse(trimmed), null, 2));
-    } catch {
-      // Return malformed JSON as readable text.
-    }
-  }
-  return normalizeExtractedText(trimmed);
-}
-
-function normalizeExtractedText(value: string) {
-  const normalized = value.replace(/\r\n?/g, "\n").trim();
-  return { text: normalized.slice(0, MAX_EXTRACTED_CHARS), truncated: normalized.length > MAX_EXTRACTED_CHARS };
-}
-
-function extractPrintableStrings(data: Buffer): string {
-  const ascii = [...data.toString("latin1").matchAll(/[\x20-\x7e]{6,}/g)].map((match) => match[0]);
-  const utf16 = extractUtf16StringList(data);
-  return normalizeExtractedText([...new Set([...utf16, ...ascii])].join("\n")).text;
-}
-
-function extractUtf16Strings(data: Buffer): string {
-  return normalizeExtractedText(extractUtf16StringList(data).join("\n")).text;
-}
-
-function extractUtf16StringList(data: Buffer): string[] {
-  const strings: string[] = [];
-  for (let offset = 0; offset + 1 < data.length; ) {
-    let cursor = offset;
-    let value = "";
-    while (cursor + 1 < data.length && data[cursor] >= 32 && data[cursor] <= 126 && data[cursor + 1] === 0) {
-      value += String.fromCharCode(data[cursor]);
-      cursor += 2;
-    }
-    if (value.length >= 6) {
-      strings.push(value);
-      offset = cursor;
-    } else {
-      offset += 1;
-    }
-  }
-  return strings;
-}
-
 function detectImageType(data: Buffer, extension: string, declared?: string | null, response?: string | null): string | null {
   if (data.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) return "image/png";
   if (data.subarray(0, 3).equals(Buffer.from([0xff, 0xd8, 0xff]))) return "image/jpeg";
@@ -711,15 +652,6 @@ function detectImageType(data: Buffer, extension: string, declared?: string | nu
   return null;
 }
 
-function detectedTextType(extension: string, declared?: string | null, response?: string | null) {
-  if (response && response !== "application/octet-stream") return response.split(";")[0];
-  if (declared && declared !== "application/octet-stream") return declared.split(";")[0];
-  if (extension === "json") return "application/json";
-  if (["xml", "svg"].includes(extension)) return "application/xml";
-  if (extension === "csv") return "text/csv";
-  return "text/plain";
-}
-
 function filenameExtension(filename: string) {
   const clean = filename.split(/[?#]/, 1)[0];
   const dot = clean.lastIndexOf(".");
@@ -728,44 +660,4 @@ function filenameExtension(filename: string) {
 
 function looksLikeZip(data: Buffer) {
   return data.length >= 4 && [0x04034b50, 0x06054b50, 0x08074b50].includes(data.readUInt32LE(0));
-}
-
-function oddNullRatio(data: Buffer) {
-  let nulls = 0;
-  let count = 0;
-  for (let index = 1; index < data.length; index += 2) {
-    count += 1;
-    if (data[index] === 0) nulls += 1;
-  }
-  return count ? nulls / count : 0;
-}
-
-function evenPrintableRatio(data: Buffer) {
-  let printable = 0;
-  let count = 0;
-  for (let index = 0; index < data.length; index += 2) {
-    count += 1;
-    if (data[index] === 9 || data[index] === 10 || data[index] === 13 || (data[index] >= 32 && data[index] <= 126)) printable += 1;
-  }
-  return count ? printable / count : 0;
-}
-
-function printableRatio(value: string) {
-  if (!value) return 1;
-  let printable = 0;
-  for (const character of value) {
-    const code = character.codePointAt(0) ?? 0;
-    if (character === "\n" || character === "\r" || character === "\t" || (code >= 32 && code !== 0x7f)) printable += 1;
-  }
-  return printable / value.length;
-}
-
-function swapUtf16Bytes(data: Buffer) {
-  const output = Buffer.from(data);
-  for (let index = 0; index + 1 < output.length; index += 2) {
-    const left = output[index];
-    output[index] = output[index + 1];
-    output[index + 1] = left;
-  }
-  return output;
 }

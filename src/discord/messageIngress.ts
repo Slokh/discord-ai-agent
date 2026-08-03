@@ -1,5 +1,6 @@
 import type { Client, Message } from "discord.js";
-import { embeddingPriorityForMessageTimestamp, type JobRuntime } from "../jobs/queue.js";
+import { embeddingPriorityForMessageTimestamp } from "../jobs/embeddingPriority.js";
+import type { JobRuntime } from "../jobs/queue.js";
 import { ensureAgentRuntimePromptExecution, finishAgentRuntimePromptExecution } from "../agent/runtimeLedger.js";
 import { enqueueAgentRuntimeSessionExecution } from "../agent/runtimeControlPlane.js";
 import { durationMs, logger, previewText } from "../util/logger.js";

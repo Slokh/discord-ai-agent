@@ -39,6 +39,8 @@ The runner:
 
 The runner owns commit, push, and PR publication. The coding agent inside the sandbox edits and verifies but does not publish independently.
 
+`src/execution/sandboxToolShims.ts` owns the intentionally small command surface injected into the coding environment. The pipeline installs those shims; feature behavior and callback authority remain in their canonical application owners.
+
 ## Context and documentation
 
 `src/execution/contextPack.ts` gives the coding agent a compact map of current owners rather than copying historical plans or stale folder READMEs. Exact identifiers from the request are searched first. The first useful edit and closest test are preferred over broad repository archaeology.

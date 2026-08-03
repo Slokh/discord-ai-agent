@@ -79,11 +79,14 @@ npm run runs:inspect -- --list --limit 20
 npm run runs:inspect -- --list --channel <channel-id> --revision <sha> --since <ISO> --triage
 npm run tasks:status
 npm run console:dev:live
+npm run release:status -- --pr <number>
 ```
 
 List filters for kind, status, channel, revision, and start time are applied by the control plane before the result limit. This keeps older matching failures visible even when unrelated recent executions are numerous.
 
 The API role serves authenticated run-console routes and Prometheus metrics. Keep the service private when possible. If public, require HTTPS and `CONTROL_UI_AUTH_PASSWORD`.
+
+`release:status` is the single safe release view. It combines the current PR and checks, Helm release state, role images/readiness/revisions, the matching deployment workflow, and the deployed revision-quality assessment. It exits nonzero for failed checks, deployment failure, role drift, incomplete rollout, or a failed quality gate; unavailable evidence is reported explicitly rather than guessed.
 
 Production configuration rejects a non-HTTPS public console URL and a public URL without a password. Browsers use standard Basic authentication and scripts use a bearer header. Credentials in cookies, `?auth=`, or `?token=` query strings are not accepted, so proxies, browser history, Discord embeds, and access logs do not capture them.
 
@@ -132,6 +135,8 @@ npm run eval:regressions
 ```
 
 The export stays under `.discord-ai-agent/evals/` with owner-only file permissions. Cases without an observable assertion remain skipped instead of pretending that a note is an executable test.
+
+Private regression cases carry their source application revision and failure category. The deployment workflow runs them after the capability canary, and a separate scheduled/manual workflow checks the deployed revision daily. CI logs receive only aggregate counts by source revision and category; prompts, answers, run IDs, notes, and full reports stay inside the production worker.
 
 ## Production triage
 

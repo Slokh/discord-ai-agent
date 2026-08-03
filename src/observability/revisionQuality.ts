@@ -91,6 +91,8 @@ export async function collectRevisionQuality(
        JOIN agent_runtime_sessions session ON session.session_id = execution.session_id
        WHERE event.created_at >= now() - ($1::text || ' hours')::interval
          AND event.event_name = 'agent.tool.complete'
+         AND execution.task_id IS NULL
+         AND execution.harness = 'nanocodex'
          AND coalesce(nullif(execution.metadata->>'appRevision', ''), nullif(session.metadata->>'appRevision', ''), 'unknown') = $2
        GROUP BY 1, 2
        ORDER BY 1, 2`,
@@ -103,6 +105,8 @@ export async function collectRevisionQuality(
        JOIN agent_runtime_sessions session ON session.session_id = execution.session_id
        WHERE event.created_at >= now() - ($1::text || ' hours')::interval
          AND event.level IN ('warn', 'error')
+         AND execution.task_id IS NULL
+         AND execution.harness = 'nanocodex'
          AND coalesce(nullif(execution.metadata->>'appRevision', ''), nullif(session.metadata->>'appRevision', ''), 'unknown') = $2
        GROUP BY event.level
        ORDER BY event.level`,
@@ -114,6 +118,8 @@ export async function collectRevisionQuality(
        JOIN agent_runtime_executions execution ON execution.execution_id = obligation.execution_id
        JOIN agent_runtime_sessions session ON session.session_id = execution.session_id
        WHERE (obligation.state = 'pending' OR obligation.created_at >= now() - ($1::text || ' hours')::interval)
+         AND execution.task_id IS NULL
+         AND execution.harness = 'nanocodex'
          AND coalesce(nullif(execution.metadata->>'appRevision', ''), nullif(session.metadata->>'appRevision', ''), 'unknown') = $2
        GROUP BY obligation.state
        ORDER BY obligation.state`,
@@ -127,6 +133,8 @@ export async function collectRevisionQuality(
        JOIN agent_runtime_executions execution ON execution.execution_id = feedback.run_id
        JOIN agent_runtime_sessions session ON session.session_id = execution.session_id
        WHERE feedback.updated_at >= now() - ($1::text || ' hours')::interval
+         AND execution.task_id IS NULL
+         AND execution.harness = 'nanocodex'
          AND coalesce(nullif(execution.metadata->>'appRevision', ''), nullif(session.metadata->>'appRevision', ''), 'unknown') = $2
        GROUP BY feedback.rating, feedback.failure_mode
        ORDER BY feedback.rating, feedback.failure_mode`,

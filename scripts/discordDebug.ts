@@ -4,6 +4,7 @@ import { extractDiscordMessageId } from "../src/observability/runs.js";
 import { resolveProductionControlPlane } from "./productionControlPlane.js";
 
 type Args = {
+  help: boolean;
   audit: boolean;
   channelId?: string;
   reference?: string;
@@ -26,6 +27,10 @@ type DiscordMessage = {
 
 async function main() {
   const args = parseArgs(process.argv.slice(2));
+  if (args.help) {
+    printUsage();
+    return;
+  }
   const config = loadConfig();
   const token = config.discord.token;
   if (!token) throw new Error("DISCORD_TOKEN is required.");
@@ -41,10 +46,8 @@ async function main() {
     const since = args.since ?? (args.sinceDeploy ? deploymentStartedAt(config.execution.kubernetes.namespace) : undefined);
     if (!since) throw new Error("Provide --since <ISO timestamp> or --since-deploy.");
     const messages = await discord.messagesSince(args.channelId, since);
-    const rows = [];
-    for (const message of messages) {
-      rows.push(await auditRow({ message, botId: bot.id, discord, apiUrl, auth, includeReplyChains: args.includeReplyChains }));
-    }
+    const rows = await mapConcurrent(messages, 6, (message) =>
+      auditRow({ message, botId: bot.id, discord, apiUrl, auth, includeReplyChains: args.includeReplyChains }));
     process.stdout.write(formatAudit({ channelId: args.channelId, since, rows }));
     return;
   }
@@ -78,9 +81,17 @@ class DiscordReader {
     return all.filter((message) => new Date(message.timestamp) >= since).sort((a, b) => +new Date(a.timestamp) - +new Date(b.timestamp));
   }
   private async get<T>(path: string) {
-    const response = await fetch(`https://discord.com/api/v10${path}`, { headers: { authorization: `Bot ${this.token}` } });
-    if (!response.ok) throw new Error(`Discord GET ${path} failed: ${response.status}`);
-    return await response.json() as T;
+    for (let attempt = 1; attempt <= 5; attempt += 1) {
+      const response = await fetch(`https://discord.com/api/v10${path}`, { headers: { authorization: `Bot ${this.token}` } });
+      if (response.ok) return await response.json() as T;
+      if (response.status !== 429 || attempt === 5) throw new Error(`Discord GET ${path} failed: ${response.status}`);
+      const body = await response.json().catch(() => ({})) as { retry_after?: number };
+      const headerDelayMs = Number(response.headers.get("retry-after")) * 1_000;
+      const bodyDelayMs = Number(body.retry_after) * 1_000;
+      const delayMs = Math.min(30_000, Math.max(250, Number.isFinite(bodyDelayMs) ? bodyDelayMs : headerDelayMs || 1_000));
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+    }
+    throw new Error(`Discord GET ${path} exhausted retries.`);
   }
 }
 
@@ -92,7 +103,7 @@ async function auditRow(input: { message: DiscordMessage; botId: string; discord
   const run = await loadRun(input.apiUrl, input.auth, isBotReply ? input.message.message_reference?.message_id ?? input.message.id : input.message.id);
   const isBotRequest = !isBotReply && (directlyMentionsBot || Boolean(run));
   const chain = input.includeReplyChains ? await replyChain(input.discord, input.message) : [];
-  const warnings = run ? run.events.filter((event: any) => event.level === "warn").map((event: any) => event.name) : [];
+  const warnings = run ? run.events.filter((event: any) => event.level === "warn" || event.level === "error").map((event: any) => event.name) : [];
   return {
     at: input.message.timestamp,
     id: input.message.id,
@@ -186,6 +197,20 @@ function kubectl(args: string[]) {
     return "";
   }
 }
-function parseArgs(argv: string[]): Args { const args: Args = { audit: false, sinceDeploy: false, includeReplyChains: false }; for (let index = 0; index < argv.length; index += 1) { const value = argv[index]!; if (value === "--audit") args.audit = true; else if (value === "--channel") args.channelId = argv[++index]; else if (value === "--since") args.since = new Date(argv[++index]!); else if (value === "--since-deploy") args.sinceDeploy = true; else if (value === "--include-reply-chains") args.includeReplyChains = true; else if (value === "--api-url") args.apiUrl = argv[++index]; else if (value === "--auth") args.auth = argv[++index]; else if (!value.startsWith("-")) args.reference = args.reference ? `${args.reference} ${value}` : value; else throw new Error(`Unknown option ${value}`); } if (args.since && Number.isNaN(+args.since)) throw new Error("--since must be an ISO timestamp."); return args; }
+function parseArgs(argv: string[]): Args { const args: Args = { help: false, audit: false, sinceDeploy: false, includeReplyChains: false }; for (let index = 0; index < argv.length; index += 1) { const value = argv[index]!; if (value === "-h" || value === "--help") args.help = true; else if (value === "--audit") args.audit = true; else if (value === "--channel") args.channelId = argv[++index]; else if (value === "--since") args.since = new Date(argv[++index]!); else if (value === "--since-deploy") args.sinceDeploy = true; else if (value === "--include-reply-chains") args.includeReplyChains = true; else if (value === "--api-url") args.apiUrl = argv[++index]; else if (value === "--auth") args.auth = argv[++index]; else if (!value.startsWith("-")) args.reference = args.reference ? `${args.reference} ${value}` : value; else throw new Error(`Unknown option ${value}`); } if (args.since && Number.isNaN(+args.since)) throw new Error("--since must be an ISO timestamp."); return args; }
+
+async function mapConcurrent<T, R>(values: T[], concurrency: number, worker: (value: T) => Promise<R>) {
+  const output = new Array<R>(values.length);
+  let cursor = 0;
+  await Promise.all(Array.from({ length: Math.min(concurrency, values.length) }, async () => {
+    let index: number;
+    while ((index = cursor++) < values.length) output[index] = await worker(values[index]!);
+  }));
+  return output;
+}
+
+function printUsage() {
+  process.stdout.write(`Inspect production Discord messages and their canonical agent runs.\n\nUsage:\n  npm run discord:debug -- <discord-message-link>\n  npm run discord:audit -- --channel <id> (--since <ISO> | --since-deploy) [--include-reply-chains]\n`);
+}
 
 main().catch((error) => { console.error(error instanceof Error ? error.message : error); process.exit(1); });

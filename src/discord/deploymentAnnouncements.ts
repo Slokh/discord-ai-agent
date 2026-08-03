@@ -187,7 +187,23 @@ async function generatePatchNotes(openRouter: Pick<OpenRouterClient, "chat">, co
     retryPolicy: "cheap"
   });
   const body = normalizePatchNotes(result.content) || fallbackPatchNotes(comparison);
+  if (isTruncatedFinishReason(result.finishReason) || !patchNotesLookComplete(body)) {
+    throw new Error(`Patch-note generation was incomplete (finish=${result.finishReason ?? "unknown"}).`);
+  }
   return { body, model: result.model, estimatedCostUsd: result.estimatedCostUsd ?? null };
+}
+
+function isTruncatedFinishReason(value?: string) {
+  const normalized = value?.trim().toLowerCase();
+  return normalized === "length" || normalized === "max_tokens" || normalized === "max_output_tokens";
+}
+
+function patchNotesLookComplete(value: string) {
+  const counts = (token: string) => value.split(token).length - 1;
+  return counts('"') % 2 === 0 &&
+    counts("“") === counts("”") &&
+    counts("`") % 2 === 0 &&
+    counts("**") % 2 === 0;
 }
 
 function comparisonEvidence(comparison: GitHubCompare): string {
@@ -267,5 +283,6 @@ export const __test = {
   comparisonEvidence,
   fallbackPatchNotes,
   formatAnnouncement,
-  normalizePatchNotes
+  normalizePatchNotes,
+  patchNotesLookComplete,
 };

@@ -69,9 +69,20 @@ export async function handleInternalApiRequest(input: {
     const includeEmbeddings = parseBoolean(
       url.searchParams.get("includeEmbeddings"),
     );
+    const sinceRaw = url.searchParams.get("since");
+    const since = sinceRaw ? new Date(sinceRaw) : undefined;
+    if (since && Number.isNaN(since.getTime())) {
+      sendJson(input.response, 400, { error: "invalid_since" });
+      return;
+    }
     const runs = await listRunSummaries(input.repo, {
       limit,
       includeEmbeddings,
+      kind: url.searchParams.get("kind") ?? undefined,
+      status: url.searchParams.get("status") ?? undefined,
+      channelId: url.searchParams.get("channelId") ?? undefined,
+      revision: url.searchParams.get("revision") ?? undefined,
+      since,
     });
     sendJson(input.response, 200, {
       runs,

@@ -168,7 +168,7 @@ export const discordActionToolContracts = [
   defineTool({
     name: "drawRandom",
     description:
-      "Draw provably fair random outcomes using a commit-reveal RNG. ALWAYS use this tool instead of inventing results whenever a request involves chance or randomness. Outcomes are computed in code from committed entropy and the requesting Discord message id. Translate the request into the typed draw schema; application code does not classify the prompt. A wallet-backed game reserves its wager only when the typed wager object is present. Opening standard blackjack uses exactly 3 cards and later hit/stand draws set wagerAction. Standard-game payouts, requester ownership, structured fairness, balances, exposure, and settlement remain deterministic. Never use transferWalletFunds for a wager. A proof footer is appended automatically; report drawn results exactly.",
+      "Draw provably fair random outcomes using a commit-reveal RNG. ALWAYS use this tool instead of inventing results whenever a request involves chance or randomness. Outcomes are computed in code from committed entropy and the requesting Discord message id. Translate the request into the typed draw schema; application code does not classify the prompt. Use until for repeated integer, die, or coin draws so the bounded sequence runs inside one tool call; never loop one call per outcome. A wallet-backed custom game is exactly one attached draw with a terminal structured win rule: every non-winning outcome is a loss. Do not start wallet wagers whose rules require pushes, retries, or repeat-until behavior; explain that those money rules are unsupported or play without money. Opening standard blackjack uses exactly 3 cards and later hit/stand draws set wagerAction. Standard-game payouts, requester ownership, structured fairness, balances, exposure, and settlement remain deterministic. Never use transferWalletFunds for a wager. A proof footer is appended automatically; report drawn results exactly.",
     mutates: true,
     group: "discord-action",
     category: "generation",
@@ -223,6 +223,16 @@ export const discordActionToolContracts = [
           type: "string",
           description: "Short label for what this draw decides (e.g. 'player hand', 'dealer upcard', 'raffle winner'). Shown in the proof footer and stored for verification."
         },
+        until: {
+          type: "object",
+          description: "Optional bounded repeat-until sequence for non-wallet integers, dice, or coin draws. The tool draws one value at a time in one call and stops when a value matches until.values or maxDraws is reached.",
+          properties: {
+            values: { type: "array", minItems: 1, maxItems: 20, items: { anyOf: [{ type: "number" }, { type: "string" }] } },
+            maxDraws: { type: "integer", minimum: 1, maximum: 1000, description: "Hard attempt cap. Defaults to 100." },
+          },
+          required: ["values"],
+          additionalProperties: false,
+        },
         wagerAction: {
           type: "string",
           enum: ["hit", "stand"],
@@ -231,7 +241,7 @@ export const discordActionToolContracts = [
         wager: {
           type: "object",
           description:
-            "Optional wallet-backed wager for the CURRENT REQUESTER only. Decide authorization from the current request, never another member or stale context. Supply interactionMode; if maxPayoutUsd exceeds stakeUsd, also supply a structured rule. Code validates fairness and all wallet invariants before funds or entropy move.",
+            "Optional wallet-backed wager for the CURRENT REQUESTER only. Decide authorization from the current request, never another member or stale context. Supply interactionMode. Coin, dice, and integer wagers always require a structured terminal rule; cards support standard blackjack only; pick and shuffle wagers are unsupported. Code validates fairness and all wallet invariants before funds or entropy move.",
           properties: {
             playerUserId: { type: "string", minLength: 1, pattern: "\\S", description: "Discord user ID of the current requester whose wallet is at risk. Must exactly match Current Discord requester; third-party wagers are rejected." },
             stakeUsd: { type: "number", description: "Positive USD-denominated stake taken from the user's game wallet." },
@@ -240,7 +250,7 @@ export const discordActionToolContracts = [
             interactionMode: { type: "string", enum: ["automatic", "player_decisions"], description: "Choose automatic when no player decision remains after the draw; choose player_decisions only for a genuine persisted next move." },
             rule: {
               type: "object",
-              description: "Optional machine-checkable player win rule for deterministic fairness validation.",
+              description: "Machine-checkable terminal player-win rule for one attached custom-game draw. For custom games, code treats every outcome not matching this rule as a player loss; pushes and repeat-until money rules are unsupported.",
               properties: {
                 kind: { type: "string", enum: ["coin_side", "sum", "any_match", "all_distinct"] },
                 side: { type: "string", enum: ["heads", "tails"] },

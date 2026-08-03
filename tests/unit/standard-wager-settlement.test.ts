@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { RngDrawRecord } from "../../src/db/rngRepository.js";
 import type { WagerReservation } from "../../src/payments/types.js";
-import { deriveStandardWagerSettlement } from "../../src/tools/standardWagerSettlement.js";
+import { deriveStandardWagerSettlement, deriveStructuredWagerSettlement } from "../../src/tools/standardWagerSettlement.js";
 
 function wager(overrides: Partial<WagerReservation> = {}): WagerReservation {
   return {
@@ -118,6 +118,45 @@ describe("standard wager settlement", () => {
       outcome: "player_loss",
       resolutionSource: "verified_randomness",
       explanation: "The verified coin landed heads; the player selected tails, so the wager loses.",
+    });
+  });
+
+  it("derives a custom structured wager from only its attached draw", () => {
+    const custom = wager({
+      game: "dice", interactionMode: "automatic", awaitingAction: false, stateVersion: 0,
+      decisionState: {
+        contract: { version: 1, draw: { kind: "dice", count: 1, sides: 200 }, rule: { kind: "sum", operator: "=", target: 1 } },
+      },
+      maxPayoutAtomic: 20_000_000n,
+    });
+    const attached: RngDrawRecord = {
+      id: 2, sessionId: "rng-standard", nonce: 0, kind: "dice", params: { count: 1, sides: 200 },
+      outcome: { kind: "dice", values: [85], total: 85 }, reason: "structured wager",
+      requestId: "opening-request", messageId: "opening-request", requestedByUserId: "player", createdAt: new Date(),
+    };
+    const laterWinningButUnattached = { ...attached, id: 3, nonce: 1, outcome: { kind: "dice", values: [1], total: 1 } };
+
+    expect(deriveStructuredWagerSettlement(custom, [attached, laterWinningButUnattached])).toEqual({
+      status: "terminal", payoutAtomic: 0n, outcome: "player_loss", resolutionSource: "verified_randomness",
+      explanation: "The attached verified draw does not satisfy the durable wager rule, so the wager loses.",
+    });
+  });
+
+  it("fails closed when an attached draw does not match the durable structured parameters", () => {
+    const custom = wager({
+      game: "dice", interactionMode: "automatic", awaitingAction: false, stateVersion: 0,
+      decisionState: {
+        contract: { version: 1, draw: { kind: "dice", count: 1, sides: 200 }, rule: { kind: "sum", operator: "=", target: 1 } },
+      },
+    });
+    const mismatched: RngDrawRecord = {
+      id: 2, sessionId: "rng-standard", nonce: 0, kind: "dice", params: { count: 1, sides: 6 },
+      outcome: { kind: "dice", values: [1], total: 1 }, reason: "structured wager",
+      requestId: "opening-request", messageId: "opening-request", requestedByUserId: "player", createdAt: new Date(),
+    };
+
+    expect(deriveStructuredWagerSettlement(custom, [mismatched])).toEqual({
+      status: "invalid", reason: "The wager's attached verified draw does not match its durable contract.",
     });
   });
 

@@ -272,17 +272,12 @@ describe("searchDiscordHistory", () => {
     }));
   });
 
-  it("recovers on retry when the vector query times out once", async () => {
-    const vectorResults = [result("vector", 0.8)];
-    let vectorCalls = 0;
+  it("does not repeat a timed-out interactive vector query", async () => {
+    const keywordResults = [result("keyword", 0.8)];
     const repo = {
       getVisibleIndexedChannelIds: async () => ["c"],
-      keywordSearch: vi.fn(async () => []),
-      vectorSearch: vi.fn(async () => {
-        vectorCalls += 1;
-        if (vectorCalls === 1) throw new Error("canceling statement due to statement timeout");
-        return vectorResults;
-      })
+      keywordSearch: vi.fn(async () => keywordResults),
+      vectorSearch: vi.fn(async () => { throw new Error("canceling statement due to statement timeout"); })
     };
     const openRouter = {
       embed: vi.fn(async () => [[0.1, 0.2]])
@@ -299,10 +294,9 @@ describe("searchDiscordHistory", () => {
       }
     });
 
-    expect(results.map((item) => item.messageId)).toEqual(["vector"]);
-    expect(semanticDegraded).toBe(false);
-    expect(repo.vectorSearch).toHaveBeenCalledTimes(2);
-    // The embedding from the first attempt is cached, so the retry reuses it.
+    expect(results.map((item) => item.messageId)).toEqual(["keyword"]);
+    expect(semanticDegraded).toBe(true);
+    expect(repo.vectorSearch).toHaveBeenCalledTimes(1);
     expect(openRouter.embed).toHaveBeenCalledTimes(1);
   });
 

@@ -45,6 +45,17 @@ describe("wallet wager fairness", () => {
     })).toMatch(/structured rule/i);
   });
 
+  it("rejects a rule that cannot evaluate the selected draw even when payout is capped at stake", () => {
+    expect(validateWagerFairness({
+      kind: "dice",
+      count: 1,
+      sides: 6,
+      rule: { kind: "coin_side", side: "heads" },
+      stakeUsd: 1,
+      maxPayoutUsd: 1,
+    })).toMatch(/does not describe a machine-checkable outcome/i);
+  });
+
   it("rejects unsupported custom profit rules for every draw kind", () => {
     expect(validateWagerFairness({
       kind: "cards",

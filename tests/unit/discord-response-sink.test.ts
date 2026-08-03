@@ -156,6 +156,38 @@ describe("DiscordResponseSink", () => {
     expect(rejoined.replace(/-# \[trace\]\(<[^>]+>\) · 0\.042s/, "").length).toBe(200);
   });
 
+  it("never collapses body chunks to one character when audit footers exceed a Discord message", async () => {
+    let nextId = 0;
+    const channel = {
+      send: vi.fn(async () => fakeMessage({ id: `followup-${++nextId}` }))
+    };
+    const sourceMessage = fakeMessage({
+      channel,
+      reply: vi.fn(async () => fakeMessage({ id: "first-chunk" }))
+    });
+    const sink = new DiscordResponseSink({
+      client: fakeClient(), sourceMessage: sourceMessage as any, maxReplyChars: 120,
+      logger: fakeLogger() as any
+    });
+    const content = "The bounded random operation completed successfully.";
+    const result = await sink.sendFinal({
+      content,
+      footer: { extraLines: Array.from({ length: 12 }, (_, index) => `draw ${index + 1}: ${"x".repeat(40)}`) }
+    });
+
+    const replyCalls = (sourceMessage.reply as any).mock.calls as Array<Array<{ content: string }>>;
+    const sendCalls = (channel.send as any).mock.calls as Array<Array<{ content: string }>>;
+    const delivered = [
+      replyCalls[0]![0]!.content,
+      ...sendCalls.map((call) => call[0]!.content),
+    ];
+    expect(delivered[0]).toBe(content);
+    expect(delivered.every((chunk) => chunk.length <= 120)).toBe(true);
+    expect(delivered.filter((chunk) => chunk.length === 1)).toEqual([]);
+    expect(result.messageCount).toBe(delivered.length);
+    expect(result.continuationMessageIds).toHaveLength(delivered.length - 1);
+  });
+
   it("splits long final content without a footer across multiple messages", async () => {
     const channel = {
       send: vi.fn(async (_options: { content: string }) => fakeMessage({ id: "followup-1" }))

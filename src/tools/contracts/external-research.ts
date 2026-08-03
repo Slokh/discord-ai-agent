@@ -8,7 +8,7 @@ export const externalResearchToolContracts = [
       "@ai read https://example.com and summarize the relevant section",
     ],
     description:
-      "Research current or external public information with hosted web search and page fetching. Use this for changing facts, unfamiliar topics, source-backed answers, or public URLs. Submit one or more concrete web operations; the result returns grounded findings and source URLs when available.",
+      "Research current or external public information with hosted web search and page fetching. Use this for changing facts, unfamiliar topics, source-backed answers, or public URLs. Do not call it for a Discord-context follow-up already answered by exact Discord or deployment evidence. Submit one or more concrete typed web operations; after a grounded result answers the question, stop instead of reopening equivalent URLs.",
     mutates: false,
     group: "external",
     category: "external",

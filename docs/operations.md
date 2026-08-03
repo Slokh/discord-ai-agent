@@ -76,9 +76,12 @@ Operator tools resolve the versioned production control-plane URL or the active 
 
 ```bash
 npm run runs:inspect -- --list --limit 20
+npm run runs:inspect -- --list --channel <channel-id> --revision <sha> --since <ISO> --triage
 npm run tasks:status
 npm run console:dev:live
 ```
+
+List filters for kind, status, channel, revision, and start time are applied by the control plane before the result limit. This keeps older matching failures visible even when unrelated recent executions are numerous.
 
 The API role serves authenticated run-console routes and Prometheus metrics. Keep the service private when possible. If public, require HTTPS and `CONTROL_UI_AUTH_PASSWORD`.
 
@@ -97,6 +100,8 @@ For a suspected rollout regression, audit the full channel and retained reply ch
 ```bash
 npm run discord:audit -- --channel <channel-id> --since-deploy --include-reply-chains
 ```
+
+The audit reader uses bounded concurrency and honors Discord rate-limit retries. Warning signals include both warning- and error-level runtime events; a top-level successful prompt can therefore still be triaged when a tool or delivery sub-operation degraded.
 
 Investigation order:
 

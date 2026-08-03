@@ -382,6 +382,7 @@ export class PaymentRepository {
     tokenDecimals: number;
     stakeAtomic: bigint;
     maxPayoutAtomic: bigint;
+    contract?: Record<string, unknown>;
     userBalanceAtomic: bigint;
     botBalanceAtomic: bigint;
     balancesObservedAt: Date;
@@ -454,8 +455,8 @@ export class PaymentRepository {
           INSERT INTO wallet_wager_reservations(
             id, request_id, guild_id, channel_id, thread_key, requested_by_user_id,
             user_wallet_id, bot_wallet_id, game, interaction_mode, token, token_decimals,
-            stake_atomic, max_payout_atomic, expires_at
-          ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,now() + ($15 * interval '1 second'))
+            stake_atomic, max_payout_atomic, decision_state, expires_at
+          ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15::jsonb,now() + ($16 * interval '1 second'))
           RETURNING ${WAGER_COLUMNS}
         `,
         [
@@ -473,6 +474,7 @@ export class PaymentRepository {
           input.tokenDecimals,
           input.stakeAtomic.toString(),
           input.maxPayoutAtomic.toString(),
+          JSON.stringify(input.contract ? { contract: input.contract } : {}),
           input.ttlSeconds ?? 600
         ]
       );

@@ -63,6 +63,11 @@ export const discordActionToolHandlers = {
       interactionMode?: "automatic" | "player_decisions";
       rule?: { kind: "coin_side"; side: "heads" | "tails" } | { kind: "sum"; operator: ">=" | ">" | "<=" | "<" | "="; target: number } | { kind: "any_match" } | { kind: "all_distinct" };
     } | undefined;
+    const untilRecord = recordArgument(route.arguments, "until");
+    const until = untilRecord ? {
+      values: Array.isArray(untilRecord.values) ? untilRecord.values as Array<number | string> : undefined,
+      maxDraws: typeof untilRecord.maxDraws === "number" ? untilRecord.maxDraws : undefined,
+    } : undefined;
     const response = await drawRandomResponse(ctx, {
             kind: stringArgument(route.arguments, "kind"),
             count: numberArgument(route.arguments, "count"),
@@ -72,6 +77,7 @@ export const discordActionToolHandlers = {
             options: stringArrayArgument(route.arguments, "options"),
             deckCount: numberArgument(route.arguments, "deckCount"),
             reason: stringArgument(route.arguments, "reason"),
+            until,
             wagerAction: stringArgument(route.arguments, "wagerAction") as "hit" | "stand" | undefined,
             wager,
           });
@@ -81,13 +87,8 @@ export const discordActionToolHandlers = {
     const response = await revealRandomnessResponse(ctx);
     return { ...response, content: cleanToolResponse(response.content, ctx.config.maxReplyChars) };
   },
-  "settleRandomWager": async (ctx, route, _originalText) => {
-    const response = await settleRandomWagerResponse(ctx, {
-              payoutUsd: numberArgument(route.arguments, "payoutUsd"),
-              outcome: stringArgument(route.arguments, "outcome") as "player_win" | "player_loss" | "push" | undefined,
-              resolutionSource: stringArgument(route.arguments, "resolutionSource") as "verified_randomness" | "player_decision" | undefined,
-              explanation: stringArgument(route.arguments, "explanation"),
-            });
+  "settleRandomWager": async (ctx, _route, _originalText) => {
+    const response = await settleRandomWagerResponse(ctx, {});
     return { ...response, content: cleanToolResponse(response.content, ctx.config.maxReplyChars) };
   },
 } satisfies Partial<Record<ToolName, LocalToolHandler>>;

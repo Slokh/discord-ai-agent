@@ -51,14 +51,14 @@ A wallet-backed game is a money transaction wrapped around provable randomness:
 3. Resolve the immutable requester and ensure one applicable reservation/game for the scope.
 4. Reserve both player and treasury exposure before drawing.
 5. Consume randomness through `drawRandom`; the model never chooses the outcome.
-6. If the result is terminal, recompute supported standard-game settlement from persisted draws and settle immediately.
+6. Persist the structured rule with the reservation, attach exactly one terminal draw for automatic custom wagers, recompute settlement from that attached draw, and settle immediately.
 7. If a real player decision remains, persist a versioned game state with exact allowed actions.
 8. On a later reply from the original player, accept only a currently allowed action, then persist the next state or settle once.
 9. Expire stale reservations and reconcile uncertain transfers.
 
 Continuation tools resolve the active wager from requester and Discord game-session scope. Opaque database IDs copied by the model are not authority. `expectedVersion` prevents concurrent or replayed actions. Confirmation, acknowledgement, or “settle” is not a fake gameplay action.
 
-Standard coin-flip and blackjack settlement is calculated by `src/tools/standardWagerSettlement.ts` from the durable wager and verified draw transcript. The model supplies no payout, explanation, or claimed winner for these games. `standardWagerRuntime.ts` applies the verified result at the money-moving boundary. Custom games still require a typed model proposal that code validates against the reservation.
+Coin-flip, blackjack, and supported structured rules (`coin_side`, `sum`, `any_match`, and `all_distinct`) are settled by `src/tools/standardWagerSettlement.ts` from the durable reservation contract and verified draw transcript. The model supplies no payout, explanation, claimed winner, or resolution source. Automatic structured wagers are terminal after their attached draw; later unattached draws cannot change the result. `standardWagerRuntime.ts` applies the verified result at the money-moving boundary.
 
 ## Provable randomness
 
@@ -83,6 +83,8 @@ Draws are public when made. Hidden-information games therefore defer hidden card
 ## Randomness without money
 
 Non-wager chance requests still use `drawRandom`. The random-outcome guard ensures the final answer reflects the actual persisted result and proof rather than an invented model choice. A draw is scoped to the current Discord request/session and audited even when no funds are involved.
+
+Bounded “repeat until” requests use `drawRandom.until`: the runtime performs at most 1,000 one-value draws in one transaction and returns one compact result and proof footer. This avoids long model tool loops while retaining every nonce for later verification. Repeat-until is intentionally unavailable for wagers because a money outcome must be determined by one attached terminal draw.
 
 ## Operations and verification
 

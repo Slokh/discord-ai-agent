@@ -12,6 +12,8 @@ export type DiscordPresentationDeliveryResult = {
   preparedPresentation: PreparedDiscordPresentation | null;
   richPresentationDelivered: boolean;
   actionGenerationId: string | null;
+  messageCount: number;
+  continuationMessageIds: string[];
 };
 
 /** Owns the compile -> pending actions -> Discord write -> activation/fallback transaction boundary. */
@@ -96,5 +98,12 @@ export async function deliverDiscordPresentation(input: {
       responseMessageId: reply.id,
     }).catch((error) => input.logger.warn({ err: error, replyMessageId: reply.id }, "Failed to invalidate replaced Discord component actions"));
   }
-  return { reply, preparedPresentation, richPresentationDelivered, actionGenerationId };
+  return {
+    reply,
+    preparedPresentation,
+    richPresentationDelivered,
+    actionGenerationId,
+    messageCount: finalResult.messageCount,
+    continuationMessageIds: finalResult.continuationMessageIds,
+  };
 }

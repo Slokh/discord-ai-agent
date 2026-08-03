@@ -54,6 +54,7 @@
     "eval:export-feedback": "tsx scripts/exportRunFeedbackEvals.ts",
     "eval:regressions": "npm run eval:export-feedback && npm run eval -- --include-private",
     "runs:inspect": "tsx scripts/inspectRun.ts",
+    "runs:triage": "tsx scripts/inspectRun.ts --triage",
     "discord:audit": "tsx scripts/discordDebug.ts --audit",
     "discord:debug": "tsx scripts/discordDebug.ts",
     "payments:status": "tsx scripts/payments.ts status",
@@ -115,6 +116,7 @@
   "overrides": {
     "undici": "8.9.0",
     "@base-ui/react": "~1.4.0",
-    "fast-uri": "3.1.4"
+    "fast-uri": "3.1.4",
+    "postcss": "8.5.25"
   }
 }

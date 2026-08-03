@@ -58,7 +58,7 @@ A wallet-backed game is a money transaction wrapped around provable randomness:
 
 Continuation tools resolve the active wager from requester and Discord game-session scope. Opaque database IDs copied by the model are not authority. `expectedVersion` prevents concurrent or replayed actions. Confirmation, acknowledgement, or “settle” is not a fake gameplay action.
 
-Standard coin-flip and blackjack settlement is recalculated by `src/tools/standardWagerSettlement.ts` from the durable wager and verified draw transcript. The model's payout, explanation, or claimed winner cannot override it. `standardWagerRuntime.ts` applies the verified result at the money-moving boundary.
+Standard coin-flip and blackjack settlement is calculated by `src/tools/standardWagerSettlement.ts` from the durable wager and verified draw transcript. The model supplies no payout, explanation, or claimed winner for these games. `standardWagerRuntime.ts` applies the verified result at the money-moving boundary. Custom games still require a typed model proposal that code validates against the reservation.
 
 ## Provable randomness
 

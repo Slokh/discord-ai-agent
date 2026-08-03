@@ -40,7 +40,7 @@ export const randomWagerActionToolContracts = [
     name: "settleRandomWager",
     examples: ["@ai settle the wager from that draw"],
     description:
-      "Settle the active wallet-backed wager created by drawRandom in this player's scoped Discord game session. The runtime resolves the canonical wager automatically; never supply or repeat an internal wager id. Call this exactly once after applying the game's stated payout rules to exact provably fair results and all persisted player decisions. Standard blackjack and coinflip payouts are recomputed from durable RNG draws; model-authored payout, outcome, source, and explanation fields are corrected or rejected before money moves. Other games still require a payout-consistent proposal. A nominally interactive game spans replies through awaitRandomWagerAction only when a genuine gameplay decision remains. Never ask the player to confirm a completed outcome, and never use break-even merely because a decision is pending. payoutUsd is the total returned to the player, including returned stake: use 0 for a full loss and the original stake for an actual final break-even. outcome must agree with whether payoutUsd is above, below, or equal to the stake. Use resolutionSource=verified_randomness for an automatic result and player_decision only when a persisted decision was resolved by a later reply.",
+      "Settle the active wallet-backed wager in this player's scoped Discord game session exactly once. For standard blackjack and coinflip, pass no arguments: code derives the payout and outcome from durable RNG draws and persisted decisions. For a custom game, provide the payout fields after applying its stated rules. Use awaitRandomWagerAction only while a genuine gameplay decision remains; never invent confirmation as an action or pause a terminal outcome.",
     mutates: true,
     group: "discord-action",
     available: userWalletsAvailable,
@@ -52,20 +52,19 @@ export const randomWagerActionToolContracts = [
     parameters: {
       type: "object",
       properties: {
-        payoutUsd: { type: "number", description: "Total USD payout including returned stake; 0 means the player loses the full stake." },
+        payoutUsd: { type: "number", description: "Custom games only: total USD payout including returned stake; 0 means a full loss." },
         outcome: {
           type: "string",
           enum: ["player_win", "player_loss", "push"],
-          description: "Final result from the player's perspective. It must agree with payoutUsd relative to the reserved stake."
+          description: "Custom games only: final result from the player's perspective."
         },
         resolutionSource: {
           type: "string",
           enum: ["verified_randomness", "player_decision"],
-          description: "Use verified_randomness for an automatic result; use player_decision only after a persisted interactive game receives a later player reply."
+          description: "Custom games only: verified_randomness for an automatic result, otherwise player_decision."
         },
-        explanation: { type: "string", minLength: 1, pattern: "\\S", description: "Concise deterministic calculation from the draw result through the final outcome. It must not describe a pending decision or unfinished game." }
+        explanation: { type: "string", minLength: 1, pattern: "\\S", description: "Custom games only: concise calculation from draw through final outcome." }
       },
-      required: ["payoutUsd", "outcome", "resolutionSource", "explanation"],
       additionalProperties: false
     }
   }),

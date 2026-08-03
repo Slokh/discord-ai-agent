@@ -5,6 +5,7 @@ import type { DiscordAttachmentContext, DiscordReplyContext, DiscordReplyContext
 import { previewText } from "../util/logger.js";
 import { persistDiscordMessage, reactionSummariesFromMessage } from "./messagePersistence.js";
 import { recordTraceEvent } from "./requestContext.js";
+import { classifyDiscordWriteError } from "./api.js";
 
 export const REPLY_CHAIN_CONTEXT_MESSAGE_LIMIT = 24;
 type UsableMessageSnapshot = MessageSnapshot & { id: string; channelId: string };
@@ -51,14 +52,16 @@ export async function resolveDiscordReplyContext(input: {
       if (typeof cursor.fetchReference !== "function") break;
       parent = await cursor.fetchReference();
     } catch (error) {
-      input.requestLogger.warn(
+      const expectedUnavailable = classifyDiscordWriteError(error) === "unknown_message";
+      const log = expectedUnavailable ? input.requestLogger.info.bind(input.requestLogger) : input.requestLogger.warn.bind(input.requestLogger);
+      log(
         { err: error, referencedMessageId: reference.messageId, referencedChannelId, depth },
-        "Failed to fetch Discord reply chain parent"
+        expectedUnavailable ? "Discord reply chain parent is no longer available" : "Failed to fetch Discord reply chain parent"
       );
       await recordTraceEvent(input.repo, {
-        eventName: "discord.reply_context.fetch_failed",
-        level: "warn",
-        summary: error instanceof Error ? error.message : String(error),
+        eventName: expectedUnavailable ? "discord.reply_context.unavailable" : "discord.reply_context.fetch_failed",
+        level: expectedUnavailable ? "info" : "warn",
+        summary: expectedUnavailable ? "Referenced Discord message is no longer available" : error instanceof Error ? error.message : String(error),
         metadata: { referencedMessageId: reference.messageId, referencedChannelId, depth }
       });
       break;

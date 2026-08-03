@@ -4,7 +4,7 @@ import type { ToolName } from "../toolDefinition.js";
 import type { LocalToolHandler } from "./types.js";
 
 export const externalResearchToolHandlers = {
-  web__run: async (ctx, route, originalText) => {
+  web__run: async (ctx, route, _originalText) => {
     const operations = route.arguments ?? {};
     const commands = JSON.stringify(operations);
     const hostedTools = hostedToolsForOperations(operations);
@@ -18,11 +18,11 @@ export const externalResearchToolHandlers = {
             {
               role: "system",
               content:
-                "Execute each supplied public-web operation exactly once with the matching hosted tool, then return concise grounded findings. Do not answer without using the requested hosted tools. Include source URLs when the provider exposes them. State limitations instead of inventing facts.",
+                "Execute each supplied public-web operation exactly once with the matching hosted tool. Return only concise evidence produced for those operations; do not answer, mention, or infer any other part of the outer request. Include source URLs when the provider exposes them. State limitations instead of inventing facts.",
             },
             {
               role: "user",
-              content: `Original request:\n${originalText}\n\nWeb operations:\n${commands}`,
+              content: `Authoritative web operations:\n${commands}`,
             },
           ],
           tools: hostedTools,

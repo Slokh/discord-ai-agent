@@ -89,9 +89,9 @@ describe("standard wager settlement", () => {
     });
   });
 
-  it("settles a canonical coinflip from the verified side and draw", () => {
+  it.each(["coin", "coinflip", "coin flip"])("settles a canonical %s game from the verified side and draw", (game) => {
     const result = deriveStandardWagerSettlement(wager({
-      game: "coinflip",
+      game,
       interactionMode: "automatic",
       awaitingAction: false,
       stateVersion: 0,

@@ -22,7 +22,7 @@ export function deriveStandardWagerSettlement(
 ): StandardWagerSettlement {
   const game = wager.game.trim().toLowerCase().replace(/\s+/g, " ");
   if (game === "blackjack") return deriveBlackjackSettlement(wager, draws);
-  if (game === "coinflip" || game === "coin flip") {
+  if (game === "coin" || game === "coinflip" || game === "coin flip") {
     return deriveCoinflipSettlement(wager, draws);
   }
   return { status: "not_standard" };

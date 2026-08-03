@@ -4,7 +4,6 @@ import type {
   WagerResolutionSource,
   WagerSettlementOutcome,
 } from "../payments/types.js";
-import { paymentRecorder } from "./paymentToolContext.js";
 import {
   deriveStandardWagerSettlement,
 } from "./standardWagerSettlement.js";
@@ -20,11 +19,12 @@ export type WagerSettlementProposal = {
 export async function prepareStandardWagerSettlement(
   ctx: ToolContext,
   wager: WagerReservation,
-  proposal: WagerSettlementProposal,
+  proposal?: WagerSettlementProposal,
 ): Promise<WagerSettlementProposal | string> {
-  const game = (wager.game ?? "").trim().toLowerCase();
-  const standardGame = game === "blackjack" || game === "coinflip" || game === "coin flip";
-  if (!standardGame) return proposal;
+  if (!isStandardWagerGame(wager.game)) {
+    if (!proposal) return "Settlement rejected: a payout proposal is required for this custom game. No transfer was created.";
+    return proposal;
+  }
 
   const session = ctx.rngRepo
     ? await ctx.rngRepo.getActiveSession(wager.threadKey)
@@ -46,25 +46,10 @@ export async function prepareStandardWagerSettlement(
     resolutionSource: derived.resolutionSource,
     explanation: derived.explanation,
   };
-  const corrected =
-    Math.abs(verified.payoutUsd - proposal.payoutUsd) > 1e-9 ||
-    verified.outcome !== proposal.outcome ||
-    verified.resolutionSource !== proposal.resolutionSource ||
-    verified.explanation !== proposal.explanation;
-  if (corrected) {
-    await paymentRecorder(ctx)({
-      eventName: "wallet.wager.settlement_proposal_corrected",
-      summary: "Replaced a model-authored standard-game settlement with the verified deterministic result",
-      level: "warn",
-      metadata: {
-        wagerId: wager.id,
-        game: wager.game,
-        proposedPayoutUsd: proposal.payoutUsd,
-        proposedOutcome: proposal.outcome,
-        verifiedPayoutUsd: verified.payoutUsd,
-        verifiedOutcome: verified.outcome,
-      },
-    });
-  }
   return verified;
+}
+
+export function isStandardWagerGame(game: string | null | undefined) {
+  const normalized = (game ?? "").trim().toLowerCase();
+  return normalized === "blackjack" || normalized === "coin" || normalized === "coinflip" || normalized === "coin flip";
 }

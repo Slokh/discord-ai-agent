@@ -54,6 +54,32 @@ describe("Discord forwarded message context", () => {
     }));
   });
 
+  it("records a deleted reply parent as expected unavailable context", async () => {
+    const repo = { recordTraceEvent: vi.fn(async () => undefined) };
+    const requestLogger = { info: vi.fn(), warn: vi.fn() };
+    const message = {
+      id: "current-message",
+      channelId: "current-channel",
+      reference: { messageId: "deleted-message", channelId: "current-channel" },
+      fetchReference: vi.fn(async () => { throw Object.assign(new Error("Unknown Message"), { code: 10008 }); }),
+      messageSnapshots: new Map(),
+    };
+
+    await expect(resolveDiscordReplyContext({
+      repo: repo as any,
+      message: message as any,
+      visibleChannelIds: ["current-channel"],
+      requestLogger: requestLogger as any,
+    })).resolves.toBeUndefined();
+
+    expect(requestLogger.warn).not.toHaveBeenCalled();
+    expect(requestLogger.info).toHaveBeenCalled();
+    expect(repo.recordTraceEvent).toHaveBeenCalledWith(expect.objectContaining({
+      eventName: "discord.reply_context.unavailable",
+      level: "info",
+    }));
+  });
+
   it("creates useful prompts for Discord messages that have context but no text", () => {
     const forwarded = {
       content: "",

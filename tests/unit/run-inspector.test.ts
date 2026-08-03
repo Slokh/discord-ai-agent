@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { formatRunArtifacts, formatRunInspection, formatRunSummaryList, formatSeconds, selectArtifacts } from "../../src/observability/runInspector.js";
+import { formatRunArtifacts, formatRunInspection, formatRunSummaryList, formatRunTriage, formatSeconds, selectArtifacts } from "../../src/observability/runInspector.js";
 import type { RunSnapshot, RunSummary } from "../../src/observability/runTypes.js";
 
 describe("run inspector formatting", () => {
@@ -57,6 +57,25 @@ describe("run inspector formatting", () => {
     expect(formatSeconds(42)).toBe("0.042s");
     expect(formatSeconds(1234)).toBe("1.234s");
     expect(formatSeconds(63_000)).toBe("1m 3s");
+  });
+
+  it("clusters production signals without including private prompt text", () => {
+    const warned = snapshotFixture();
+    warned.run.runId = "run-warned";
+    warned.run.status = "succeeded";
+    warned.events.push({
+      id: "empty", source: "runtime", level: "info", name: "agent.tool.complete", summary: null,
+      createdAt: new Date(), durationMs: 4, metadata: { toolName: "web__run", status: "error", outputChars: 0 },
+    });
+    warned.events.push({
+      id: "warning", source: "runtime", level: "warn", name: "agent.provider.warning", summary: "bounded warning",
+      createdAt: new Date(), durationMs: null, metadata: {},
+    });
+    const report = formatRunTriage([warned]);
+    expect(report).toContain("tool.error:web__run");
+    expect(report).toContain("tool.empty:web__run");
+    expect(report).toContain("agent.provider.warning");
+    expect(report).not.toContain(warned.run.title);
   });
 
   it("formats filtered run summary lists for aggregate debugging", () => {

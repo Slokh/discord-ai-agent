@@ -8,7 +8,7 @@ export const codegenToolContracts = installToolsWhen(codeUpdatesAvailable, [
     toolClass: "coding",
     examples: ["@ai debug the failing CI on that PR"],
     description:
-      "Start an isolated repository sandbox for Discord AI Agent code changes or repository/GitHub diagnosis, including requests to debug or fix failing CI/checks/tests. Never use this to read, summarize, rate, or explain a public webpage or other non-repository source; use hosted web search or answer directly instead. Any guild member may start a task. Use mode=code_change only when a repository diff is requested. Use mode=diagnosis for explicitly read-only repository, PR, CI, or deployment investigation; diagnosis succeeds without a diff and never opens a PR. For Discord messages marked with 🐛, call listDiscordBugMarkers first and start a focused code_change repair only after inspecting the linked run evidence.",
+      "Start an isolated repository sandbox for an explicitly requested code change or repository/GitHub diagnosis, including failing CI, checks, or tests. Generic requests about my bugs, bug reports, or the bug inbox refer to the native Discord inbox: call listDiscordBugMarkers first instead of treating them as GitHub work. Never use this for public-web research. Use mode=code_change when a repository diff is requested and mode=diagnosis only for explicitly read-only repository work. Any guild member may start a task.",
     mutates: true,
     group: "codegen",
     parameters: {

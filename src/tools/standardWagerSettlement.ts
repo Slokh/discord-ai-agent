@@ -28,6 +28,61 @@ export function deriveStandardWagerSettlement(
   return { status: "not_standard" };
 }
 
+export function deriveStructuredWagerSettlement(
+  wager: WagerReservation,
+  draws: RngDrawRecord[],
+): StandardWagerSettlement {
+  const contract = wager.decisionState.contract;
+  if (!isRecord(contract) || contract.version !== 1 || !isRecord(contract.draw) || !isRecord(contract.rule)) {
+    return { status: "invalid", reason: "The durable structured wager contract is unavailable." };
+  }
+  const draw = openingDraw(wager, draws);
+  if (!draw || !structuredDrawMatchesContract(contract.draw, draw)) {
+    return { status: "invalid", reason: "The wager's attached verified draw does not match its durable contract." };
+  }
+  const won = structuredRuleWon(contract.rule, draw);
+  if (won == null) return { status: "invalid", reason: "The attached draw cannot be evaluated against the durable structured rule." };
+  return {
+    status: "terminal",
+    payoutAtomic: won ? wager.maxPayoutAtomic : 0n,
+    outcome: won ? "player_win" : "player_loss",
+    resolutionSource: "verified_randomness",
+    explanation: won
+      ? "The attached verified draw satisfies the durable wager rule, so the reserved maximum payout applies."
+      : "The attached verified draw does not satisfy the durable wager rule, so the wager loses.",
+  };
+}
+
+function structuredDrawMatchesContract(contractDraw: Record<string, unknown>, draw: RngDrawRecord) {
+  if (draw.kind !== contractDraw.kind) return false;
+  for (const key of ["count", "sides", "min", "max"] as const) {
+    if (contractDraw[key] != null && draw.params[key] !== contractDraw[key]) return false;
+  }
+  const count = contractDraw.count;
+  return Number.isSafeInteger(count) && Array.isArray(draw.outcome.values) && draw.outcome.values.length === Number(count);
+}
+
+function structuredRuleWon(rule: Record<string, unknown>, draw: RngDrawRecord): boolean | null {
+  if (rule.kind === "coin_side") {
+    const side = rule.side;
+    const value = stringArray(draw.outcome.values)?.[0];
+    return (side === "heads" || side === "tails") && (value === "heads" || value === "tails")
+      ? value === side
+      : null;
+  }
+  const values = numberArray(draw.outcome.values);
+  if (!values) return null;
+  if (rule.kind === "any_match") return new Set(values).size < values.length;
+  if (rule.kind === "all_distinct") return new Set(values).size === values.length;
+  if (rule.kind !== "sum" || !Number.isSafeInteger(rule.target)) return null;
+  const total = values.reduce((sum, value) => sum + value, 0);
+  if (rule.operator === ">=") return total >= Number(rule.target);
+  if (rule.operator === ">") return total > Number(rule.target);
+  if (rule.operator === "<=") return total <= Number(rule.target);
+  if (rule.operator === "<") return total < Number(rule.target);
+  return rule.operator === "=" ? total === Number(rule.target) : null;
+}
+
 function deriveCoinflipSettlement(
   wager: WagerReservation,
   draws: RngDrawRecord[],
@@ -261,6 +316,16 @@ function stringArray(value: unknown): string[] | null {
   return Array.isArray(value) && value.every((item) => typeof item === "string")
     ? value
     : null;
+}
+
+function numberArray(value: unknown): number[] | null {
+  return Array.isArray(value) && value.every((item) => Number.isFinite(item))
+    ? value.map(Number)
+    : null;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
 function blackjackTotal(cards: string[]) {

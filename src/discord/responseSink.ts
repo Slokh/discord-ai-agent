@@ -14,6 +14,8 @@ export type DiscordResponseResult = {
   message: Message;
   usedStatusMessage: boolean;
   usedRichPresentation: boolean;
+  messageCount: number;
+  continuationMessageIds: string[];
 };
 
 export type DiscordResponseFooter = {
@@ -155,7 +157,7 @@ export class DiscordResponseSink {
         const message = await this.editStatusOrReply(richPayload);
         this.statusMessage = message;
         await this.clearAcknowledgement();
-        return { message, usedStatusMessage, usedRichPresentation: true };
+        return { message, usedStatusMessage, usedRichPresentation: true, messageCount: 1, continuationMessageIds: [] };
       } catch (error) {
         this.logger.warn({ err: error }, "Discord rejected rich presentation; falling back to plain response");
       }
@@ -174,7 +176,7 @@ export class DiscordResponseSink {
       const message = await this.editStatusOrReply(payload);
       this.statusMessage = message;
       await this.clearAcknowledgement();
-      return { message, usedStatusMessage, usedRichPresentation: false };
+      return { message, usedStatusMessage, usedRichPresentation: false, messageCount: 1, continuationMessageIds: [] };
     }
 
     if (singleMessageContent.length <= this.maxReplyChars) {
@@ -183,12 +185,19 @@ export class DiscordResponseSink {
       const message = await this.editStatusOrReply(payload);
       this.statusMessage = message;
       await this.clearAcknowledgement();
-      return { message, usedStatusMessage, usedRichPresentation: false };
+      return { message, usedStatusMessage, usedRichPresentation: false, messageCount: 1, continuationMessageIds: [] };
     }
 
-    const reservedForFooter = footerLine ? separator.length + footerLine.length : 0;
-    const chunkLimit = Math.max(1, this.maxReplyChars - reservedForFooter);
-    const chunks = splitForDiscord(body, chunkLimit);
+    // Body and footer are independently bounded. Reserving the entire footer
+    // in every body chunk can collapse the body budget to one character when
+    // a turn has many deterministic audit lines (for example RNG proofs).
+    const chunks = splitForDiscord(body, this.maxReplyChars);
+    if (footerLine) {
+      const lastIndex = chunks.length - 1;
+      const combined = `${chunks[lastIndex]}${separator}${footerLine}`;
+      if (combined.length <= this.maxReplyChars) chunks[lastIndex] = combined;
+      else chunks.push(...splitForDiscord(footerLine, this.maxReplyChars));
+    }
     const usedStatusMessage = Boolean(this.statusMessage);
     const firstPayload = files?.length ? { content: chunks[0], files } : { content: chunks[0] };
     const firstMessage = await this.editStatusOrReply(firstPayload);
@@ -198,27 +207,25 @@ export class DiscordResponseSink {
     const sendable = isSendableChannel(channel) ? channel : null;
     let previousMessageId = firstMessage.id;
     let continuationIndex = 1;
+    const continuationMessageIds: string[] = [];
     for (let i = 1; i < chunks.length; i++) {
-      const isLast = i === chunks.length - 1;
-      const content = isLast && footerLine ? `${chunks[i]}${separator}${footerLine}` : chunks[i];
+      const content = chunks[i]!;
       if (!sendable) continue;
-      if (content.length <= this.maxReplyChars) {
-        const sentResult = await discordSend(sendable, this.continuationPayload(content, previousMessageId, continuationIndex++), { logger: this.logger });
-        if (!sentResult.ok) throw sentResult.error;
-        const sent = sentResult.value;
-        previousMessageId = (sent as Message | undefined)?.id ?? previousMessageId;
-      } else {
-        for (const overflow of splitForDiscord(content, this.maxReplyChars)) {
-          const sentResult = await discordSend(sendable, this.continuationPayload(overflow, previousMessageId, continuationIndex++), { logger: this.logger });
-          if (!sentResult.ok) throw sentResult.error;
-          const sent = sentResult.value;
-          previousMessageId = (sent as Message | undefined)?.id ?? previousMessageId;
-        }
-      }
+      const sentResult = await discordSend(sendable, this.continuationPayload(content, previousMessageId, continuationIndex++), { logger: this.logger });
+      if (!sentResult.ok) throw sentResult.error;
+      const sent = sentResult.value;
+      previousMessageId = (sent as Message | undefined)?.id ?? previousMessageId;
+      continuationMessageIds.push(previousMessageId);
     }
 
     await this.clearAcknowledgement();
-    return { message: firstMessage, usedStatusMessage, usedRichPresentation: false };
+    return {
+      message: firstMessage,
+      usedStatusMessage,
+      usedRichPresentation: false,
+      messageCount: 1 + continuationMessageIds.length,
+      continuationMessageIds,
+    };
   }
 
   async sendError(content: string, footer?: DiscordResponseFooter | null): Promise<DiscordResponseResult> {

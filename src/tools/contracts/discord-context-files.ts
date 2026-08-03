@@ -37,7 +37,7 @@ export const discordContextFileToolContracts = [
     toolClass: "retrieval",
     examples: ["@ai show the context around this message link"],
     description:
-      "Get an indexed Discord message plus nearby messages from the same channel using a specific Discord message link or message ID. Use for exact-message context, replies, or surrounding conversation. Do not use this to analyze broad search results; searchDiscordHistory evidence already includes message URLs.",
+      "Get an indexed Discord message plus nearby messages from the same channel using a specific Discord message link or message ID. Use for exact-message context, replies, or surrounding conversation. When this exact context answers the follow-up, answer immediately instead of searching broad history or the web. Do not use this to analyze broad search results; searchDiscordHistory evidence already includes message URLs.",
     mutates: false,
     group: "discord-retrieval",
     parameters: {

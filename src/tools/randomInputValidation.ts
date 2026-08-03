@@ -4,6 +4,7 @@ import type { DrawRandomInput } from "./randomTypes.js";
 const MAX_COUNT = 100;
 const MAX_OPTIONS = 100;
 const MAX_SIDES = 1_000_000;
+const MAX_UNTIL_DRAWS = 1_000;
 
 /**
  * Some providers emit every optional object from a schema with blank or zero
@@ -28,6 +29,17 @@ function isEmptyWagerPlaceholder(wager: DrawRandomInput["wager"]) {
 export function validateDrawInput(kind: string, input: DrawRandomInput): string | null {
   const count = input.count ?? 1;
   if (!Number.isSafeInteger(count) || count < 1 || count > MAX_COUNT) return `count must be an integer between 1 and ${MAX_COUNT}.`;
+  if (input.until) {
+    if (!['integers', 'dice', 'coin'].includes(kind)) return "until is supported only for integers, dice, or coin draws.";
+    if (count !== 1) return "until performs one draw per attempt, so count must be 1 or omitted.";
+    if (input.wager) return "repeat-until wallet wagers are unsupported because every money outcome must use one attached terminal draw.";
+    const values = input.until.values ?? [];
+    if (values.length < 1 || values.length > 20) return "until.values must contain between 1 and 20 terminal values.";
+    const maxDraws = input.until.maxDraws ?? 100;
+    if (!Number.isSafeInteger(maxDraws) || maxDraws < 1 || maxDraws > MAX_UNTIL_DRAWS) return `until.maxDraws must be an integer between 1 and ${MAX_UNTIL_DRAWS}.`;
+    if (kind === "coin" && values.some((value) => value !== "heads" && value !== "tails")) return "coin until.values may contain only heads or tails.";
+    if (kind !== "coin" && values.some((value) => !Number.isSafeInteger(value))) return `${kind} until.values must be whole numbers.`;
+  }
   switch (kind) {
     case "integers": {
       const missing = [input.min == null ? "min" : null, input.max == null ? "max" : null].filter((name): name is string => name !== null);
@@ -42,11 +54,17 @@ export function validateDrawInput(kind: string, input: DrawRandomInput): string 
       const max = input.max as number;
       if (min > max) return "min must be less than or equal to max.";
       if (max - min + 1 > 0x1_0000_0000) return "The min..max range is too large (max 2^32 values).";
+      if (input.until?.values?.some((value) => Number(value) < min || Number(value) > max)) {
+        return `integers until.values must be inside the inclusive ${min}..${max} draw range.`;
+      }
       return null;
     }
     case "dice": {
       const sides = input.sides ?? 6;
-      return Number.isSafeInteger(sides) && sides >= 2 && sides <= MAX_SIDES ? null : `sides must be an integer between 2 and ${MAX_SIDES}.`;
+      if (!Number.isSafeInteger(sides) || sides < 2 || sides > MAX_SIDES) return `sides must be an integer between 2 and ${MAX_SIDES}.`;
+      return input.until?.values?.some((value) => Number(value) < 1 || Number(value) > sides)
+        ? `dice until.values must be between 1 and ${sides}.`
+        : null;
     }
     case "coin": return null;
     case "pick":
@@ -80,10 +98,17 @@ export function validateWagerInput(input: DrawRandomInput): string | null {
     if (rule.kind === "sum" && (![">=", ">", "<=", "<", "="].includes(rule.operator) || !Number.isSafeInteger(rule.target))) return "sum wager.rule requires an integer target and a valid comparison operator.";
     if (!["coin_side", "sum", "any_match", "all_distinct"].includes(rule.kind)) return "wager.rule kind is not supported.";
   }
-  if (["coin", "dice", "integers"].includes(input.kind ?? "") && maxPayoutUsd! > stakeUsd! && !rule) {
-    return "wager.rule is required whenever maxPayoutUsd exceeds stakeUsd so the payout can be checked from structured terms.";
+  if (["coin", "dice", "integers"].includes(input.kind ?? "") && !rule) {
+    return "wager.rule is required for an automatic random wager so the terminal outcome can be derived from durable structured terms.";
   }
-  if (input.kind === "cards" && game.trim().toLowerCase() === "blackjack") {
+  const normalizedGame = game.trim().toLowerCase();
+  if (input.kind === "cards" && normalizedGame !== "blackjack") {
+    return "Wallet-backed card games other than standard blackjack are unsupported because they do not have a deterministic settlement evaluator.";
+  }
+  if (input.kind === "pick" || input.kind === "shuffle") {
+    return `Wallet-backed ${input.kind} games are unsupported because they do not have a deterministic settlement evaluator.`;
+  }
+  if (input.kind === "cards" && normalizedGame === "blackjack") {
     return (input.count ?? 1) === 3
       ? null
       : "An opening blackjack draw must contain exactly 3 public cards: 2 for the player and 1 dealer upcard. The RNG footer publishes every drawn card, so never draw the dealer hole card or future dealer cards until a later player action makes them public.";

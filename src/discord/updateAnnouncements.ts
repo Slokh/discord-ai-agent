@@ -37,8 +37,24 @@ export async function generateUpdateNotes(input: {
     maxTokens: 400,
     retryPolicy: "cheap"
   });
-  const body = normalizeUpdateNotes(result.content, maxBullets) || input.fallback;
+  const normalized = normalizeUpdateNotes(result.content, maxBullets);
+  const body = !normalized || isTruncatedFinishReason(result.finishReason) || !updateNotesLookComplete(normalized)
+    ? input.fallback
+    : normalized;
   return { body, model: result.model, estimatedCostUsd: result.estimatedCostUsd ?? null };
+}
+
+function isTruncatedFinishReason(value?: string) {
+  const normalized = value?.trim().toLowerCase();
+  return normalized === "length" || normalized === "max_tokens" || normalized === "max_output_tokens";
+}
+
+export function updateNotesLookComplete(value: string) {
+  const counts = (token: string) => value.split(token).length - 1;
+  return counts('"') % 2 === 0 &&
+    counts("“") === counts("”") &&
+    counts("`") % 2 === 0 &&
+    counts("**") % 2 === 0;
 }
 
 export function normalizeUpdateNotes(value: string, maxBullets = 5): string {

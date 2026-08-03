@@ -31,6 +31,7 @@ function setup() {
     chat: vi.fn().mockResolvedValue({
       content: "- Casino games now keep working across replies.\n- Tables are easier to read.",
       model: "utility-model",
+      finishReason: "stop",
       estimatedCostUsd: 0.001
     })
   };
@@ -115,6 +116,22 @@ describe("deployment announcements", () => {
 
     await expect(announceDeployment(fixture as any)).resolves.toBe("posted");
     expect(fixture.send.mock.calls[0]?.[0].content).toContain("- Fix durable games");
+  });
+
+  it("falls back instead of publishing a token-truncated or structurally incomplete model bullet", async () => {
+    const truncated = setup();
+    truncated.openRouter.chat.mockResolvedValue({
+      content: '- “Improved the reporting workflow',
+      model: "utility-model",
+      finishReason: "length",
+      estimatedCostUsd: 0.001,
+    });
+
+    await expect(announceDeployment(truncated as any)).resolves.toBe("posted");
+    expect(truncated.send.mock.calls[0]?.[0].content).toContain("- Fix durable games");
+    expect(truncated.send.mock.calls[0]?.[0].content).not.toContain("reporting workflow");
+
+    expect(__test.patchNotesLookComplete('- “Improved the reporting workflow')).toBe(false);
   });
 
   it("marks a comparison failure for a later retry without posting guesses", async () => {

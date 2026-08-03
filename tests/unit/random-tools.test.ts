@@ -16,6 +16,7 @@ import {
   revealRandomness,
   settleRandomWager
 } from "../../src/tools/randomTools.js";
+import { discordActionToolHandlers } from "../../src/tools/handlers/discord-action.js";
 import type { DiscordReplyContext, ToolContext } from "../../src/tools/types.js";
 import { createAgentTurnOutput } from "../../src/tools/turnOutput.js";
 
@@ -221,6 +222,34 @@ function fakeReplyContext(rootMessageId: string): DiscordReplyContext {
     url: null,
     chain: []
   };
+}
+
+function structuredDiceWager(overrides: Record<string, unknown> = {}) {
+  return {
+    id: "wager-structured", requestId: "req-1", guildId: "guild", channelId: "channel",
+    threadKey: discordRngThreadKey(), requestedByUserId: "user", userWalletId: "wallet-user",
+    botWalletId: "wallet-bot", game: "dice", token: "USDC.e", tokenDecimals: 6,
+    stakeAtomic: 100_000n, maxPayoutAtomic: 200_000n, payoutAtomic: null, drawId: 1,
+    settlementTransferId: null, status: "drawn", explanation: null, interactionMode: "automatic",
+    settlementOutcome: null, settlementResolutionSource: null, settlementRequestId: null,
+    awaitingAction: false, stateVersion: 0,
+    decisionState: { contract: { version: 1, draw: { kind: "dice", count: 1, sides: 6 }, rule: { kind: "sum", operator: "=", target: 1 } } },
+    allowedActions: [], actionPrompt: null, lastActionRequestId: null,
+    expiresAt: new Date(Date.now() + 60_000), createdAt: new Date(), updatedAt: new Date(),
+    ...overrides,
+  };
+}
+
+function structuredDiceRngRepo(values: number[]) {
+  return {
+    getActiveSession: vi.fn(async () => ({ id: "rng-structured" })),
+    listDraws: vi.fn(async () => [{
+      id: 1, sessionId: "rng-structured", nonce: 0, kind: "dice", params: { count: values.length, sides: 6 },
+      outcome: { kind: "dice", values, total: values.reduce((sum, value) => sum + value, 0) },
+      reason: "structured wager", requestId: "req-1", messageId: "1234567890000000001",
+      requestedByUserId: "user", createdAt: new Date(),
+    }]),
+  } as unknown as RngRepository;
 }
 
 async function verifyAllDraws(rngRepo: FakeRngRepository, sessionId: string) {
@@ -437,6 +466,65 @@ describe("drawRandom", () => {
     for (const session of rngRepo.sessions.values()) expect(session.nonceCounter).toBe(0);
   });
 
+  it("runs bounded repeat-until draws inside one tool call and returns one compact proof", async () => {
+    const { ctx, rngRepo, footerLines } = fakeContext();
+
+    const response = await drawRandom(ctx, {
+      kind: "dice",
+      sides: 6,
+      until: { values: [1, 2, 3, 4, 5, 6], maxDraws: 100 },
+      reason: "first die result",
+    });
+
+    expect(response).toContain("matched");
+    expect(response).toContain("on draw 1");
+    expect(rngRepo.draws).toHaveLength(1);
+    expect(footerLines.filter((line) => line.includes("repeat-until"))).toHaveLength(1);
+    const session = [...rngRepo.sessions.values()][0];
+    await verifyAllDraws(rngRepo, session.id);
+  });
+
+  it("preserves repeat-until arguments across the model-facing handler boundary", async () => {
+    const { ctx, rngRepo } = fakeContext();
+
+    const response = await discordActionToolHandlers.drawRandom(ctx, {
+      name: "drawRandom",
+      arguments: { kind: "coin", until: { values: ["heads", "tails"], maxDraws: 25 } },
+    } as never, "");
+
+    expect(response.content).toContain("on draw 1");
+    expect(rngRepo.draws).toHaveLength(1);
+  });
+
+  it("rejects invalid or wallet-backed repeat-until requests before consuming entropy", async () => {
+    const reserveWager = vi.fn();
+    const { ctx, rngRepo } = fakeContext({
+      walletService: { reserveWager } as unknown as ToolContext["walletService"],
+    });
+
+    expect(await drawRandom(ctx, {
+      kind: "dice",
+      sides: 6,
+      until: { values: [7], maxDraws: 10 },
+    })).toContain("between 1 and 6");
+    expect(await drawRandom(ctx, {
+      kind: "coin",
+      until: { values: ["heads"], maxDraws: 10 },
+      wager: {
+        playerUserId: "user",
+        stakeUsd: 0.1,
+        maxPayoutUsd: 0.2,
+        game: "coin",
+        interactionMode: "automatic",
+        rule: { kind: "coin_side", side: "heads" },
+      },
+    })).toContain("repeat-until wallet wagers are unsupported");
+
+    expect(reserveWager).not.toHaveBeenCalled();
+    expect(rngRepo.draws).toEqual([]);
+    for (const session of rngRepo.sessions.values()) expect(session.nonceCounter).toBe(0);
+  });
+
   it("explains the dice/integers conflation and how to self-correct", async () => {
     // Regression: a roulette spin request produced {kind: "integers", min: 0, sides: 37}
     // and the old "need integer min and max" error made the model punt to the user
@@ -529,7 +617,8 @@ describe("drawRandom", () => {
     expect(attachWagerDraw).toHaveBeenCalledWith("wager-1", 1, expect.any(Function));
     expect(releaseWager).not.toHaveBeenCalled();
     expect(response).toContain("Required next action:");
-    expect(response).toContain("call drawRandom again without a new wager");
+    expect(response).toContain("call settleRandomWager now");
+    expect(response).toContain("terminal after its one attached verified draw");
     expect(response).toContain("current requester");
     expect(response).toContain("Discord user user");
   });
@@ -791,6 +880,18 @@ describe("drawRandom", () => {
     expect(rngRepo.sessions.size).toBe(0);
   });
 
+  it("rejects additional random draws for a custom wager after its attached draw", async () => {
+    const getCurrentWager = vi.fn(async () => structuredDiceWager());
+    const { ctx, rngRepo } = fakeContext({
+      walletService: { getCurrentWager } as unknown as ToolContext["walletService"],
+    });
+
+    const response = await drawRandom(ctx, { kind: "dice", sides: 200, count: 1, reason: "keep rolling" });
+
+    expect(response).toContain("must settle from its one attached verified draw");
+    expect(rngRepo.draws).toEqual([]);
+  });
+
   it("allows a typed action permitted by the saved blackjack state", async () => {
     const reserveWager = vi.fn();
     const getCurrentWager = vi.fn(async () => ({
@@ -811,7 +912,7 @@ describe("drawRandom", () => {
     });
 
     expect(response).toContain("Provably fair draw complete");
-    expect(response).toContain("continues the scoped active wallet wager");
+    expect(response).toContain("continues the scoped active blackjack wager");
     expect(reserveWager).not.toHaveBeenCalled();
     expect(rngRepo.draws.some((draw) => draw.kind === "cards")).toBe(true);
   });
@@ -864,9 +965,10 @@ describe("drawRandom", () => {
         userBalance: { formatted: "2.75", symbol: "USDC.e" }
       };
     });
-    const getCurrentWager = vi.fn(async () => ({ id: "wager-1" }));
+    const getCurrentWager = vi.fn(async () => structuredDiceWager({ id: "wager-1", maxPayoutAtomic: 1_000_000n }));
     const { ctx, footerLines } = fakeContext({
       config: { maxReplyChars: 1800, payments: { userWalletsEnabled: true, tempoNetwork: "mainnet" } } as ToolContext["config"],
+      rngRepo: structuredDiceRngRepo([1]),
       walletService: { getCurrentWager, settleWager } as unknown as ToolContext["walletService"]
     });
 
@@ -885,7 +987,7 @@ describe("drawRandom", () => {
         payoutUsd: 1,
         outcome: "player_win",
         resolutionSource: "verified_randomness",
-        explanation: "rolled the winning face"
+        explanation: "The attached verified draw satisfies the durable wager rule, so the reserved maximum payout applies."
       },
       expect.any(Function)
     );
@@ -1093,9 +1195,10 @@ describe("drawRandom", () => {
   });
 
   it("uses the scoped wager when a model call corrupts the opaque wager id", async () => {
-    const getCurrentWager = vi.fn(async () => ({ id: "wager_68db51b7-1466-4ed4-b20c-128f8aeab273" }));
+    const getCurrentWager = vi.fn(async () => structuredDiceWager({ id: "wager_68db51b7-1466-4ed4-b20c-128f8aeab273" }));
     const settleWager = vi.fn(async () => ({ wager: {}, transfer: null, userBalance: null }));
     const { ctx } = fakeContext({
+      rngRepo: structuredDiceRngRepo([2]),
       walletService: { getCurrentWager, settleWager } as unknown as ToolContext["walletService"]
     });
 
@@ -1142,9 +1245,10 @@ describe("drawRandom", () => {
   it("keeps a raced unknown-wager validation error inside the tool loop", async () => {
     const { ctx } = fakeContext({
       walletService: {
-        getCurrentWager: vi.fn(async () => ({ id: "wager_active" })),
+        getCurrentWager: vi.fn(async () => structuredDiceWager({ id: "wager_active" })),
         settleWager: vi.fn(async () => { throw paymentError("wager_not_found", "Unknown wager wager_active"); })
-      } as unknown as ToolContext["walletService"]
+      } as unknown as ToolContext["walletService"],
+      rngRepo: structuredDiceRngRepo([2]),
     });
 
     const response = await settleRandomWager(ctx, {

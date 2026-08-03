@@ -269,6 +269,7 @@ export class WalletService {
     interactionMode: WagerInteractionMode;
     stakeUsd: number;
     maxPayoutUsd: number;
+    contract?: Record<string, unknown>;
   }, record?: PaymentEventRecorder): Promise<WagerReservation> {
     const [user, bot, token] = await Promise.all([
       this.ensureUserWallet({ guildId: input.guildId, userId: input.userId }, record),

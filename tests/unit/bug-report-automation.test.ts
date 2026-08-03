@@ -17,6 +17,9 @@ describe("Discord bug report automation", () => {
       requestedBy: "user-1",
       request: expect.stringContaining("AI reply marked with 🐛")
     }));
+    expect(harness.jobs.enqueueAgentTask).toHaveBeenCalledWith(expect.objectContaining({
+      request: expect.stringContaining('"messageCount":4')
+    }));
     expect(harness.jobs.enqueueAgentTask).toHaveBeenCalledWith(expect.not.objectContaining({
       discordResponseMessageId: expect.anything(),
     }));
@@ -44,7 +47,10 @@ function fakeHarness(created: boolean) {
     createDiscordBugReport: vi.fn(async (value) => ({ created, report: value })),
     captureRunFeedbackForEval: vi.fn(async (value) => value),
     markDiscordBugReportFailed: vi.fn(async () => undefined),
-    getTraceEvents: vi.fn(async () => [{ eventName: "agent.completed", level: "info", summary: "done" }]),
+    getTraceEvents: vi.fn(async () => [{
+      eventName: "discord.response.delivered", level: "info", summary: "done",
+      metadata: { replyMessageId: "reply-1", continuationMessageIds: ["reply-2", "reply-3", "reply-4"], messageCount: 4 }
+    }]),
     getToolAuditLogs: vi.fn(async () => []),
     upsertAgentTaskQueued: vi.fn(async () => undefined),
     attachDiscordBugReportTask: vi.fn(async () => undefined)

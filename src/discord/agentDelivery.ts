@@ -410,17 +410,26 @@ export async function executeDiscordAgentRequest(
       presentation: response.discordPresentation,
       premiumSkuIds: input.config.discord.premiumSkuIds,
     });
-    const { reply: finalReply, richPresentationDelivered, actionGenerationId, preparedPresentation } = delivery;
+    const { reply: finalReply, richPresentationDelivered, actionGenerationId, preparedPresentation, messageCount, continuationMessageIds } = delivery;
     await recordTraceEvent(input.repo, {
       eventName: richPresentationDelivered ? "discord.presentation.delivered" : response.discordPresentation ? "discord.presentation.fallback" : "discord.response.delivered",
       level: response.discordPresentation && !richPresentationDelivered ? "warn" : "info",
       summary: richPresentationDelivered ? "Delivered Discord Components V2 presentation" : response.discordPresentation ? "Delivered safe fallback after rich presentation failure" : "Delivered Discord response",
-      metadata: { replyMessageId: finalReply.id, requestedRichPresentation: Boolean(response.discordPresentation), actionCount: preparedPresentation?.registrations.length ?? 0, actionGenerationId },
+      metadata: {
+        replyMessageId: finalReply.id,
+        continuationMessageIds,
+        messageCount,
+        deliveredContentChars: response.content.length,
+        footerLineCount: formattedFooter?.extraLines?.length ?? 0,
+        requestedRichPresentation: Boolean(response.discordPresentation),
+        actionCount: preparedPresentation?.registrations.length ?? 0,
+        actionGenerationId,
+      },
     }).catch((error) => requestLogger.warn({ err: error, replyMessageId: finalReply.id }, "Failed to record Discord delivery trace"));
     await markDiscordDeliveryDelivered(input, agentRuntimeExecution.executionId, finalReply, requestLogger);
     await attachPromptTasksToDiscordReply(input, request.requestId, finalReply, requestLogger)
       .catch((error) => requestLogger.warn({ err: error, replyMessageId: finalReply.id }, "Failed to reconcile prompt tasks after Discord delivery"));
-    requestLogger.info({ replyMessageId: finalReply.id }, "Sent Discord final response");
+    requestLogger.info({ replyMessageId: finalReply.id, messageCount, continuationMessageIds }, "Sent Discord final response");
     await finishAgentRuntimePromptExecution({
       agentRuntime: input.agentRuntime,
       session: agentRuntimeExecution?.session,

@@ -150,6 +150,8 @@ Discord-visible output flows through `src/discord/responseSink.ts`:
 - retries reuse stable nonces and message identity;
 - restart sweeps replay incomplete delivery obligations;
 - missing-message and permission failures are classified and handled without duplicating successful output;
+- oversized body text and deterministic footers are chunked independently, so a large proof footer cannot collapse the answer into one-character messages;
+- delivery events record the first reply ID, continuation IDs, message count, content size, and footer-line count for debugging and bug-report evidence;
 - the loading reaction is removed at terminal delivery.
 
 Timeout recovery distinguishes unfinished work from already committed work. Completed mutations and generated files can still be delivered after the model runtime times out. An unresolved wager cannot be converted into a generic timeout answer because funds or game state may still require deterministic resolution.

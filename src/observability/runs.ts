@@ -38,13 +38,26 @@ import type {
 
 export async function listRunSummaries(
   repo: DiscordAiAgentRepository,
-  input: { limit?: number; includeEmbeddings?: boolean } = {},
+  input: {
+    limit?: number;
+    includeEmbeddings?: boolean;
+    kind?: string;
+    status?: string;
+    channelId?: string;
+    revision?: string;
+    since?: Date;
+  } = {},
 ): Promise<RunSummary[]> {
   const limit = Math.max(1, Math.min(200, Math.trunc(input.limit ?? 100)));
   const [processRuns, tasks, chatExecutions] = await Promise.all([
     repo.listProcessRuns({
       limit,
       includeEmbeddings: input.includeEmbeddings ?? true,
+      kind: input.kind as never,
+      status: input.status as never,
+      channelId: input.channelId,
+      revision: input.revision,
+      since: input.since,
     }),
     repo.listRecentAgentTasks(limit),
     typeof repo.listAgentRuntimeChatExecutions === "function"
@@ -62,6 +75,13 @@ export async function listRunSummaries(
     if (!byId.has(summary.runId)) byId.set(summary.runId, summary);
   }
   return [...byId.values()]
+    .filter((run) =>
+      (!input.kind || run.kind === input.kind) &&
+      (!input.status || run.status === input.status) &&
+      (!input.channelId || run.channelId === input.channelId) &&
+      (!input.revision || String(run.metadata.appRevision ?? "") === input.revision) &&
+      (!input.since || run.startedAt >= input.since)
+    )
     .sort((left, right) => right.updatedAt.getTime() - left.updatedAt.getTime())
     .slice(0, limit);
 }

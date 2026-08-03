@@ -40,7 +40,7 @@ export const randomWagerActionToolContracts = [
     name: "settleRandomWager",
     examples: ["@ai settle the wager from that draw"],
     description:
-      "Settle the active wallet-backed wager in this player's scoped Discord game session exactly once. For standard blackjack and coinflip, pass no arguments: code derives the payout and outcome from durable RNG draws and persisted decisions. For a custom game, provide the payout fields after applying its stated rules. Use awaitRandomWagerAction only while a genuine gameplay decision remains; never invent confirmation as an action or pause a terminal outcome.",
+      "Settle the active wallet-backed wager in this player's scoped Discord game session exactly once. Pass no payout or outcome arguments: code derives every supported standard or structured-custom settlement from the durable wager contract, its one attached RNG draw, and persisted player decisions. Use awaitRandomWagerAction only while a genuine gameplay decision remains; never invent confirmation as an action or pause a terminal outcome.",
     mutates: true,
     group: "discord-action",
     available: userWalletsAvailable,
@@ -51,20 +51,7 @@ export const randomWagerActionToolContracts = [
     auditEvents: ["wallet.wager.settled", "wallet.transfer.confirmed"],
     parameters: {
       type: "object",
-      properties: {
-        payoutUsd: { type: "number", description: "Custom games only: total USD payout including returned stake; 0 means a full loss." },
-        outcome: {
-          type: "string",
-          enum: ["player_win", "player_loss", "push"],
-          description: "Custom games only: final result from the player's perspective."
-        },
-        resolutionSource: {
-          type: "string",
-          enum: ["verified_randomness", "player_decision"],
-          description: "Custom games only: verified_randomness for an automatic result, otherwise player_decision."
-        },
-        explanation: { type: "string", minLength: 1, pattern: "\\S", description: "Custom games only: concise calculation from draw through final outcome." }
-      },
+      properties: {},
       additionalProperties: false
     }
   }),

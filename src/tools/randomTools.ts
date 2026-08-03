@@ -29,9 +29,7 @@ import { effectiveMaximumPayoutUsd } from "./wagerTerms.js";
 import { normalizeDrawRandomInput, validateDrawInput, validateWagerInput } from "./randomInputValidation.js";
 import type { DrawRandomInput } from "./randomTypes.js";
 import {
-  isStandardWagerGame,
   prepareStandardWagerSettlement,
-  type WagerSettlementProposal,
 } from "./standardWagerRuntime.js";
 
 const MAX_FOOTER_OUTCOME_CHARS = 160;
@@ -139,7 +137,12 @@ async function drawRandomCore(
           game: input.wager.game!.trim(),
           interactionMode: wagerInteractionMode,
           stakeUsd: input.wager.stakeUsd!,
-          maxPayoutUsd: effectiveMaxPayoutUsd!
+          maxPayoutUsd: effectiveMaxPayoutUsd!,
+          contract: input.wager.rule ? {
+            version: 1,
+            draw: { kind, count: input.count ?? 1, sides: input.sides, min: input.min, max: input.max },
+            rule: input.wager.rule,
+          } : undefined,
         },
         paymentRecorder(ctx)
       );
@@ -202,8 +205,9 @@ async function drawRandomCore(
         }
       }
       const seed = await tx.setClientSeed(clientSeedValue, clientSeedSource);
-      const draw =
-        kind === "cards"
+      const draw = input.until
+        ? await drawUntil(tx, ctx, seed.clientSeed, kind as "integers" | "dice" | "coin", input, reason)
+        : kind === "cards"
           ? await drawCards(tx, ctx, seed.clientSeed, input, reason)
           : await drawBasic(tx, ctx, seed.clientSeed, kind as RngDrawKind, input, reason);
       return {
@@ -255,10 +259,10 @@ async function drawRandomCore(
     `Session ${sessionId} · nonce ${draw.nonce} · draw ${draw.drawId} · commitment sha256:${commitment}`,
     wager
       ? wagerInteractionMode === "player_decisions"
-        ? `The scoped wallet wager is reserved for the current requester ${ctx.requesterScope?.userDisplayName ?? ctx.userDisplayName} (Discord user ${ctx.requesterScope?.userId ?? ctx.userId}); never attribute it to another person. Maximum total payout reserved: $${effectiveMaxPayoutUsd}.\nRequired next action: if this verified draw already makes the outcome final with no player choice, call settleRandomWager now with resolutionSource=verified_randomness. Otherwise call awaitRandomWagerAction with complete versioned game state and genuine gameplay choices. Never pause a terminal outcome or invent confirm/settle as a player action. Do not draw again or answer before one of those tools succeeds. The runtime resolves the wager from this Discord game session; do not supply or repeat an internal wager id.`
-        : `The scoped wallet wager is reserved for the current requester ${ctx.requesterScope?.userDisplayName ?? ctx.userDisplayName} (Discord user ${ctx.requesterScope?.userId ?? ctx.userId}); never attribute it to another person. Maximum total payout reserved: $${effectiveMaxPayoutUsd}.\nRequired next action: if the outcome is final, call settleRandomWager now. If the rules require more automatic chance before the outcome is final, call drawRandom again without a new wager. If a genuine player choice is required, call awaitRandomWagerAction. Do not answer until one of these tools succeeds. The runtime resolves the wager from this Discord game session; do not supply or repeat an internal wager id.`
+        ? `The scoped wallet wager is reserved for the current requester ${ctx.requesterScope?.userDisplayName ?? ctx.userDisplayName} (Discord user ${ctx.requesterScope?.userId ?? ctx.userId}); never attribute it to another person. Maximum total payout reserved: $${effectiveMaxPayoutUsd}.\nRequired next action: if this verified draw already makes the outcome final with no player choice, call settleRandomWager now with no arguments. Otherwise call awaitRandomWagerAction with complete versioned game state and genuine gameplay choices. Never pause a terminal outcome or invent confirm/settle as a player action. Do not draw again or answer before one of those tools succeeds. The runtime resolves the wager from this Discord game session; do not supply or repeat an internal wager id.`
+        : `The scoped wallet wager is reserved for the current requester ${ctx.requesterScope?.userDisplayName ?? ctx.userDisplayName} (Discord user ${ctx.requesterScope?.userId ?? ctx.userId}); never attribute it to another person. Maximum total payout reserved: $${effectiveMaxPayoutUsd}.\nRequired next action: call settleRandomWager now. This automatic wager is terminal after its one attached verified draw; do not draw again or ask for confirmation. Do not answer until settlement succeeds. The runtime derives the outcome and payout from the durable wager contract and this Discord game session; do not supply or repeat an internal wager id.`
       : continuingWager
-        ? `This verified draw continues the scoped active wallet wager. If more automatic chance is required, call drawRandom again without a new wager. If a genuine player decision is needed, save the updated state with awaitRandomWagerAction. When the outcome is final, call settleRandomWager exactly once before answering.`
+        ? `This verified draw continues the scoped active blackjack wager. If dealer play requires another card, call drawRandom again with wagerAction=stand. If a genuine player decision is needed, save the updated state with awaitRandomWagerAction. When the outcome is final, call settleRandomWager exactly once before answering.`
         : null,
     `Report this result exactly as shown. A proof footer is appended to your reply automatically; do not restate or alter the proof details.`
   ].filter((line): line is string => line !== null).join("\n");
@@ -298,7 +302,9 @@ function validateWagerContinuation(wager: WagerReservation | null, input: DrawRa
   if (input.wager) {
     return "An active wallet-backed game already exists in this Discord reply chain. Continue its saved state without supplying a new wager. No random draw was made."
   }
-  if (wager.game.trim().toLowerCase() !== "blackjack") return null;
+  if (wager.game.trim().toLowerCase() !== "blackjack") {
+    return "A custom wallet wager must settle from its one attached verified draw. Additional automatic draws are not part of the durable wager contract, so no random draw was made.";
+  }
   if (input.wagerAction !== "hit" && input.wagerAction !== "stand") {
     return "Continuing blackjack requires wagerAction=hit or wagerAction=stand from the saved game state. No random draw was made."
   }
@@ -361,25 +367,7 @@ async function settleRandomWagerCore(
     });
   }
   const wagerId = wager.id;
-  let proposal: WagerSettlementProposal | undefined;
-  if (!isStandardWagerGame(wager.game)) {
-    const explanation = input.explanation?.trim();
-    if (input.payoutUsd == null || !Number.isFinite(input.payoutUsd) || input.payoutUsd < 0) {
-      return "payoutUsd must be a non-negative amount for a custom game.";
-    }
-    if (!explanation) return "explanation is required for a custom game and must show how the payout follows from the draw.";
-    if (!isSettlementOutcome(input.outcome)) return "outcome must be player_win, player_loss, or push for a custom game.";
-    if (!isResolutionSource(input.resolutionSource)) {
-      return "resolutionSource must be verified_randomness or player_decision for a custom game.";
-    }
-    proposal = {
-      payoutUsd: input.payoutUsd,
-      outcome: input.outcome,
-      resolutionSource: input.resolutionSource,
-      explanation,
-    };
-  }
-  const settlement = await prepareStandardWagerSettlement(ctx, wager, proposal);
+  const settlement = await prepareStandardWagerSettlement(ctx, wager);
   if (typeof settlement === "string") return settlement;
   let settled: Awaited<ReturnType<typeof ctx.walletService.settleWager>>;
   try {
@@ -411,14 +399,6 @@ async function settleRandomWagerCore(
     settled.userBalance ? `User wallet balance: $${settled.userBalance.formatted} USD.` : null,
     `Calculation: ${settlement.explanation}`
   ].filter((line): line is string => line !== null).join("\n");
-}
-
-function isSettlementOutcome(value: unknown): value is WagerSettlementOutcome {
-  return value === "player_win" || value === "player_loss" || value === "push";
-}
-
-function isResolutionSource(value: unknown): value is WagerResolutionSource {
-  return value === "verified_randomness" || value === "player_decision";
 }
 
 export async function revealRandomness(ctx: ToolContext): Promise<string> {
@@ -500,6 +480,7 @@ type DrawResult = {
   summary: string;
   footerLine: string;
   shuffleFooter?: string;
+  scalarValue?: number | string;
 };
 
 type DrawTxResult =
@@ -545,7 +526,39 @@ async function drawBasic(
     drawId: stored.id,
     nonce,
     summary: `${label} → ${summary}`,
-    footerLine: `🎲 ${label} → ${truncate(summary, MAX_FOOTER_OUTCOME_CHARS)} · nonce ${nonce} · session ${tx.session.id}`
+    footerLine: `🎲 ${label} → ${truncate(summary, MAX_FOOTER_OUTCOME_CHARS)} · nonce ${nonce} · session ${tx.session.id}`,
+    scalarValue: outcome.kind === "shuffle" ? undefined : outcome.values[0],
+  };
+}
+
+async function drawUntil(
+  tx: RngSessionTx,
+  ctx: ToolContext,
+  clientSeed: string,
+  kind: "integers" | "dice" | "coin",
+  input: DrawRandomInput,
+  reason: string | null,
+): Promise<DrawResult> {
+  const terminalValues = new Set(input.until!.values ?? []);
+  const maxDraws = input.until!.maxDraws ?? 100;
+  const draws: DrawResult[] = [];
+  for (let attempt = 0; attempt < maxDraws; attempt += 1) {
+    const draw = await drawBasic(tx, ctx, clientSeed, kind, { ...input, count: 1, until: undefined }, reason);
+    draws.push(draw);
+    if (terminalValues.has(draw.scalarValue!)) break;
+  }
+  const final = draws.at(-1)!;
+  const matched = terminalValues.has(final.scalarValue!);
+  const label = reason ? `${kind} repeat-until (${reason})` : `${kind} repeat-until`;
+  const terminal = JSON.stringify(final.scalarValue);
+  return {
+    drawId: final.drawId,
+    nonce: final.nonce,
+    scalarValue: final.scalarValue,
+    summary: matched
+      ? `${label} → matched ${terminal} on draw ${draws.length}`
+      : `${label} → no terminal value after the ${draws.length}-draw limit; final value ${terminal}`,
+    footerLine: `🎲 ${label} → ${matched ? `matched ${terminal}` : `limit reached at ${terminal}`} · draws ${draws.length} · nonces ${draws[0]!.nonce}–${final.nonce} · session ${tx.session.id}`,
   };
 }
 

@@ -21,7 +21,6 @@ export type WagerFairnessInput = {
  * authorization or a game contract.
  */
 export function validateWagerFairness(input: WagerFairnessInput): string | null {
-  if (input.maxPayoutUsd <= input.stakeUsd + EPSILON) return null;
   const probability = winProbability(input);
   if (probability == null) {
     return [
@@ -30,6 +29,7 @@ export function validateWagerFairness(input: WagerFairnessInput): string | null 
       "For dice or bounded integers, use a duplicate/distinct or sum rule; for a coin, use coin_side. Otherwise play without real money.",
     ].join(" ");
   }
+  if (input.maxPayoutUsd <= input.stakeUsd + EPSILON) return null;
   const expectedPayout = probability * input.maxPayoutUsd;
   if (probability >= 1 - EPSILON) {
     return [

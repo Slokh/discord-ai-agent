@@ -61,7 +61,11 @@ async function main() {
   try {
     const repo = createAppDatabase(pool);
     if (args.list) {
-      const runs = await listRunSummaries(repo, { limit: listFetchLimit(args), includeEmbeddings: args.includeEmbeddings });
+      const runs = await listRunSummaries(repo, {
+        limit: listFetchLimit(args), includeEmbeddings: args.includeEmbeddings,
+        kind: args.kind, status: args.status, channelId: args.channelId,
+        revision: args.revision, since: args.since,
+      });
       await writeRunList(runs, args, async (runId) => (await getRunSnapshot(repo, runId)) ?? null);
       return;
     }
@@ -87,6 +91,8 @@ async function writeRunList(
   loadSnapshot: (runId: string) => Promise<RunSnapshot | null>,
 ) {
   const matching = runs.filter((run) =>
+    (!args.kind || run.kind === args.kind) &&
+    (!args.status || run.status === args.status) &&
     (!args.channelId || run.channelId === args.channelId) &&
     (!args.revision || String(run.metadata.appRevision ?? "") === args.revision) &&
     (!args.since || run.startedAt >= args.since)
@@ -284,6 +290,11 @@ async function loadRunListFromApi(input: { apiUrl: string; auth?: string; args: 
   const url = new URL(`${input.apiUrl}/api/runs`);
   url.searchParams.set("limit", String(listFetchLimit(input.args)));
   if (input.args.includeEmbeddings) url.searchParams.set("includeEmbeddings", "1");
+  if (input.args.kind) url.searchParams.set("kind", input.args.kind);
+  if (input.args.status) url.searchParams.set("status", input.args.status);
+  if (input.args.channelId) url.searchParams.set("channelId", input.args.channelId);
+  if (input.args.revision) url.searchParams.set("revision", input.args.revision);
+  if (input.args.since) url.searchParams.set("since", input.args.since.toISOString());
   const response = await fetchJson<{ runs?: unknown[] }>(url.toString(), headers);
   return (response?.runs ?? []).map(reviveRunSummary);
 }

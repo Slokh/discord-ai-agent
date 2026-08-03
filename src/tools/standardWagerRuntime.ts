@@ -6,33 +6,29 @@ import type {
 } from "../payments/types.js";
 import {
   deriveStandardWagerSettlement,
+  deriveStructuredWagerSettlement,
 } from "./standardWagerSettlement.js";
 import type { ToolContext } from "./types.js";
-
-export type WagerSettlementProposal = {
-  payoutUsd: number;
-  outcome: WagerSettlementOutcome;
-  resolutionSource: WagerResolutionSource;
-  explanation: string;
-};
 
 export async function prepareStandardWagerSettlement(
   ctx: ToolContext,
   wager: WagerReservation,
-  proposal?: WagerSettlementProposal,
-): Promise<WagerSettlementProposal | string> {
-  if (!isStandardWagerGame(wager.game)) {
-    if (!proposal) return "Settlement rejected: a payout proposal is required for this custom game. No transfer was created.";
-    return proposal;
-  }
-
+): Promise<{
+  payoutUsd: number;
+  outcome: WagerSettlementOutcome;
+  resolutionSource: WagerResolutionSource;
+  explanation: string;
+} | string> {
   const session = ctx.rngRepo
     ? await ctx.rngRepo.getActiveSession(wager.threadKey)
     : null;
   const draws = session && ctx.rngRepo
     ? await ctx.rngRepo.listDraws(session.id)
     : [];
-  const derived = deriveStandardWagerSettlement(wager, draws);
+  const standard = deriveStandardWagerSettlement(wager, draws);
+  const derived = standard.status === "not_standard"
+    ? deriveStructuredWagerSettlement(wager, draws)
+    : standard;
   if (derived.status !== "terminal") {
     const reason = derived.status === "not_standard"
       ? "The game is not supported by the deterministic settlement evaluator."

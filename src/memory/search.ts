@@ -162,14 +162,7 @@ export async function searchDiscordHistory(input: {
           dateTo: input.search.dateTo,
           hourOfDayUtc: input.search.hourOfDayUtc
         }), { cachedEmbedding: embedded.cached, candidateLimit });
-        try {
-          return { vector: await vectorLeg(), semanticDegraded: false };
-        } catch {
-          // Retry only the vector query. Repeating a failed interactive
-          // embedding request burns another full provider deadline without
-          // producing a reusable vector.
-          return { vector: await vectorLeg(), semanticDegraded: false };
-        }
+        return { vector: await vectorLeg(), semanticDegraded: false };
       } catch (error) {
         logger.warn(
           {

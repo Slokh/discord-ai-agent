@@ -107,6 +107,23 @@ describe("internal API run endpoints", () => {
     expect(listInputs.at(-1)).toEqual({ includeEmbeddings: true });
   });
 
+  it("passes run filters to the repository before applying the global list limit", async () => {
+    const listInputs: Array<Record<string, unknown>> = [];
+    runtime = await startInternalApi({
+      config: testConfig(),
+      repo: fakeRepo({ onListProcessRuns: (input) => listInputs.push(input) })
+    });
+    const auth = { authorization: `Basic ${Buffer.from("admin:secret").toString("base64")}` };
+
+    const response = await fetch(`${runtime.url}/api/runs?channelId=channel-1&kind=discord&status=succeeded&revision=rev-1&since=2026-08-03T04%3A00%3A00Z`, { headers: auth });
+
+    expect(response.status).toBe(200);
+    expect(listInputs.at(-1)).toMatchObject({
+      channelId: "channel-1", kind: "discord", status: "succeeded", revision: "rev-1",
+      since: new Date("2026-08-03T04:00:00Z"),
+    });
+  });
+
   it("serves the authenticated payment operations snapshot", async () => {
     const inputs: unknown[] = [];
     runtime = await startInternalApi({
@@ -316,7 +333,7 @@ function testConfig(): AppConfig {
   };
 }
 
-function fakeRepo(options: { onListProcessRuns?: (input: { includeEmbeddings?: boolean }) => void } = {}) {
+function fakeRepo(options: { onListProcessRuns?: (input: any) => void } = {}) {
   const run: ProcessRunRecord = {
     runId: "run-1",
     traceId: "trace-1",
@@ -385,7 +402,7 @@ function fakeRepo(options: { onListProcessRuns?: (input: { includeEmbeddings?: b
   };
 
   return {
-    listProcessRuns: async (input: { includeEmbeddings?: boolean }) => {
+    listProcessRuns: async (input: any) => {
       options.onListProcessRuns?.(input);
       return [run];
     },

@@ -11,6 +11,7 @@ import {
   generateUpdateNotes,
   githubComparisonUrl,
   normalizeUpdateNotes,
+  updateNotesLookComplete,
 } from "./updateAnnouncements.js";
 
 type CompareCommit = { sha?: string; commit?: { message?: string } };
@@ -256,5 +257,6 @@ export const __test = {
   comparisonEvidence,
   fallbackPatchNotes,
   formatAnnouncement,
-  normalizePatchNotes: normalizeUpdateNotes
+  normalizePatchNotes: normalizeUpdateNotes,
+  patchNotesLookComplete: updateNotesLookComplete,
 };

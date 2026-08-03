@@ -362,7 +362,15 @@ export async function cleanupExpiredProcessRunArtifacts(pool: DbPool, limit = 50
   }
 
 export async function listProcessRuns(pool: DbPool, 
-    input: { limit?: number; kind?: ProcessRunKind | null; status?: ProcessRunStatus | null; includeEmbeddings?: boolean } = {}
+    input: {
+      limit?: number;
+      kind?: ProcessRunKind | null;
+      status?: ProcessRunStatus | null;
+      channelId?: string | null;
+      revision?: string | null;
+      since?: Date | null;
+      includeEmbeddings?: boolean;
+    } = {}
   ): Promise<ProcessRunRecord[]> {
     const limit = Math.max(1, Math.min(200, Math.trunc(input.limit ?? 100)));
     const result = await pool.query(
@@ -375,10 +383,16 @@ export async function listProcessRuns(pool: DbPool,
         WHERE ($2::text IS NULL OR kind = $2)
           AND ($3::text IS NULL OR status = $3)
           AND ($4::boolean OR kind <> 'embedding')
+          AND ($5::text IS NULL OR channel_id = $5)
+          AND ($6::text IS NULL OR metadata->>'appRevision' = $6)
+          AND ($7::timestamptz IS NULL OR started_at >= $7)
         ORDER BY updated_at DESC, started_at DESC
         LIMIT $1
       `,
-      [limit, input.kind ?? null, input.status ?? null, input.includeEmbeddings ?? true]
+      [
+        limit, input.kind ?? null, input.status ?? null, input.includeEmbeddings ?? true,
+        input.channelId ?? null, input.revision ?? null, input.since ?? null,
+      ]
     );
     return result.rows.map(rowToProcessRun);
   }

@@ -1,6 +1,6 @@
 import type { DbPool } from "../db/pool.js";
 
-export async function passingConversationChannel(database: Pick<DbPool, "query">, traceId: string) {
+export async function passingStatsCanaryChannel(database: Pick<DbPool, "query">, traceId: string) {
   const result = await database.query(
     `SELECT session.channel_id
      FROM agent_runtime_executions execution
@@ -15,6 +15,20 @@ export async function passingConversationChannel(database: Pick<DbPool, "query">
            AND event.metadata->>'toolName' = 'getDiscordStats'
            AND coalesce(event.metadata->>'status', 'ok') <> 'error'
        ) = 1
+     ORDER BY execution.created_at DESC
+     LIMIT 1`,
+    [traceId],
+  );
+  return channelId(result.rows[0]);
+}
+
+export async function passingWebCanaryChannel(database: Pick<DbPool, "query">, traceId: string) {
+  const result = await database.query(
+    `SELECT session.channel_id
+     FROM agent_runtime_executions execution
+     JOIN agent_runtime_sessions session ON session.session_id = execution.session_id
+     WHERE execution.trace_id = $1
+       AND execution.status = 'succeeded'
        AND (
          SELECT count(*)
          FROM agent_runtime_events event
@@ -40,5 +54,9 @@ export async function passingConversationChannel(database: Pick<DbPool, "query">
      LIMIT 1`,
     [traceId],
   );
-  return typeof result.rows[0]?.channel_id === "string" ? result.rows[0].channel_id : undefined;
+  return channelId(result.rows[0]);
+}
+
+function channelId(row: Record<string, unknown> | undefined) {
+  return typeof row?.channel_id === "string" ? row.channel_id : undefined;
 }

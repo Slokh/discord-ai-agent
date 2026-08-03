@@ -109,21 +109,23 @@ function summarizeHtmlError(html: string) {
 
 function sanitizePlainText(value: string) {
   return decodeHtmlEntities(value)
-    .replace(/<script[\s\S]*?<\/script>/gi, " ")
-    .replace(/<style[\s\S]*?<\/style>/gi, " ")
+    .replace(/<script\b[^>]*>[\s\S]*?<\/script\s*>/gi, " ")
+    .replace(/<style\b[^>]*>[\s\S]*?<\/style\s*>/gi, " ")
     .replace(/<[^>]+>/g, " ")
     .replace(/\s+/g, " ")
     .trim();
 }
 
 function decodeHtmlEntities(value: string) {
-  return value
-    .replace(/&bull;/g, "-")
-    .replace(/&amp;/g, "&")
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">")
-    .replace(/&quot;/g, "\"")
-    .replace(/&#39;/g, "'");
+  const entities: Record<string, string> = {
+    "&bull;": "-",
+    "&amp;": "&",
+    "&lt;": "<",
+    "&gt;": ">",
+    "&quot;": "\"",
+    "&#39;": "'",
+  };
+  return value.replace(/&(?:bull|amp|lt|gt|quot|#39);/g, (entity) => entities[entity] ?? entity);
 }
 
 function firstString(...values: unknown[]) {

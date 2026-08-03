@@ -462,6 +462,21 @@ describe("OpenRouterClient", () => {
     expect(fetchMock).toHaveBeenCalledTimes(3);
   });
 
+  it("removes spaced script end tags without recursively decoding entities", async () => {
+    vi.useFakeTimers();
+    const html = "<html><title>Safe &amp;lt;tag&amp;gt;<script>alert(1)</script ></title></html>";
+    vi.stubGlobal("fetch", vi.fn(async () => htmlResponse(503, html)));
+
+    const request = new OpenRouterClient(config).chat({
+      messages: [{ role: "user", content: "hello" }],
+    });
+    const assertion = expect(request).rejects.toThrow(
+      /^(?!.*(?:alert|<tag>)).*Safe &lt;tag&gt;/,
+    );
+    await vi.runAllTimersAsync();
+    await assertion;
+  });
+
   it("aborts chat requests that exceed the hard timeout", async () => {
     vi.useFakeTimers();
     let signal: AbortSignal | undefined;

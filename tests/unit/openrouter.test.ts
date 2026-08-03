@@ -464,7 +464,7 @@ describe("OpenRouterClient", () => {
 
   it("removes spaced script end tags without recursively decoding entities", async () => {
     vi.useFakeTimers();
-    const html = "<html><title>Safe &amp;lt;tag&amp;gt;<script>alert(1)</script ></title></html>";
+    const html = "<html><title>Safe &amp;lt;tag&amp;gt;<script>alert(1)</script\t\n bar></title></html>";
     vi.stubGlobal("fetch", vi.fn(async () => htmlResponse(503, html)));
 
     const request = new OpenRouterClient(config).chat({

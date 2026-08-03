@@ -108,12 +108,36 @@ function summarizeHtmlError(html: string) {
 }
 
 function sanitizePlainText(value: string) {
-  return decodeHtmlEntities(value)
-    .replace(/<script\b[^>]*>[\s\S]*?<\/script\s*>/gi, " ")
-    .replace(/<style\b[^>]*>[\s\S]*?<\/style\s*>/gi, " ")
-    .replace(/<[^>]+>/g, " ")
+  return stripHtml(decodeHtmlEntities(value))
     .replace(/\s+/g, " ")
     .trim();
+}
+
+function stripHtml(value: string) {
+  let output = "";
+  let cursor = 0;
+  let blockedTag: "script" | "style" | null = null;
+  while (cursor < value.length) {
+    const open = value.indexOf("<", cursor);
+    if (open < 0) {
+      if (!blockedTag) output += value.slice(cursor);
+      break;
+    }
+    if (!blockedTag) output += value.slice(cursor, open);
+    const close = value.indexOf(">", open + 1);
+    if (close < 0) break;
+    const tag = value.slice(open + 1, close).trim().toLowerCase();
+    const closing = tag.startsWith("/");
+    const name = tag.match(/^\/?\s*([a-z0-9]+)/)?.[1];
+    if (!blockedTag && !closing && (name === "script" || name === "style")) {
+      blockedTag = name;
+    } else if (blockedTag && closing && name === blockedTag) {
+      blockedTag = null;
+    }
+    if (!blockedTag) output += " ";
+    cursor = close + 1;
+  }
+  return output;
 }
 
 function decodeHtmlEntities(value: string) {

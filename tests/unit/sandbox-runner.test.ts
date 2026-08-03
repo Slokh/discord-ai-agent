@@ -36,6 +36,8 @@ import {
   readGitChangeState,
   repairWorktreeRemoteForBranchPush
 } from "../../src/execution/repoWorkspace.js";
+import { writeSandboxToolShims } from "../../src/execution/sandboxToolShims.js";
+import type { SandboxEnv } from "../../src/execution/sandboxEnv.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -47,6 +49,32 @@ async function git(cwd: string, args: string[]) {
 }
 
 describe("sandboxRunner", () => {
+  it("writes the bounded sandbox command surface with scoped context", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "sandbox-shims-"));
+    try {
+      const env = {
+        githubRepository: "owner/repository",
+        githubBaseBranch: "main",
+        sandboxCacheDir: "/cache/agent's-data",
+        controlPlaneInternalUrl: "http://internal-api/",
+      } as Pick<SandboxEnv, "githubRepository" | "githubBaseBranch" | "sandboxCacheDir" | "controlPlaneInternalUrl"> as SandboxEnv;
+      await expect(writeSandboxToolShims(tempDir, env)).resolves.toEqual([
+        "agent-task-context",
+        "agent-cache-info",
+        "agent-progress",
+      ]);
+      const context = await fs.readFile(path.join(tempDir, "agent-task-context"), "utf8");
+      const progress = await fs.readFile(path.join(tempDir, "agent-progress"), "utf8");
+      expect(context).toContain("Repository: owner/repository");
+      expect(context).toContain("agent'\"'\"'s-data");
+      expect(progress).toContain('const baseUrl = "http://internal-api"');
+      expect(progress).toContain("/internal/tasks/${encodeURIComponent(taskId)}/events");
+      expect((await fs.stat(path.join(tempDir, "agent-progress"))).mode & 0o777).toBe(0o755);
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("runs only NanoCodex-supported models through the native runtime", () => {
     expect(nanoCodexModel("openai/gpt-5.6-sol")).toBe("gpt-5.6-sol");
     expect(nanoCodexModel("openai/gpt-5.6-terra")).toBe("gpt-5.6-terra");

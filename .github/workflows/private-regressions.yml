@@ -1,0 +1,37 @@
+name: Private Production Regressions
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 8 * * *"
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: private-production-regressions
+  cancel-in-progress: false
+
+jobs:
+  evaluate:
+    if: vars.AWS_REGION != '' && vars.EKS_CLUSTER_NAME != ''
+    runs-on: ubuntu-latest
+    env:
+      AWS_REGION: ${{ vars.AWS_REGION }}
+      EKS_CLUSTER_NAME: ${{ vars.EKS_CLUSTER_NAME }}
+      K8S_NAMESPACE: ${{ vars.K8S_NAMESPACE || 'discord-ai-agent' }}
+      HELM_RELEASE: ${{ vars.HELM_RELEASE || 'discord-ai-agent' }}
+    steps:
+      - uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+      - name: Connect to production
+        run: aws eks update-kubeconfig --region "$AWS_REGION" --name "$EKS_CLUSTER_NAME"
+      - name: Export and run private regressions
+        run: |
+          kubectl --namespace "$K8S_NAMESPACE" exec "deployment/$HELM_RELEASE-worker" -- \
+            node dist/scripts/exportRunFeedbackEvals.js
+          kubectl --namespace "$K8S_NAMESPACE" exec "deployment/$HELM_RELEASE-worker" -- \
+            node dist/scripts/eval.js --private-only --safe-summary

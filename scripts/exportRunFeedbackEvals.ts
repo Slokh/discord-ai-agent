@@ -52,6 +52,7 @@ try {
     return [{
       id: `production-${safeId(String(row.run_id))}`,
       category: String(row.failure_mode ?? "production-feedback"),
+      sourceRevision: String(row.app_revision ?? "unknown"),
       prompt,
       notes: privateNotes(row),
       expectedTools,

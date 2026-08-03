@@ -8,6 +8,7 @@ describe("task callback tokens", () => {
     expect(verifyTaskBearerToken({ taskId: "task-a", sandboxRunId: "run-a", secret: "secret", token, now: 2_000 })).toBe(true);
     expect(verifyTaskBearerToken({ taskId: "task-b", sandboxRunId: "run-a", secret: "secret", token, now: 2_000 })).toBe(false);
     expect(verifyTaskBearerToken({ taskId: "task-a", sandboxRunId: "run-b", secret: "secret", token, now: 2_000 })).toBe(false);
+    expect(verifyTaskBearerToken({ taskId: "task-a", sandboxRunId: "run-a", secret: "secret", token, now: 3 * 60 * 60_000 })).toBe(false);
   });
 
   it("rejects forged and stale callback body signatures", () => {
@@ -17,6 +18,7 @@ describe("task callback tokens", () => {
 
     expect(verifyCallbackBodySignature({ secret: "secret", timestamp, rawBody, signature })).toBe(true);
     expect(verifyCallbackBodySignature({ secret: "secret", timestamp, rawBody, signature: "bad" })).toBe(false);
+    expect(verifyCallbackBodySignature({ secret: "secret", timestamp: "1", rawBody, signature: callbackBodySignature({ secret: "secret", timestamp: "1", rawBody }), now: 3 * 60_000 })).toBe(false);
     expect(verifyCallbackBodySignature({ secret: "secret", timestamp: "1", rawBody, signature, now: 20 * 60_000 })).toBe(false);
   });
 });

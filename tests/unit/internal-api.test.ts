@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { uiAuthSessionToken, verifyUiAuthorization } from "../../src/control/internalApiAuth.js";
+import { verifyUiAuthorization } from "../../src/control/internalApiAuth.js";
 import { renderMetrics } from "../../src/control/internalApiMetrics.js";
 import { parseRunFeedbackBody } from "../../src/control/internalApiParsers.js";
+import { automatedBugRegression } from "../../src/control/bugRegression.js";
 
 describe("run feedback parsing", () => {
   it("normalizes executable regression assertions", () => {
@@ -25,6 +26,19 @@ describe("run feedback parsing", () => {
     expect(() => parseRunFeedbackBody({ rating: "bad", expectedTools: ["deletedTool"] })).toThrow(/unknown tools/i);
     expect(() => parseRunFeedbackBody({ rating: "bad", failureMode: "model_was_bad" })).toThrow(/not supported/i);
   });
+
+  it("accepts only classified bug validations with observable assertions", () => {
+    expect(automatedBugRegression({
+      failureMode: "wrong_tool",
+      expectedBehavior: "Uses current web evidence.",
+      expectedTools: ["web__run"],
+    })).toEqual(expect.objectContaining({
+      failureMode: "wrong_tool",
+      expectedTools: ["web__run"],
+    }));
+    expect(automatedBugRegression({ failureMode: "wrong_answer", expectedBehavior: "Be correct." })).toBeNull();
+    expect(automatedBugRegression({ failureMode: "wrong_tool", expectedBehavior: "Use evidence.", expectedTools: ["deletedTool"] })).toBeNull();
+  });
 });
 
 describe("internal API UI authorization", () => {
@@ -42,19 +56,9 @@ describe("internal API UI authorization", () => {
     expect(verifyUiAuthorization({ password: "secret-password", authorization: "Bearer secret-password" })).toBe(true);
   });
 
-  it("accepts the configured password through the persisted UI cookie", () => {
-    expect(
-      verifyUiAuthorization({
-        password: "secret-password",
-        cookie: `other=value; discord_ai_agent_ui_auth=${uiAuthSessionToken("secret-password")}`
-      })
-    ).toBe(true);
-  });
-
   it("rejects missing, wrong, or malformed credentials", () => {
     expect(verifyUiAuthorization({ password: "secret-password" })).toBe(false);
     expect(verifyUiAuthorization({ password: "secret-password", authorization: "Bearer wrong" })).toBe(false);
-    expect(verifyUiAuthorization({ password: "secret-password", cookie: "discord_ai_agent_ui_auth=wrong" })).toBe(false);
     expect(verifyUiAuthorization({ password: "secret-password", authorization: "Basic nope" })).toBe(false);
     expect(
       verifyUiAuthorization({

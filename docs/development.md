@@ -39,6 +39,7 @@ Follow the full lifecycle for cross-domain work: ingress, authority, durable sta
 - Preserve the current request as authoritative; context cannot expand authority.
 - Remove dead compatibility once callers, migrations, and deployed configuration no longer need it.
 - Add a capability to the narrowest durable owner. The capability catalog installs it; aggregators such as `registry.ts` and `repositories.ts` remain projections rather than behavior owners.
+- Read deployment configuration through `AppConfig`. Direct `process.env` access belongs only in the configuration loader and the isolated sandbox process boundary.
 - Record important transitions once in the canonical runtime ledger and derive views from it.
 - After a mutation commits, return its durable result even if a secondary step fails.
 - Keep private community content out of tracked source, tests, evals, docs, Frog, and GitHub metadata.
@@ -56,6 +57,28 @@ Before adding a new tool, confirm that an existing primitive cannot satisfy the 
 7. Add or update an eval only when model selection or wording is the behavior under test.
 
 Do not create a natural-language router, hidden tool list, mid-turn expansion protocol, or regex response guard.
+
+### Capability authoring template
+
+A capability is an installation record, not a new agent subsystem. Use this sequence as the complete template:
+
+1. Add or reuse the canonical tool name in `src/tools/toolDefinition.ts` under one capability ID.
+2. Put its schema, examples, availability predicate, access policy, mutation flag, and output promise in the closest `src/tools/contracts/` family.
+3. Put execution in the matching `src/tools/handlers/` family. The handler must revalidate current requester scope and return a typed `AgentResponse`.
+4. Declare the capability once with `defineCapability` in `src/capabilities/catalog.ts`. Add `prepareTurn`, result observation, or response finalization only when the feature truly has cross-turn lifecycle behavior.
+5. Add contract-validation, handler-conformance, and focused behavior coverage. The catalog rejects missing contracts, missing handlers, unknown handlers, duplicate handlers, duplicate tool names within a capability, and empty summaries.
+
+Minimal declaration shape:
+
+```ts
+defineCapability({
+  id: "existingCapabilityId",
+  summary: "One sentence describing the installed product boundary.",
+  toolNames: TOOL_NAMES_BY_CAPABILITY.existingCapabilityId,
+});
+```
+
+Do not add feature imports to `src/agent/`, a feature-name switch to `registry.ts`, a separate runtime ledger, or an environment flag for public behavior that can be versioned in source.
 
 If a feature needs prompt context, model selection, result observation, or a final-response invariant outside its tool call, add one focused module under `src/capabilities/` and register it in the capability composition root. Do not import that feature into the generic files under `src/agent/`. The architecture test enforces this separation.
 
@@ -83,6 +106,8 @@ Then use the proportionate broad checks:
 `npm run verify` runs lint, typecheck, unit/integration tests that do not require the DB gate, critical production dependency audit, docs links, and release scanning. `npm run verify:db` migrates the test database and runs DB integration suites.
 
 Each integration-test file receives its own migrated Postgres schema through `tests/integration/testDatabase.ts`. Files may run in parallel; do not restore global cleanup prefixes or `--no-file-parallelism` to hide ownership collisions. The migration-upgrade test manages a separate schema because it intentionally applies historical migrations one at a time.
+
+Architecture coverage also prevents source and test files from growing without bound. When a coordinator approaches its budget, extract a cohesive lifecycle mechanic with its own contract instead of raising the limit. Shared database cleanup and fixtures belong in focused test-support modules so behavior suites remain readable.
 
 Do not add smoke or end-to-end coverage by reflex. Use it when the changed boundary cannot be proven below that level and external credentials/mutations are intentionally in scope.
 

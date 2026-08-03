@@ -1,6 +1,10 @@
 import { loadConfig } from "../src/config/env.js";
 import { createPool } from "../src/db/pool.js";
-import { collectRevisionQuality } from "../src/observability/revisionQuality.js";
+import {
+  assessRevisionQuality,
+  collectRevisionQuality,
+  findBaselineRevision,
+} from "../src/observability/revisionQuality.js";
 
 const config = loadConfig();
 const revision = argument("--revision") ?? config.appRevision;
@@ -9,7 +13,19 @@ const pool = createPool(config);
 
 try {
   const quality = await collectRevisionQuality(pool, revision, hours);
-  process.stdout.write(`${JSON.stringify(quality, null, 2)}\n`);
+  const baselineRevision = process.argv.includes("--compare")
+    ? await findBaselineRevision(pool, revision, hours)
+    : null;
+  const baseline = baselineRevision
+    ? await collectRevisionQuality(pool, baselineRevision, hours)
+    : null;
+  const assessment = assessRevisionQuality(quality, baseline);
+  process.stdout.write(`${JSON.stringify({
+    ...quality,
+    assessment,
+    baseline: baseline ? { ...baseline, assessment: assessRevisionQuality(baseline) } : null,
+  }, null, 2)}\n`);
+  if (process.argv.includes("--enforce") && assessment.status === "fail") process.exitCode = 1;
 } finally {
   await pool.end();
 }

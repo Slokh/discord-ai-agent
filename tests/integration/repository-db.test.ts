@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { AgentRuntimeRepository } from "../../src/db/agentRuntimeRepository.js";
 import { DeliveryObligationsRepository } from "../../src/db/deliveryObligationsRepository.js";
@@ -8,6 +8,7 @@ import { createAppDatabase, type DiscordAiAgentRepository } from "../../src/db/r
 import { runDataRetentionOnce } from "../../src/observability/dataRetention.js";
 import { passingRandomCanaryChannel, passingStatsCanaryChannel, passingWebCanaryChannel } from "../../src/observability/postDeployCanaryEvidence.js";
 import { createIsolatedTestDatabase, type IsolatedTestDatabase } from "./testDatabase.js";
+import { cleanupRepositoryTestRows, sha256Hex } from "./repositoryTestSupport.js";
 
 const runDbTests = process.env.DISCORD_AI_AGENT_DB_TESTS === "true";
 
@@ -27,11 +28,11 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
   });
 
   afterEach(async () => {
-    await cleanupTestRows(pool);
+    await cleanupRepositoryTestRows(pool);
   });
 
   afterAll(async () => {
-    await cleanupTestRows(pool);
+    await cleanupRepositoryTestRows(pool);
     await database.cleanup();
   });
 
@@ -456,6 +457,51 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
 
     const result = await pool.query("SELECT user_id FROM privacy_deletions WHERE user_id = $1", [userId]);
     expect(result.rows[0]?.user_id).toBe(userId);
+  });
+
+  it("removes private runtime, feedback, bug, and derived conversation state for a deleted user", async () => {
+    const userId = `user-${randomUUID()}`;
+    const botUserId = `bot-${randomUUID()}`;
+    const guildId = `guild-${randomUUID()}`;
+    const channelId = `channel-${randomUUID()}`;
+    const messageId = `message-${randomUUID()}`;
+    const threadKey = `discord:${guildId}:${channelId}`;
+    const sessionId = `agent-session-${randomUUID()}`;
+    const executionId = `agent-execution-${randomUUID()}`;
+
+    await repo.upsertGuild({ id: guildId, name: "privacy-test" });
+    await repo.upsertChannel({ id: channelId, guildId, name: "privacy", type: 0 });
+    await repo.upsertUser({ id: userId, username: "private-user" });
+    await repo.upsertUser({ id: botUserId, username: "bot", isBot: true });
+    await repo.upsertMessage({
+      id: messageId, guildId, channelId, authorId: botUserId, content: "private-derived-reply",
+      normalizedContent: "private-derived-reply", createdAt: new Date(),
+    });
+    await pool.query("INSERT INTO conversation_sessions(thread_key, guild_id, channel_id) VALUES ($1, $2, $3)", [threadKey, guildId, channelId]);
+    await pool.query(
+      "INSERT INTO conversation_messages(thread_key, role, author_id, author_display_name, content) VALUES ($1, 'user', $2, 'private-user', 'private request')",
+      [threadKey, userId],
+    );
+    await agentRuntimeRepo.upsertSession({
+      sessionId, threadKey, guildId, channelId, userId, requestedBy: userId,
+      request: "private runtime request", status: "succeeded",
+    });
+    await agentRuntimeRepo.createExecution({ executionId, sessionId, status: "succeeded" });
+    await repo.upsertRunFeedback({ runId: executionId, rating: "bad", note: "private feedback", captureEval: true });
+    await repo.createDiscordBugReport({
+      reportId: `bug-${randomUUID()}`, guildId, channelId, sourceMessageId: messageId,
+      sourceSessionId: sessionId, sourceExecutionId: executionId, sourceRevision: "test-revision", reportedByUserId: userId,
+    });
+
+    await repo.requestUserDeletion(userId);
+
+    const [sessions, feedback, conversations, reports] = await Promise.all([
+      pool.query("SELECT count(*)::int AS count FROM agent_runtime_sessions WHERE session_id = $1", [sessionId]),
+      pool.query("SELECT count(*)::int AS count FROM agent_run_feedback WHERE run_id = $1", [executionId]),
+      pool.query("SELECT count(*)::int AS count FROM conversation_sessions WHERE thread_key = $1", [threadKey]),
+      pool.query("SELECT count(*)::int AS count FROM discord_bug_reports WHERE reported_by_user_id = $1", [userId]),
+    ]);
+    expect([sessions, feedback, conversations, reports].map((result) => result.rows[0]?.count)).toEqual([0, 0, 0, 0]);
   });
 
   it("creates and updates Discord delivery obligations", async () => {
@@ -3290,67 +3336,3 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
       .resolves.toEqual({ ok: false, reason: "unavailable" });
   });
 });
-
-async function cleanupTestRows(pool: DbPool) {
-  await pool.query("DELETE FROM guild_agent_settings WHERE guild_id LIKE 'guild-%'");
-  await pool.query("DELETE FROM discord_component_actions WHERE guild_id LIKE 'guild-%' OR channel_id LIKE 'channel-%'");
-  await pool.query("DELETE FROM deployment_announcements WHERE guild_id LIKE 'guild-%'");
-  await pool.query("DELETE FROM agent_run_feedback WHERE run_id LIKE 'run-%'");
-  await pool.query(
-    `
-      DELETE FROM tool_audit_logs
-      WHERE user_id LIKE 'user-%'
-        OR guild_id LIKE 'guild-%'
-        OR channel_id LIKE 'channel-%'
-        OR trace_id LIKE 'trace-%'
-    `
-  );
-  await pool.query(
-    `
-      DELETE FROM trace_events
-      WHERE user_id LIKE 'user-%'
-        OR guild_id LIKE 'guild-%'
-        OR channel_id LIKE 'channel-%'
-        OR trace_id LIKE 'trace-%'
-    `
-  );
-  await pool.query("DELETE FROM discord_delivery_obligations WHERE execution_id LIKE 'agent-execution-%' OR guild_id LIKE 'guild-%' OR channel_id LIKE 'channel-%'");
-  await pool.query(
-    "DELETE FROM agent_runtime_artifact_chunks WHERE artifact_id IN (SELECT artifact_id FROM agent_runtime_artifacts WHERE session_id LIKE 'codegen-session-%' OR session_id LIKE 'agent-session-%' OR execution_id LIKE 'codegen-execution-%' OR execution_id LIKE 'agent-task-execution-%')"
-  );
-  await pool.query(
-    "DELETE FROM agent_runtime_artifacts WHERE session_id LIKE 'codegen-session-%' OR session_id LIKE 'agent-session-%' OR execution_id LIKE 'codegen-execution-%' OR execution_id LIKE 'agent-task-execution-%'"
-  );
-  await pool.query(
-    "DELETE FROM agent_runtime_events WHERE session_id LIKE 'codegen-session-%' OR session_id LIKE 'agent-session-%' OR execution_id LIKE 'codegen-execution-%' OR execution_id LIKE 'agent-task-execution-%'"
-  );
-  await pool.query(
-    "DELETE FROM agent_runtime_executions WHERE execution_id LIKE 'codegen-execution-%' OR execution_id LIKE 'agent-task-execution-%' OR session_id LIKE 'codegen-session-%' OR session_id LIKE 'agent-session-%'"
-  );
-  await pool.query("DELETE FROM agent_runtime_messages WHERE session_id LIKE 'codegen-session-%' OR session_id LIKE 'agent-session-%'");
-  await pool.query("DELETE FROM agent_runtime_sessions WHERE session_id LIKE 'codegen-session-%' OR session_id LIKE 'agent-session-%' OR trace_id LIKE 'trace-%'");
-  await pool.query("DELETE FROM process_runs WHERE run_id LIKE 'run-%' OR trace_id LIKE 'trace-%' OR guild_id LIKE 'guild-%' OR channel_id LIKE 'channel-%'");
-  await pool.query("DELETE FROM skill_changes WHERE skill_name LIKE 'skill-%' OR requester_id LIKE 'user-%'");
-  await pool.query("DELETE FROM skills WHERE name LIKE 'skill-%'");
-  await pool.query("DELETE FROM conversation_snapshots WHERE thread_key LIKE 'discord:guild-%'");
-  await pool.query("DELETE FROM conversation_messages WHERE thread_key LIKE 'discord:guild-%'");
-  await pool.query("DELETE FROM conversation_sessions WHERE guild_id LIKE 'guild-%' OR channel_id LIKE 'channel-%'");
-  await pool.query("DELETE FROM crawl_cursors WHERE guild_id LIKE 'guild-%' OR channel_id LIKE 'channel-%'");
-  await pool.query("DELETE FROM agent_tasks WHERE guild_id LIKE 'guild-%' OR channel_id LIKE 'channel-%' OR task_id LIKE 'task-%'");
-  await pool.query("DELETE FROM server_overlays WHERE guild_id LIKE 'guild-%'");
-  await pool.query("DELETE FROM interaction_blocks WHERE guild_id LIKE 'guild-%' OR user_id LIKE 'user-%'");
-  await pool.query("DELETE FROM user_budget_overrides WHERE guild_id LIKE 'guild-%' OR user_id LIKE 'user-%'");
-  await pool.query("DELETE FROM budget_turn_reservations WHERE guild_id LIKE 'guild-%' OR user_id LIKE 'user-%' OR request_id LIKE 'request-%'");
-  await pool.query("DELETE FROM discord_user_aliases WHERE guild_id LIKE 'guild-%' OR user_id LIKE 'user-%'");
-  await pool.query("DELETE FROM privacy_deletions WHERE user_id LIKE 'user-%'");
-  await pool.query("DELETE FROM attachments WHERE message_id LIKE 'message-%'");
-  await pool.query("DELETE FROM message_embeddings WHERE message_id LIKE 'message-%'");
-  await pool.query("DELETE FROM messages WHERE id LIKE 'message-%' OR guild_id LIKE 'guild-%' OR author_id LIKE 'user-%'");
-  await pool.query("DELETE FROM channels WHERE id LIKE 'channel-%' OR id LIKE 'parent-%' OR id LIKE '%thread-%' OR guild_id LIKE 'guild-%'");
-  await pool.query("DELETE FROM guilds WHERE id LIKE 'guild-%'");
-  await pool.query("DELETE FROM discord_users WHERE id LIKE 'user-%'");
-}
-
-function sha256Hex(value: string) {
-  return createHash("sha256").update(value).digest("hex");
-}

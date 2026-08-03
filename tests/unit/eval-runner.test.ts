@@ -9,6 +9,7 @@ import {
   filterPrompts,
   formatEvalSummary,
   parseEvalArgs,
+  safeEvalSummary,
   validateEvalToolNames,
   type EvalPrompt,
   type EvalRunReport
@@ -43,6 +44,41 @@ describe("eval runner", () => {
         json: true
       })
     );
+  });
+
+  it("can isolate private production regressions from committed evals", () => {
+    expect(parseEvalArgs(["--private-only", "--safe-summary"])).toEqual(
+      expect.objectContaining({
+        dirs: [".discord-ai-agent/evals"],
+        includePrivate: true,
+        safeSummary: true,
+      }),
+    );
+  });
+
+  it("formats private regression output without prompts, answers, or run identifiers", () => {
+    const report: EvalRunReport = {
+      generatedAt: "2026-08-03T00:00:00.000Z",
+      durationMs: 100,
+      totals: { passed: 0, failed: 1, error: 0, skipped: 0, total: 1 },
+      results: [{
+        id: "private-run-id",
+        category: "wrong_tool",
+        sourceRevision: "revision-a",
+        prompt: "private member prompt",
+        status: "failed",
+        durationMs: 100,
+        runId: "run-secret",
+        traceId: "trace-secret",
+        answer: "private answer",
+        evidence: { requestedTools: [], selectedTools: [], auditedTools: [], toolAuditLines: [], traceEventCount: 0, toolAuditCount: 0 },
+        failures: ["private assertion"],
+      }],
+    };
+    const summary = JSON.stringify(safeEvalSummary(report));
+    expect(summary).toContain('"revision":"revision-a"');
+    expect(summary).toContain('"category":"wrong_tool"');
+    expect(summary).not.toMatch(/private member prompt|private answer|run-secret|trace-secret|private assertion/);
   });
 
   it("filters prompts by category and text", () => {

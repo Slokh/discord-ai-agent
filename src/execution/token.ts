@@ -1,7 +1,7 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 
-const DEFAULT_TOKEN_TTL_MS = 24 * 60 * 60 * 1000;
-const DEFAULT_SIGNATURE_SKEW_MS = 10 * 60 * 1000;
+const DEFAULT_TOKEN_TTL_MS = 2 * 60 * 60 * 1000;
+const DEFAULT_SIGNATURE_SKEW_MS = 2 * 60 * 1000;
 
 export function taskBearerToken(input: { taskId: string; sandboxRunId: string; secret: string; issuedAt?: number }) {
   const issuedAt = input.issuedAt ?? Date.now();

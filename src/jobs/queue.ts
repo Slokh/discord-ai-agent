@@ -14,6 +14,8 @@ import { durationMs, logger } from "../util/logger.js";
 import { currentTraceContext, runWithTrace } from "../util/trace.js";
 import { enqueueAgentTaskJob, type AgentTaskEnqueueInput, type AgentTaskEnqueueResult } from "./agentTaskEnqueue.js";
 import { agentTaskRuntimeParentMetadata } from "./agentTaskRuntimeParent.js";
+import { normalizeEmbeddingPriority } from "./embeddingPriority.js";
+import { KeyedSerialQueue } from "./keyedSerialQueue.js";
 
 export const CRAWL_GUILD_JOB = "crawl.guild";
 export const EMBED_MESSAGE_JOB = "embedding.message";
@@ -552,24 +554,6 @@ export async function startJobs(input: {
   return runtime;
 }
 
-export class KeyedSerialQueue {
-  private readonly tails = new Map<string, Promise<void>>();
-
-  async run<T>(key: string, operation: () => Promise<T>): Promise<T> {
-    const previous = this.tails.get(key) ?? Promise.resolve();
-    let release!: () => void;
-    const current = new Promise<void>((resolve) => { release = resolve; });
-    this.tails.set(key, current);
-    await previous.catch(() => undefined);
-    try {
-      return await operation();
-    } finally {
-      release();
-      if (this.tails.get(key) === current) this.tails.delete(key);
-    }
-  }
-}
-
 function defaultAgentTaskBackendName(_config: AppConfig) {
   return "kubernetes-sandbox";
 }
@@ -594,17 +578,6 @@ function formatDurationSeconds(value: number) {
 
 function uniqueStrings(values: Array<string | undefined>): string[] {
   return [...new Set(values.filter((value): value is string => Boolean(value)))];
-}
-
-export function embeddingPriorityForMessageTimestamp(createdTimestamp: number | Date | undefined | null) {
-  const timestampMs = createdTimestamp instanceof Date ? createdTimestamp.getTime() : createdTimestamp;
-  if (timestampMs == null || !Number.isFinite(timestampMs)) return 0;
-  return normalizeEmbeddingPriority(Math.floor(timestampMs / 1000));
-}
-
-function normalizeEmbeddingPriority(priority: number | undefined) {
-  if (priority == null || !Number.isFinite(priority)) return 0;
-  return Math.max(0, Math.min(2_147_483_647, Math.trunc(priority)));
 }
 
 function isTerminalProcessRunStatus(status: string) {

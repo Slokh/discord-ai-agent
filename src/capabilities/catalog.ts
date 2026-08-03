@@ -38,7 +38,15 @@ type CapabilityDeclaration = Omit<InstalledCapability, "tools" | "handlers"> & {
   toolNames: readonly ToolName[];
 };
 
-const declarations: readonly CapabilityDeclaration[] = [
+export function defineCapability(declaration: CapabilityDeclaration): CapabilityDeclaration {
+  if (!declaration.summary.trim()) throw new Error(`Capability ${declaration.id} must have a summary.`);
+  if (new Set(declaration.toolNames).size !== declaration.toolNames.length) {
+    throw new Error(`Capability ${declaration.id} declares duplicate tools.`);
+  }
+  return Object.freeze({ ...declaration, toolNames: Object.freeze([...declaration.toolNames]) });
+}
+
+const declarations: readonly CapabilityDeclaration[] = ([
   {
     id: "foundation",
     summary: "Stable agent instructions and repository skill loading.",
@@ -117,7 +125,7 @@ const declarations: readonly CapabilityDeclaration[] = [
     summary: "Current public-web search, time, and page retrieval through the configured provider.",
     toolNames: TOOL_NAMES_BY_CAPABILITY.externalResearch,
   },
-];
+] satisfies readonly CapabilityDeclaration[]).map(defineCapability);
 
 const handlerFamilies = [
   coreToolHandlers,

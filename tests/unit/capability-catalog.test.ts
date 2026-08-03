@@ -1,8 +1,24 @@
 import { describe, expect, it } from "vitest";
-import { installedCapabilities, installedToolContracts, installedToolHandlers } from "../../src/capabilities/catalog.js";
+import { defineCapability, installedCapabilities, installedToolContracts, installedToolHandlers } from "../../src/capabilities/catalog.js";
 import { TOOL_NAMES, TOOL_NAMES_BY_CAPABILITY } from "../../src/tools/toolDefinition.js";
 
 describe("installed capability catalog", () => {
+  it("provides one validated declaration template for capability authors", () => {
+    expect(() => defineCapability({ id: "foundation", summary: "", toolNames: [] })).toThrow(/must have a summary/i);
+    expect(() => defineCapability({
+      id: "foundation",
+      summary: "Example capability.",
+      toolNames: ["loadSkillContext", "loadSkillContext"],
+    })).toThrow(/duplicate tools/i);
+    const declaration = defineCapability({
+      id: "foundation",
+      summary: "Example capability.",
+      toolNames: ["loadSkillContext"],
+    });
+    expect(Object.isFrozen(declaration)).toBe(true);
+    expect(Object.isFrozen(declaration.toolNames)).toBe(true);
+  });
+
   it("owns every model-facing tool exactly once with its handler", () => {
     const names = installedCapabilities.flatMap((capability) => capability.tools.map((tool) => tool.name));
     expect(names).toEqual(TOOL_NAMES);

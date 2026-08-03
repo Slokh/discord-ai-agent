@@ -16,6 +16,9 @@ import { getStarterTargetUsd as readStarterTargetUsd, getWalletFeeSummary, setSt
 import { activeManagedWallet, checkedAddress, checkedHash, errorMessage, networkExternalId, transactionHashFromError } from "./walletRuntimeHelpers.js";
 import { readPostTransferBalances } from "./postTransferBalances.js";
 import { listExistingUserWalletSummaries, recordBotWalletHealth } from "./walletReadOperations.js";
+import { emitPaymentEvent as emit, SHARED_BOT_GUILD_ID } from "./walletEvents.js";
+
+export { SHARED_BOT_GUILD_ID } from "./walletEvents.js";
 
 type SubmittedWalletTransfer = WalletTransfer & { confirmedBlockNumber?: bigint };
 export class WalletService {
@@ -750,11 +753,4 @@ export class WalletService {
     });
     return this.usdTokenPromise;
   }
-}
-
-export const SHARED_BOT_GUILD_ID = "__shared_bot__";
-
-async function emit(record: PaymentEventRecorder | undefined, event: Parameters<PaymentEventRecorder>[0]): Promise<void> {
-  if (!record) return;
-  await record(event).catch(() => undefined);
 }

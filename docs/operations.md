@@ -79,11 +79,16 @@ npm run runs:inspect -- --list --limit 20
 npm run runs:inspect -- --list --channel <channel-id> --revision <sha> --since <ISO> --triage
 npm run tasks:status
 npm run console:dev:live
+npm run release:status -- --pr <number>
 ```
 
 List filters for kind, status, channel, revision, and start time are applied by the control plane before the result limit. This keeps older matching failures visible even when unrelated recent executions are numerous.
 
 The API role serves authenticated run-console routes and Prometheus metrics. Keep the service private when possible. If public, require HTTPS and `CONTROL_UI_AUTH_PASSWORD`.
+
+`release:status` is the single safe release view. It combines the current PR and checks, Helm release state, role images/readiness/revisions, the matching deployment workflow, and the deployed revision-quality assessment. It exits nonzero for failed checks, deployment failure, role drift, incomplete rollout, or a failed quality gate; unavailable evidence is reported explicitly rather than guessed.
+
+Production configuration rejects a non-HTTPS public console URL and a public URL without a password. Browsers use standard Basic authentication and scripts use a bearer header. Credentials in cookies, `?auth=`, or `?token=` query strings are not accepted, so proxies, browser history, Discord embeds, and access logs do not capture them.
 
 The metrics surface reports runtime event latency/cost/tokens, answer status/latency/cost by model and application revision, tool outcomes, reviewed run ratings and failure modes, delivery recoveries, and code-update backlog/phase timing. These are observable outcomes rather than guesses derived from answer wording; for example, unnecessary refusals are counted only when a reviewer classifies them.
 
@@ -131,6 +136,8 @@ npm run eval:regressions
 
 The export stays under `.discord-ai-agent/evals/` with owner-only file permissions. Cases without an observable assertion remain skipped instead of pretending that a note is an executable test.
 
+Private regression cases carry their source application revision and failure category. The deployment workflow runs them after the capability canary, and a separate scheduled/manual workflow checks the deployed revision daily. CI logs receive only aggregate counts by source revision and category; prompts, answers, run IDs, notes, and full reports stay inside the production worker.
+
 ## Production triage
 
 Use `npm run runs:triage -- --since <ISO timestamp>` to group canonical runtime-ledger failures, warning/error event names, failed or empty tool results, and the slowest successful runs. Add `--revision <sha>`, `--channel <id>`, `--warnings-only`, or `--json` as needed. The report contains run IDs and signal taxonomy, not private prompt text; inspect a selected run separately for retained evidence.
@@ -155,6 +162,10 @@ After Helm completes, deployment verifies each role's image and `APP_REVISION`, 
 Each capability attempt uses a fresh session, and one isolated retry absorbs ordinary model-call variance without retrying a tool inside an attempt. Retrieval passes only with exactly one successful stats result; randomness passes only with exactly one successful `drawRandom` completion and no runtime error event; web passes only with exactly one successful non-empty result plus provider-recorded hosted execution. Completion markers alone are insufficient evidence. A persistently failed boundary fails the rollout instead of treating configured tool metadata as readiness. Build, migration, rollout, readiness, capability verification, and Discord delivery remain distinct stages.
 
 The production-observation workflow samples the deployed revision every six hours and retains a 48-hour aggregate containing answer status/latency by model, typed tool outcomes, warning/error counts, and delivery states. It reads the canonical runtime ledger inside the cluster and publishes only safe counts—never prompts, replies, member identities, or private Discord content. The run console also groups loaded executions by `appRevision`; use `npm run quality:revision -- --revision <sha> --hours 48` for the same safe operator view inside a configured runtime.
+
+The observation compares the deployed revision with the most recently active prior revision. Hard delivery/error evidence fails immediately; rate and latency thresholds enforce only after a useful sample. A failed scheduled run is the operator alert. `rollback_candidate` means the current revision failed while its sufficiently sampled baseline passed; it is evidence to inspect and roll back, not permission for unattended database or release mutation. An under-sampled revision reports `insufficient_data` and remains observable without generating a false incident.
+
+Run the deterministic failure suite with `npm run test:reliability`. It covers same-thread serialization, cross-thread concurrency, Discord rate limits and idempotent final delivery, model timeouts/retries, durable queue handoff, signed sandbox callbacks, and lost-sandbox reconciliation. `npm run verify:db` additionally proves concurrent ledger writes and queued work surviving a producer/worker restart.
 
 ## Kubernetes production
 
@@ -187,6 +198,8 @@ The chart runs migrations as a hook; production application pods never run migra
 ## Sandbox and network posture
 
 The worker service account may create per-task Jobs, Secrets, and ConfigMaps. The sandbox service account has no Kubernetes API access. Sandbox secrets omit Discord and database credentials. Network policy should permit the internal callback API, DNS, and required HTTPS destinations only.
+
+The app and sandbox service accounts disable automatic Kubernetes token mounts; only the trusted worker receives the launcher identity. Sandbox callback bearer tokens are scoped to the task and sandbox-run IDs and expire after two hours. Each exact callback body also carries a two-minute timestamped HMAC, limiting replay while allowing normal clock skew. Terminal callbacks remain idempotent. Generic HTTPS egress excludes loopback, link-local/cloud-metadata, carrier-grade NAT, and RFC1918 ranges; the internal API is allowed separately by pod identity. On Cilium clusters, enable the FQDN policy to narrow public HTTPS to the reviewed host list.
 
 Every code-update task runs in a separate Kubernetes Job. The regular worker owns queue handoff and reconciliation; no dedicated warm worker, persistent cache, or alternate execution backend exists.
 

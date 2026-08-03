@@ -107,6 +107,8 @@ Tracked files contain neutral behavior only. Private data lives in:
 
 Run feedback stores reviewer rating, failure classification, expected behavior, and optional observable assertions. Capture-enabled rows export to `.discord-ai-agent/evals/`; private prompts and requester/channel coordinates never enter tracked fixtures. The feedback table is the durable source, while exported JSON is a disposable local projection used by the eval runner.
 
+Confirmed automated bug validation may attach the same bounded regression contract: one supported failure class, an observable expected behavior, and at least one expected/forbidden tool or required/forbidden answer fragment. The control plane revalidates tool names and bounds before updating the original private feedback row. Cases without a machine-checkable assertion remain human-review candidates instead of becoming misleading automated tests. Revision-quality reports count good/bad classifications by revision without exporting the underlying prompt or note.
+
 ## Migrations and consistency
 
 Add a numbered forward migration for schema or index changes. Keep migrations safe for both a fresh baseline install and upgrade from every supported prior migration. Repository methods that claim idempotency, exactly-once transition, reservation, or queue handoff must enforce it in SQL transactions or constraints, not only in application memory.
@@ -119,7 +121,7 @@ DB integration tests mirror that ownership boundary. Each test file creates, mig
 
 Worker maintenance bounds events, audits, embedding process runs, runtime sessions, and artifacts using the configured retention windows. A value of zero disables the corresponding automatic cleanup. Conversation compaction separately limits raw continuity rows.
 
-Privacy deletion must cover the archive, embeddings, attachment metadata, memory, and derived records owned by that content. Operational ledgers may retain redacted structural evidence when required to explain a transaction or execution, but must not retain deleted private message bodies unnecessarily.
+Privacy deletion covers the archive, embeddings, attachments, emoji-derived state, bug markers/reports, conversation threads and snapshots derived from the requester, agent-runtime sessions/artifacts, run feedback, code-update tasks, and process-run artifacts. Entire affected conversation threads are removed because summaries and assistant/tool turns may derive from the deleted message even when they have another author. Operational payment/randomness evidence may retain redacted structure when required to explain a transaction, but it must not retain deleted private message bodies unnecessarily.
 
 ## Verification
 

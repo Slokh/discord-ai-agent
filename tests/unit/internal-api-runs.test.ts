@@ -26,6 +26,13 @@ describe("internal API run endpoints", () => {
     runtime = undefined;
   });
 
+  it("rejects console passwords in query strings", async () => {
+    runtime = await startInternalApi({ config: testConfig(), repo: fakeRepo() });
+    const response = await fetch(`${runtime.url}/runs?auth=secret`, { redirect: "manual" });
+    expect(response.status).toBe(401);
+    expect(response.headers.get("set-cookie")).toBeNull();
+  });
+
   it("serves run list, detail, events, artifacts, and SSE snapshots", async () => {
     runtime = await startInternalApi({ config: testConfig(), repo: fakeRepo() });
     const auth = { authorization: `Basic ${Buffer.from("admin:secret").toString("base64")}` };

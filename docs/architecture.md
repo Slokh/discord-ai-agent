@@ -32,6 +32,8 @@ Code-change tool call
 
 `src/index.ts` selects process roles and starts adapters. `src/runtime/applicationServices.ts` is the shared composition root for repositories, model access, randomness, payments, and delivery state; production and the local prompt runner consume the same services. `src/config/env.ts` is the canonical configuration schema. `src/jobs/queue.ts` registers recurring and queued work.
 
+Large entry points remain coordinators. Focused mechanics live beside them: keyed serialization and embedding priority under `src/jobs/`, OpenRouter response/error normalization under `src/models/`, sandbox command shims under `src/execution/`, and private bug-regression validation under `src/control/`. Architecture tests enforce source/test size budgets, acyclic imports, the generic-agent boundary, contract/handler direction, and centralized production environment access.
+
 ## Architectural invariants
 
 - NanoCodex is the only agent engine. Chat runs in the application; only repository changes enter a sandbox.
@@ -112,6 +114,7 @@ See [Code updates](code-updates.md) for publication and sandbox details.
 | Code-update execution | `src/execution/backend.ts`, `runnerPipeline.ts`, `repoWorkspace.ts` | sandbox runner, backend, callback, and task tests |
 | Payments and games | `src/payments/`, `src/tools/walletTools.ts`, `randomTools.ts`, `randomWagerTools.ts`, `standardWager*` | focused wallet/RNG tests and DB integration tests |
 | Configuration and startup | `src/config/env.ts`, `src/index.ts`, `.env.example` | config, startup, preflight, and Helm tests |
+| Release evidence | `scripts/releaseStatus.ts`, revision quality, GitHub workflows, Helm/Kubernetes state | release-status, revision-quality, workflow, and post-deploy canary tests |
 
 Entrypoints must not reconstruct application-owned services independently. Add a durable repository or provider once in `src/runtime/applicationServices.ts`, then pass the composed dependency to the role-specific adapter. Test doubles remain local to tests.
 

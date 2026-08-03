@@ -35,7 +35,7 @@ const promptScript = fileURLToPath(new URL("./prompt.js", import.meta.url));
 const prompt = [
   "This is an automated private post-deploy canary.",
   "Use getDiscordStats to count messages in the current channel.",
-  "Use web__run exactly once to find the current UTC date from a reliable public source.",
+  'Use web__run exactly once with {"time":[{"utc_offset":"+00:00"}],"response_length":"short"} to get the current UTC date.',
   "Do not retry either tool; report a failure immediately if a tool fails.",
   "Reply with POST_DEPLOY_CANARY_OK, the numeric message count, and the UTC date.",
   "Do not quote, summarize, or identify any Discord message or member.",

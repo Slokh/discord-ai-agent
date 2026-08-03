@@ -30,6 +30,18 @@ describe("NanoCodex agent runtime executor", () => {
         success: false,
         output: "Tool notRegistered is not available for this request.",
       });
+      await input.onEvent({
+        protocol_version: 1,
+        request_id: "nano-request-1",
+        seq: 7,
+        type: "tool.call",
+        payload: {
+          tool: "exec",
+          call_id: "call-1",
+          arguments: "sensitive arguments are not retained",
+          model_call_index: 1,
+        },
+      });
       return result("hello from NanoCodex");
     });
 
@@ -47,6 +59,14 @@ describe("NanoCodex agent runtime executor", () => {
     }));
     expect(runtime.recordEvent).toHaveBeenCalledWith(expect.objectContaining({
       eventName: "agent.nanocodex.complete",
+    }));
+    expect(runtime.recordEvent).toHaveBeenCalledWith(expect.objectContaining({
+      eventName: "agent.nanocodex.tool.call",
+      summary: "NanoCodex tool.call: exec",
+      metadata: expect.objectContaining({ toolName: "exec", callId: "call-1" }),
+    }));
+    expect(runtime.recordEvent).not.toHaveBeenCalledWith(expect.objectContaining({
+      metadata: expect.objectContaining({ arguments: expect.anything() }),
     }));
   });
 

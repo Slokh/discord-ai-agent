@@ -136,6 +136,7 @@ export async function runNanoCodexRuntime(input: {
     let settled = false;
     let started = false;
     let queue = Promise.resolve();
+    let exit: { code: number | null; signal: NodeJS.Signals | null } | undefined;
 
     const finish = (operation: () => void) => {
       if (settled) return;
@@ -199,17 +200,23 @@ export async function runNanoCodexRuntime(input: {
     });
     lines.once("close", () => {
       void queue.finally(() => {
-        if (!settled) fail(new Error("NanoCodex runtime closed before a terminal message"));
+        if (!settled) {
+          const diagnostic = stderr.join("").trim();
+          fail(new Error([
+            exit
+              ? `NanoCodex runtime exited before completion (code=${exit.code ?? "none"}, signal=${exit.signal ?? "none"})`
+              : "NanoCodex runtime closed before a terminal message",
+            diagnostic ? `stderr: ${diagnostic}` : "",
+          ].filter(Boolean).join("; ")));
+        }
       });
     });
     child.once("error", fail);
     child.once("exit", (code, signal) => {
-      if (settled) return;
-      const diagnostic = stderr.join("").trim();
-      fail(new Error([
-        `NanoCodex runtime exited before completion (code=${code ?? "none"}, signal=${signal ?? "none"})`,
-        diagnostic ? `stderr: ${diagnostic}` : "",
-      ].filter(Boolean).join("; ")));
+      // stdout can still contain the terminal protocol line when the process
+      // exit event fires. Let readline drain and the ordered parser queue
+      // settle before deciding that completion was missing.
+      exit = { code, signal };
     });
   });
 }

@@ -1,7 +1,7 @@
 import type { AgentPromptContribution } from "../agent/capabilityRuntime.js";
 import { atomicToUsd } from "../payments/money.js";
 import type { WagerReservation } from "../payments/types.js";
-import { wagerThreadKeyForContext } from "../tools/randomTools.js";
+import { wagerThreadKeyForContext } from "../tools/randomWagerTools.js";
 import type { ToolName } from "../tools/toolDefinition.js";
 import type { AgentResponse, ToolContext } from "../tools/types.js";
 import { previewText } from "../util/logger.js";

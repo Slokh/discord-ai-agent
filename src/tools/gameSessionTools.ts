@@ -1,5 +1,5 @@
 import { paymentRecorder } from "./paymentToolContext.js";
-import { currentWagerForContext } from "./randomTools.js";
+import { currentWagerForContext } from "./randomWagerTools.js";
 import type { AgentResponse, ToolContext } from "./types.js";
 
 const MAX_STATE_BYTES = 12 * 1024;

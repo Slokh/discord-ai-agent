@@ -60,6 +60,8 @@ Continuation tools resolve the active wager from requester and Discord game-sess
 
 Coin-flip, blackjack, and supported structured rules (`coin_side`, `sum`, `any_match`, and `all_distinct`) are settled by `src/tools/standardWagerSettlement.ts` from the durable reservation contract and verified draw transcript. The model supplies no payout, explanation, claimed winner, or resolution source. Automatic structured wagers are terminal after their attached draw; later unattached draws cannot change the result. `standardWagerRuntime.ts` applies the verified result at the money-moving boundary.
 
+`src/tools/randomTools.ts` owns generic, non-monetary draw execution. `src/tools/randomWagerTools.ts` owns wager lookup, Discord scope, and settlement orchestration. This keeps money lifecycle policy out of the generic randomness adapter while preserving one model-facing `drawRandom` contract.
+
 ## Provable randomness
 
 `src/rng/provable.ts` implements commit/reveal randomness:

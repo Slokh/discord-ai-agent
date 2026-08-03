@@ -73,9 +73,13 @@ describe("release scanner", () => {
     ]);
   });
 
-  it("keeps public owner repository exemptions in one declarative allowlist", async () => {
+  it("keeps public owner repository exemptions in one tracked metadata policy", async () => {
     const source = await import("node:fs/promises").then((fs) => fs.readFile("scripts/scanRelease.ts", "utf8"));
+    const policy = await import("node:fs/promises").then((fs) => fs.readFile("release-public-repositories.json", "utf8"));
     expect(source).toContain("publicOwnerRepositoryPaths");
     expect(source).not.toContain("publicNanocodexForkPath");
+    expect(JSON.parse(policy)).toEqual(expect.objectContaining({
+      publicRepositories: expect.arrayContaining([`${ownerName}/discord-ai-agent`, `${ownerName}/nanocodex`]),
+    }));
   });
 });

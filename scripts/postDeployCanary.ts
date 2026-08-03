@@ -13,7 +13,7 @@ import {
 import { createPool } from "../src/db/pool.js";
 import { resolveGitHubTaskToken } from "../src/execution/githubAuth.js";
 import { parseGitHubRepository } from "../src/github/repository.js";
-import { passingStatsCanaryChannel, passingWebCanaryChannel } from "../src/observability/postDeployCanaryEvidence.js";
+import { passingRandomCanaryChannel, passingStatsCanaryChannel, passingWebCanaryChannel } from "../src/observability/postDeployCanaryEvidence.js";
 import { deploymentToolset } from "../src/tools/toolScope.js";
 import { extractPromptJson } from "./promptJson.js";
 
@@ -51,14 +51,22 @@ const webPrompt = [
   "Reply with POST_DEPLOY_WEB_OK and the UTC date.",
   privacyInstruction,
 ].join(" ");
+const randomPrompt = [
+  "This is an automated private post-deploy canary.",
+  'Use drawRandom exactly once with {"kind":"dice","sides":6,"until":{"values":[1,2,3,4,5,6],"maxDraws":10},"reason":"post-deploy bounded draw"}.',
+  "Do not call any other tool or retry this tool; report a failure immediately if it fails.",
+  "Reply with POST_DEPLOY_RANDOM_OK and the verified result.",
+  privacyInstruction,
+].join(" ");
 const pool = createPool(config);
 const deliveryChannelId = await runConversationCanary(pool).finally(async () => pool.end());
 
 await verifyDiscordDelivery(deliveryChannelId);
-process.stdout.write("Post-deploy canary passed: model, retrieval, hosted web, GitHub, sandbox scheduling, and Discord delivery are operational.\n");
+process.stdout.write("Post-deploy canary passed: model, retrieval, bounded randomness, hosted web, GitHub, sandbox scheduling, and Discord delivery are operational.\n");
 
 async function runConversationCanary(database: ReturnType<typeof createPool>) {
   await runCapabilityCanary(database, statsPrompt, "POST_DEPLOY_STATS_OK", passingStatsCanaryChannel);
+  await runCapabilityCanary(database, randomPrompt, "POST_DEPLOY_RANDOM_OK", passingRandomCanaryChannel);
   return await runCapabilityCanary(database, webPrompt, "POST_DEPLOY_WEB_OK", passingWebCanaryChannel);
 }
 

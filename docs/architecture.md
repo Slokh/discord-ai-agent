@@ -110,7 +110,7 @@ See [Code updates](code-updates.md) for publication and sandbox details.
 | Control plane and console | `src/control/internalApiServer.ts`, `src/control/`, `src/control/console/` | internal API, observability, and console tests |
 | Queue ownership | `src/jobs/queue.ts`, `agentTaskEnqueue.ts` | queue unit tests and `tests/integration/jobs-db.test.ts` |
 | Code-update execution | `src/execution/backend.ts`, `runnerPipeline.ts`, `repoWorkspace.ts` | sandbox runner, backend, callback, and task tests |
-| Payments and games | `src/payments/`, `src/tools/walletTools.ts`, `randomTools.ts`, `standardWager*` | focused wallet/RNG tests and DB integration tests |
+| Payments and games | `src/payments/`, `src/tools/walletTools.ts`, `randomTools.ts`, `randomWagerTools.ts`, `standardWager*` | focused wallet/RNG tests and DB integration tests |
 | Configuration and startup | `src/config/env.ts`, `src/index.ts`, `.env.example` | config, startup, preflight, and Helm tests |
 
 ## Observability

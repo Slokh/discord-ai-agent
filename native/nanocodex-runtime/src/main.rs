@@ -1,6 +1,8 @@
 use std::{
     collections::HashMap,
-    io::{self, BufRead},
+    fs::File,
+    io::{self, BufRead, BufReader},
+    os::fd::FromRawFd,
     sync::{Arc, Mutex as StdMutex},
     thread,
 };
@@ -23,6 +25,7 @@ use tokio::{
 };
 
 const PROTOCOL_VERSION: u32 = 1;
+const PROTOCOL_INPUT_FD: i32 = 3;
 
 #[derive(Debug, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
@@ -203,9 +206,11 @@ async fn run() -> Result<(), RuntimeError> {
     })
     .await?;
 
-    // The application tool bridge must keep consuming stdin while Code Mode is
-    // running. A dedicated reader thread keeps protocol replies independent of
-    // the async executor that is driving the agent and its embedded runtime.
+    // The application bridge owns fd 3. Stdin is deliberately disconnected by
+    // the parent so the embedded runtime and its child processes can never
+    // compete with protocol replies. A dedicated reader thread also keeps the
+    // bridge independent of the async executor driving Code Mode.
+    let protocol_input = unsafe { File::from_raw_fd(PROTOCOL_INPUT_FD) };
     let pending: PendingCalls = Arc::new(StdMutex::new(HashMap::new()));
     let (outbound_sender, outbound_receiver) = mpsc::unbounded_channel();
     let writer = tokio::spawn(write_outbound(outbound_receiver));
@@ -217,6 +222,7 @@ async fn run() -> Result<(), RuntimeError> {
         .name("nanocodex-protocol-input".to_owned())
         .spawn(move || {
             read_protocol_input(
+                BufReader::new(protocol_input),
                 input_pending,
                 input_outbound,
                 run_sender,
@@ -359,24 +365,24 @@ async fn run_agent(
 }
 
 fn read_protocol_input(
+    mut input: impl BufRead,
     pending: PendingCalls,
     outbound: mpsc::UnboundedSender<Value>,
     run_sender: oneshot::Sender<Result<Box<RunRequest>, RuntimeError>>,
     input_error_sender: mpsc::UnboundedSender<RuntimeError>,
 ) {
-    let stdin = io::stdin();
-    let mut lines = stdin.lock().lines();
-    let first = match lines.next() {
-        Some(Ok(line)) => line,
-        Some(Err(error)) => {
-            let _ = run_sender.send(Err(RuntimeError::Read(error)));
-            return;
-        }
-        None => {
+    let mut first = String::new();
+    match input.read_line(&mut first) {
+        Ok(0) => {
             let _ = run_sender.send(Err(RuntimeError::MissingRunRequest));
             return;
         }
-    };
+        Ok(_) => {}
+        Err(error) => {
+            let _ = run_sender.send(Err(RuntimeError::Read(error)));
+            return;
+        }
+    }
     let request = match serde_json::from_str::<InboundMessage>(&first) {
         Ok(InboundMessage::Run(request)) => request,
         Ok(InboundMessage::ToolResult { .. }) => {
@@ -393,7 +399,7 @@ fn read_protocol_input(
         return;
     }
 
-    for line in lines {
+    for line in input.lines() {
         let result = (|| -> Result<(), RuntimeError> {
             match serde_json::from_str::<InboundMessage>(&line?)? {
                 InboundMessage::Run(_) => return Err(RuntimeError::DuplicateRunRequest),

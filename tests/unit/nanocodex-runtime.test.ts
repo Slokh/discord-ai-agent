@@ -9,7 +9,7 @@ import {
 } from "../../src/agent/nanocodexRuntime.js";
 
 class FakeRuntimeProcess extends EventEmitter {
-  readonly stdin = new PassThrough();
+  readonly protocolInput = new PassThrough();
   readonly stdout = new PassThrough();
   readonly stderr = new PassThrough();
   readonly kill = vi.fn(() => true);
@@ -18,8 +18,8 @@ class FakeRuntimeProcess extends EventEmitter {
   constructor() {
     super();
     let buffered = "";
-    this.stdin.setEncoding("utf8");
-    this.stdin.on("data", (chunk) => {
+    this.protocolInput.setEncoding("utf8");
+    this.protocolInput.on("data", (chunk) => {
       buffered += chunk;
       for (;;) {
         const newline = buffered.indexOf("\n");

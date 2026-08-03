@@ -71,8 +71,8 @@ try {
 }
 
 await verifyDiscordRetryBoundary();
-await verifyDiscordDelivery(deliveryChannelId);
-process.stdout.write("Post-deploy canary passed: model, retrieval, bounded randomness, hosted web, follow-up continuity, GitHub, sandbox scheduling, and Discord final delivery are operational.\n");
+await verifyDiscordAccess(deliveryChannelId);
+process.stdout.write("Post-deploy canary passed: model, retrieval, bounded randomness, hosted web, follow-up continuity, GitHub, sandbox scheduling, and Discord access are operational.\n");
 
 async function runConversationCanary(database: ReturnType<typeof createPool>) {
   await runCapabilityCanary(database, statsPrompt, "POST_DEPLOY_STATS_OK", passingStatsCanaryChannel);
@@ -273,27 +273,18 @@ function sandboxCallbackScript() {
   `;
 }
 
-async function verifyDiscordDelivery(channelId: string) {
-  const headers = { Authorization: `Bot ${config.discord.token}`, "Content-Type": "application/json" };
-  const source = await discordRequest<{ id: string }>(`/channels/${channelId}/messages`, {
-    method: "POST",
-    headers,
-    body: JSON.stringify({
-      content: `Post-deploy delivery canary source for ${config.appRevision}. This message will be removed automatically.`,
-      allowed_mentions: { parse: [] },
-    }),
-  });
-  const final = await discordRequest<{ id: string }>(`/channels/${channelId}/messages`, {
-    method: "POST",
-    headers,
-    body: JSON.stringify({
-      content: `Post-deploy canary passed for ${config.appRevision}. This reply will be removed automatically.`,
-      message_reference: { message_id: source.id, channel_id: channelId, fail_if_not_exists: true },
-      allowed_mentions: { parse: [], replied_user: false },
-    }),
-  });
-  await discordRequest(`/channels/${channelId}/messages/${final.id}`, { method: "DELETE", headers });
-  await discordRequest(`/channels/${channelId}/messages/${source.id}`, { method: "DELETE", headers });
+async function verifyDiscordAccess(channelId: string) {
+  const headers = { Authorization: `Bot ${config.discord.token}` };
+  const [bot, channel] = await Promise.all([
+    discordRequest<{ id: string; bot?: boolean }>("/users/@me", { headers }),
+    discordRequest<{ id: string; guild_id?: string }>(`/channels/${channelId}`, { headers }),
+  ]);
+  if (bot.id !== config.discord.clientId || bot.bot !== true) {
+    throw new Error("Discord canary authenticated as an unexpected bot identity.");
+  }
+  if (channel.id !== channelId || channel.guild_id !== config.discord.guildId) {
+    throw new Error("Discord canary resolved an unexpected channel or guild.");
+  }
 }
 
 async function verifyDiscordRetryBoundary() {

@@ -49,6 +49,14 @@ describe("architecture guardrails", () => {
     expect(scheduled).not.toContain("upload-artifact");
   });
 
+  it("keeps the post-deploy canary invisible to Discord members", async () => {
+    const canary = await fs.readFile(path.join(process.cwd(), "scripts/postDeployCanary.ts"), "utf8");
+    expect(canary).toContain('discordRequest<{ id: string; bot?: boolean }>("/users/@me"');
+    expect(canary).toContain('discordRequest<{ id: string; guild_id?: string }>(`/channels/${channelId}`');
+    expect(canary).not.toContain("message_reference");
+    expect(canary).not.toContain("Post-deploy delivery canary source");
+  });
+
   it("keeps consolidated architecture guides present", async () => {
     for (const readme of requiredArchitectureGuides) {
       await expect(

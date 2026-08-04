@@ -1,6 +1,7 @@
 import { assertOpenRouterConfig, loadConfig } from "../src/config/env.js";
 import { runMigrations } from "../src/db/migrate.js";
 import { createPool } from "../src/db/pool.js";
+import { AgentRuntimeRepository } from "../src/db/agentRuntimeRepository.js";
 import { createAppDatabase } from "../src/db/repositories.js";
 import { startJobs } from "../src/jobs/queue.js";
 import { embedStoredMessage, embedStoredMessages } from "../src/memory/embedding.js";
@@ -23,6 +24,7 @@ async function main() {
 
   const pool = createPool(config);
   const repo = createAppDatabase(pool);
+  const agentRuntimeRepo = new AgentRuntimeRepository(pool);
   const openRouter = new OpenRouterClient(config.openRouter);
   const jobs = await startJobs({
     config,
@@ -31,14 +33,15 @@ async function main() {
     },
     embedding: {
       embedMessages: async (messageIds, context) => {
-        return embedStoredMessages({ repo, openRouter, config, messageIds, runId: context?.runId });
+        return embedStoredMessages({ repo, openRouter, config, messageIds, runtime: context?.runtime });
       },
       embedMessage: async (messageId) => {
         await embedStoredMessage({ repo, openRouter, config, messageId });
       }
     },
     crawlWorker: false,
-    embeddingWorker: true
+    embeddingWorker: true,
+    agentRuntimeRepo
   });
 
   const shutdown = async () => {

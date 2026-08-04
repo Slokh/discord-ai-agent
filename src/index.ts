@@ -107,6 +107,7 @@ async function main() {
         client,
         repo,
         config,
+        agentRuntime: agentRuntimeRepo,
         embeddingQueue: {
           enqueueMessageEmbedding: async (messageId, options) => {
             if (!jobRuntimeRef.current) throw new Error("Job runtime is not ready.");
@@ -134,7 +135,7 @@ async function main() {
       : undefined,
     embedding: {
       embedMessages: async (messageIds, context) => {
-        return embedStoredMessages({ repo, openRouter, config, messageIds, runId: context?.runId });
+        return embedStoredMessages({ repo, openRouter, config, messageIds, runtime: context?.runtime });
       },
       embedMessage: async (messageId) => {
         await embedStoredMessage({ repo, openRouter, config, messageId });

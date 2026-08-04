@@ -41,6 +41,9 @@ export type RevisionHealthAssessment = {
     answerFailures: number;
     answerFailureRate: number;
     toolCalls: number;
+    toolAttempts: number;
+    toolRetries: number;
+    recoveredValidationRetries: number;
     toolFailures: number;
     toolFailureRate: number;
     feedback: number;
@@ -95,10 +98,15 @@ export async function collectRevisionQuality(
       [hours, revision],
     ),
     pool.query(
-      `SELECT coalesce(event.metadata->>'toolName', 'unknown') AS tool,
-              coalesce(event.metadata->>'status', 'ok') AS status,
-              count(*)::int AS count
-       FROM agent_runtime_events event
+      `WITH tool_attempts AS (
+         SELECT event.execution_id,
+                coalesce(event.metadata->>'toolName', 'unknown') AS tool,
+                coalesce(event.metadata->>'status', 'ok') AS status,
+                row_number() OVER (PARTITION BY event.execution_id, event.metadata->>'toolName' ORDER BY event.sequence DESC) AS terminal_rank,
+                count(*) OVER (PARTITION BY event.execution_id, event.metadata->>'toolName') AS attempt_count,
+                count(*) FILTER (WHERE event.metadata->>'errorCode' = 'invalid_tool_arguments')
+                  OVER (PARTITION BY event.execution_id, event.metadata->>'toolName') AS validation_retry_count
+         FROM agent_runtime_events event
        JOIN agent_runtime_executions execution ON execution.execution_id = event.execution_id
        JOIN agent_runtime_sessions session ON session.session_id = execution.session_id
        WHERE event.created_at >= now() - ($1::text || ' hours')::interval
@@ -107,8 +115,15 @@ export async function collectRevisionQuality(
          AND execution.harness = 'nanocodex'
          AND ${MEMBER_COHORT_SQL}
          AND coalesce(nullif(execution.metadata->>'appRevision', ''), nullif(session.metadata->>'appRevision', ''), 'unknown') = $2
-       GROUP BY 1, 2
-       ORDER BY 1, 2`,
+       )
+       SELECT tool, status, count(*)::int AS count,
+              sum(attempt_count)::int AS attempt_count,
+              sum(greatest(attempt_count - 1, 0))::int AS retry_count,
+              sum(CASE WHEN status IN ('ok', 'succeeded', 'success', 'reused') THEN validation_retry_count ELSE 0 END)::int AS recovered_validation_retry_count
+       FROM tool_attempts
+       WHERE terminal_rank = 1
+       GROUP BY tool, status
+       ORDER BY tool, status`,
       [hours, revision],
     ),
     pool.query(
@@ -258,7 +273,10 @@ function qualityMetrics(quality: RevisionQuality): RevisionHealthAssessment["met
   const answers = total(quality.answers);
   const answerFailures = total(quality.answers, (row) => ["failed", "cancelled", "timed_out"].includes(String(row.status)));
   const toolCalls = total(quality.tools);
-  const toolFailures = total(quality.tools, (row) => !["ok", "succeeded", "success"].includes(String(row.status)));
+  const toolAttempts = totalField(quality.tools, "attempt_count", "count");
+  const toolRetries = totalField(quality.tools, "retry_count");
+  const recoveredValidationRetries = totalField(quality.tools, "recovered_validation_retry_count");
+  const toolFailures = total(quality.tools, (row) => !["ok", "succeeded", "success", "reused"].includes(String(row.status)));
   const feedback = total(quality.feedback);
   const badFeedback = total(quality.feedback, (row) => String(row.rating) === "bad");
   return {
@@ -266,6 +284,9 @@ function qualityMetrics(quality: RevisionQuality): RevisionHealthAssessment["met
     answerFailures,
     answerFailureRate: rate(answerFailures, answers),
     toolCalls,
+    toolAttempts,
+    toolRetries,
+    recoveredValidationRetries,
     toolFailures,
     toolFailureRate: rate(toolFailures, toolCalls),
     feedback,
@@ -276,6 +297,10 @@ function qualityMetrics(quality: RevisionQuality): RevisionHealthAssessment["met
     abandonedDeliveries: total(quality.deliveries, (row) => String(row.state) === "abandoned"),
     errorSignals: total(quality.signals, (row) => String(row.level) === "error"),
   };
+}
+
+function totalField(rows: Record<string, unknown>[], field: string, fallback?: string) {
+  return rows.reduce((sum, row) => sum + numeric(row[field] ?? (fallback ? row[fallback] : 0)), 0);
 }
 
 function total(rows: Record<string, unknown>[], include: (row: Record<string, unknown>) => boolean = () => true) {

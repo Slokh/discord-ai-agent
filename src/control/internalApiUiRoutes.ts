@@ -53,6 +53,12 @@ export async function handleInternalUiRoute(
     return true;
   }
 
+  if (method === "GET" && url.pathname === "/friction") {
+    if (!authorizedUi(input.config, input.request, input.response, url)) return true;
+    sendHtml(input.response, 200, await renderRunConsolePage());
+    return true;
+  }
+
   const runPageMatch = url.pathname.match(/^\/runs\/([^/]+)$/);
   if (method === "GET" && runPageMatch) {
     if (!authorizedUi(input.config, input.request, input.response, url)) return true;

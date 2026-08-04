@@ -8,67 +8,47 @@ export const externalResearchToolContracts = [
       "@ai read https://example.com and summarize the relevant section",
     ],
     description:
-      "Research current or external public information with hosted web search and page fetching. Use this for changing facts, unfamiliar topics, source-backed answers, or public URLs. Do not call it for a Discord-context follow-up already answered by exact Discord or deployment evidence. Submit one or more concrete typed web operations; after a grounded result answers the question, stop instead of reopening equivalent URLs.",
+      "Research current or external public information with hosted web search, page fetching, or current time. Use this for changing facts, unfamiliar topics, source-backed answers, or public URLs. Submit an operations array such as [{kind:'search',query:'current release notes'}], [{kind:'open',refId:'https://example.com'}], or [{kind:'time',utcOffset:'+00:00'}]. After a grounded result answers the question, stop.",
     mutates: false,
     group: "external",
     category: "external",
     toolClass: "external",
     outputContract: ["research question", "current grounded findings", "source URLs when available", "explicit provider limitation on failure"],
+    argumentExamples: [
+      { operations: [{ kind: "search", query: "current official release notes" }] },
+      { operations: [{ kind: "open", refId: "https://example.com" }] },
+      { operations: [{ kind: "time", utcOffset: "+00:00" }] },
+    ],
     parameters: {
       type: "object",
       properties: {
-        search_query: {
+        operations: {
           type: "array",
           minItems: 1,
-          maxItems: 4,
+          maxItems: 8,
           items: {
             type: "object",
             properties: {
-              q: { type: "string", minLength: 1, pattern: "\\S" },
+              kind: { type: "string", enum: ["search", "open", "time"] },
+              query: { type: "string", minLength: 1, pattern: "\\S" },
               recency: { type: "number", minimum: 1 },
               domains: { type: "array", items: { type: "string", minLength: 1 }, maxItems: 10 },
-            },
-            required: ["q"],
-            additionalProperties: false,
-          },
-          description: "Public web searches to run.",
-        },
-        open: {
-          type: "array",
-          items: {
-            type: "object",
-            properties: {
-              ref_id: { type: "string", minLength: 1 },
+              refId: { type: "string", minLength: 1 },
               lineno: { type: "number", minimum: 0 },
+              utcOffset: { type: "string", pattern: "^[+-](?:0\\d|1\\d|2[0-3]):[0-5]\\d$" },
             },
-            required: ["ref_id"],
+            required: ["kind"],
             additionalProperties: false,
+            allOf: [
+              { if: { properties: { kind: { const: "search" } } }, then: { required: ["query"] } },
+              { if: { properties: { kind: { const: "open" } } }, then: { required: ["refId"] } },
+              { if: { properties: { kind: { const: "time" } } }, then: { required: ["utcOffset"] } },
+            ],
           },
-          maxItems: 8,
-          description: "Public URLs or prior search result references to open.",
-        },
-        time: {
-          type: "array",
-          items: {
-            type: "object",
-            properties: { utc_offset: { type: "string", pattern: "^[+-](?:0\\d|1\\d|2[0-3]):[0-5]\\d$" } },
-            required: ["utc_offset"],
-            additionalProperties: false,
-          },
-          maxItems: 8,
-          description: "UTC offsets whose current date and time should be retrieved.",
-        },
-        response_length: {
-          type: "string",
-          enum: ["short", "medium", "long"],
-          description: "Requested research-result detail. Defaults to short.",
+          description: "Concrete public-web operations. Each operation has one kind and the matching fields.",
         },
       },
-      anyOf: [
-        { required: ["search_query"] },
-        { required: ["open"] },
-        { required: ["time"] },
-      ],
+      required: ["operations"],
       additionalProperties: false,
     },
   }),

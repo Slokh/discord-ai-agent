@@ -5,8 +5,8 @@ import type { LocalToolHandler } from "./types.js";
 
 export const externalResearchToolHandlers = {
   web__run: async (ctx, route, _originalText) => {
-    const operations = route.arguments ?? {};
-    const commands = JSON.stringify(operations);
+    const operations = Array.isArray(route.arguments?.operations) ? route.arguments.operations : [];
+    const commands = JSON.stringify(toHostedOperations(operations));
     const hostedTools = hostedToolsForOperations(operations);
     let response;
     try {
@@ -34,7 +34,7 @@ export const externalResearchToolHandlers = {
           reasoningEffort: "none",
           retryPolicy: "cheap",
         },
-        metadata: { operationNames: Object.keys(operations).sort() },
+        metadata: { operationNames: operationKinds(operations) },
       });
     } catch {
       return evidenceFailure("Hosted web research failed before returning current external evidence.");
@@ -55,12 +55,40 @@ export const externalResearchToolHandlers = {
   },
 } satisfies Partial<Record<ToolName, LocalToolHandler>>;
 
-function hostedToolsForOperations(operations: Record<string, unknown>) {
+function hostedToolsForOperations(operations: unknown[]) {
   const requestedTypes = new Set<string>();
-  if (operations.search_query != null) requestedTypes.add("openrouter:web_search");
-  if (operations.open != null) requestedTypes.add("openrouter:web_fetch");
-  if (operations.time != null) requestedTypes.add("openrouter:datetime");
+  for (const operation of operations) {
+    const kind = objectValue(operation).kind;
+    if (kind === "search") requestedTypes.add("openrouter:web_search");
+    if (kind === "open") requestedTypes.add("openrouter:web_fetch");
+    if (kind === "time") requestedTypes.add("openrouter:datetime");
+  }
   return openRouterServerToolDefinitionsForModel().filter((tool) => requestedTypes.has(tool.type));
+}
+
+function toHostedOperations(operations: unknown[]) {
+  const search_query: Record<string, unknown>[] = [];
+  const open: Record<string, unknown>[] = [];
+  const time: Record<string, unknown>[] = [];
+  for (const value of operations) {
+    const operation = objectValue(value);
+    if (operation.kind === "search") search_query.push(compact({ q: operation.query, recency: operation.recency, domains: operation.domains }));
+    if (operation.kind === "open") open.push(compact({ ref_id: operation.refId, lineno: operation.lineno }));
+    if (operation.kind === "time") time.push({ utc_offset: operation.utcOffset });
+  }
+  return compact({ search_query: search_query.length ? search_query : undefined, open: open.length ? open : undefined, time: time.length ? time : undefined });
+}
+
+function operationKinds(operations: unknown[]) {
+  return [...new Set(operations.map((value) => String(objectValue(value).kind ?? "unknown")))].sort();
+}
+
+function objectValue(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
+}
+
+function compact(value: Record<string, unknown>) {
+  return Object.fromEntries(Object.entries(value).filter(([, item]) => item !== undefined));
 }
 
 function uniqueSourceUrls(urls: string[]) {

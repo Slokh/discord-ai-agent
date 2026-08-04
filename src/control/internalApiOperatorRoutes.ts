@@ -7,6 +7,19 @@ import { parseBoolean, parseLimit, parseStaleAfterMs } from "./internalApiParser
 import type { InternalApiInput } from "./internalApiTypes.js";
 
 export async function handleInternalOperatorRoute(input: InternalApiInput, method: string, url: URL): Promise<boolean> {
+  if (method === "GET" && url.pathname === "/api/friction") {
+    if (!authorizedUi(input.config, input.request, input.response, url)) return true;
+    const records = await input.repo.listAgentFriction({ limit: parseLimit(url.searchParams.get("limit"), 100, 100) });
+    const items = records.map(({ body: _body, sessionId: _sessionId, title: _title, ...record }) => record);
+    const counts = (field: "category" | "severity") => Object.entries(items.reduce<Record<string, number>>((result, item) => {
+      const key = item[field];
+      result[key] = (result[key] ?? 0) + item.occurrences;
+      return result;
+    }, {})).map(([name, count]) => ({ name, count }));
+    sendJson(input.response, 200, { generatedAt: new Date().toISOString(), items, byCategory: counts("category"), bySeverity: counts("severity") });
+    return true;
+  }
+
   if (method === "GET" && url.pathname === "/api/runs") {
     if (!authorizedUi(input.config, input.request, input.response, url)) return true;
     const sinceRaw = url.searchParams.get("since");

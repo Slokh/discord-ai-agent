@@ -11,7 +11,7 @@ describe("collectRevisionQuality", () => {
   it("returns content-free aggregates and reads delivery state", async () => {
     const query = vi.fn()
       .mockResolvedValueOnce({ rows: [{ model: "test/model", status: "succeeded", count: 2, p95_ms: 50 }] })
-      .mockResolvedValueOnce({ rows: [{ tool: "web__run", status: "ok", count: 1 }] })
+      .mockResolvedValueOnce({ rows: [{ tool: "web__run", status: "ok", count: 1, attempt_count: 4, retry_count: 3, recovered_validation_retry_count: 3 }] })
       .mockResolvedValueOnce({ rows: [{ level: "warn", count: 1 }] })
       .mockResolvedValueOnce({ rows: [{ state: "delivered", count: 2 }] })
       .mockResolvedValueOnce({ rows: [{ rating: "good", failure_mode: "unclassified", count: 1 }] });
@@ -23,7 +23,7 @@ describe("collectRevisionQuality", () => {
       revision: "revision-1",
       windowHours: 48,
       answers: [{ model: "test/model", status: "succeeded", count: 2, p95_ms: 50 }],
-      tools: [{ tool: "web__run", status: "ok", count: 1 }],
+      tools: [{ tool: "web__run", status: "ok", count: 1, attempt_count: 4, retry_count: 3, recovered_validation_retry_count: 3 }],
       signals: [{ level: "warn", count: 1 }],
       deliveries: [{ state: "delivered", count: 2 }],
       feedback: [{ rating: "good", failure_mode: "unclassified", count: 1 }],
@@ -87,6 +87,14 @@ describe("assessRevisionQuality", () => {
     }));
     expect(assessment.status).toBe("fail");
     expect(assessment.violations).toContain("bad feedback per answer 30.0% exceeds 20.0%");
+  });
+
+  it("separates recovered validation retries from terminal capability failures", () => {
+    const assessment = assessRevisionQuality(quality({ succeeded: 10 }, {
+      tools: [{ tool: "web__run", status: "ok", count: 1, attempt_count: 4, retry_count: 3, recovered_validation_retry_count: 3 }],
+    }));
+    expect(assessment.metrics).toMatchObject({ toolCalls: 1, toolAttempts: 4, toolRetries: 3, recoveredValidationRetries: 3, toolFailures: 0 });
+    expect(assessment.violations).not.toEqual(expect.arrayContaining([expect.stringContaining("tool failure rate")]));
   });
 });
 

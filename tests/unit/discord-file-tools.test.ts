@@ -196,6 +196,31 @@ describe("inspectDiscordFile", () => {
     expect(JSON.stringify(recordTraceEvent.mock.calls)).not.toContain("release validation");
   });
 
+  it("reads an in-scope public X article preview instead of treating it as a missing video", async () => {
+    const publicMediaUrl = "https://x.com/example/status/42";
+    const transcribeAudio = vi.fn();
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({
+      article: { title: "A public article", preview_text: "The article preview contains the first useful point." }
+    }), { headers: { "content-type": "application/json" } }));
+    vi.stubGlobal("fetch", fetchMock);
+    const ctx = {
+      repo: { auditTool: vi.fn(async () => undefined), recordTraceEvent: vi.fn(async () => undefined) },
+      openRouter: { transcribeAudio },
+      guildId: "guild",
+      channelId: "channel",
+      userId: "user",
+      requestText: `summarize ${publicMediaUrl}`
+    } as unknown as ToolContext;
+
+    const result = await inspectDiscordFile(ctx, { publicMediaUrl });
+
+    expect(result).toContain("Public X article preview");
+    expect(result).toContain("A public article");
+    expect(result).toContain("first useful point");
+    expect(result).not.toContain("did not expose a public MP4 video");
+    expect(transcribeAudio).not.toHaveBeenCalled();
+  });
+
   it("rejects a public media URL that is outside the current request and reply chain", async () => {
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);

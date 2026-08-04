@@ -8,12 +8,22 @@ export type XStatusVideoReference = {
 };
 
 export type ResolvedPublicMedia = {
+  kind: "video";
   data: Buffer;
   contentType: "video/mp4";
   format: "mp4";
   provider: "x";
   bytes: number;
 };
+
+export type ResolvedPublicXArticle = {
+  kind: "article";
+  provider: "x";
+  title: string;
+  previewText: string;
+};
+
+export type ResolvedPublicXContent = ResolvedPublicMedia | ResolvedPublicXArticle;
 
 export function parseXStatusVideoUrl(value: string): XStatusVideoReference | null {
   let url: URL;
@@ -57,12 +67,18 @@ export function singlePublicXVideoUrlInRequestScope(
   return byReference.size === 1 ? [...byReference.values()][0] : null;
 }
 
-export async function resolvePublicXVideo(
+/**
+ * Resolves the public content attached to an X status.  X Articles are exposed
+ * by the same syndication response as videos, but have text instead of an MP4
+ * variant.  Keep the article preview separate from media bytes so callers do
+ * not report an article as a failed video.
+ */
+export async function resolvePublicXContent(
   value: string,
   signal?: AbortSignal,
-): Promise<ResolvedPublicMedia> {
+): Promise<ResolvedPublicXContent> {
   const reference = parseXStatusVideoUrl(value);
-  if (!reference) throw new Error("only public X/Twitter status video URLs are supported");
+  if (!reference) throw new Error("only public X/Twitter status URLs are supported");
   const token = xSyndicationToken(reference.statusId);
   const metadataUrl = new URL("https://cdn.syndication.twimg.com/tweet-result");
   metadataUrl.searchParams.set("id", reference.statusId);
@@ -82,6 +98,16 @@ export async function resolvePublicXVideo(
   } catch {
     throw new Error("X public metadata was not valid JSON");
   }
+  const article = extractXArticle(metadata);
+  if (article) return article;
+  return resolveXVideoFromMetadata(metadata, reference, signal);
+}
+
+async function resolveXVideoFromMetadata(
+  metadata: unknown,
+  reference: XStatusVideoReference,
+  signal?: AbortSignal,
+): Promise<ResolvedPublicMedia> {
   const mediaUrl = selectXMp4Variant(metadata, reference.videoIndex);
   const mediaResponse = await boundedFetch(mediaUrl, PUBLIC_MEDIA_MAX_BYTES, signal);
   if (!mediaResponse.response.ok) {
@@ -92,6 +118,7 @@ export async function resolvePublicXVideo(
     throw new Error("X public video returned an unexpected content type");
   }
   return {
+    kind: "video",
     data: mediaResponse.data,
     contentType: "video/mp4",
     format: "mp4",
@@ -146,6 +173,13 @@ function selectXMp4Variant(metadata: unknown, requestedVideoIndex: number): URL 
     throw new Error("X public metadata returned a video on an unapproved host");
   }
   return url;
+}
+
+function extractXArticle(metadata: unknown): ResolvedPublicXArticle | null {
+  const article = asRecord(asRecord(metadata)?.article);
+  const title = typeof article?.title === "string" ? article.title.trim() : "";
+  const previewText = typeof article?.preview_text === "string" ? article.preview_text.trim() : "";
+  return title && previewText ? { kind: "article", provider: "x", title, previewText } : null;
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {

@@ -127,7 +127,7 @@ export const discordContextFileToolContracts = [
   defineTool({
     name: "inspectDiscordFile",
     description:
-      "Download and inspect permission-visible Discord file attachments from the current request, reply chain, or an explicit Discord message link/ID. It can also resolve and transcribe a public X/Twitter status video URL that appears in the current request or reply chain; pass that exact URL as publicMediaUrl. Use this for requests to read, open, parse, identify, summarize, compare, inspect, or transcribe files and media. It fetches fresh bounded media, detects real formats, transcribes common audio/video attachments including QuickTime MOV, and deduplicates identical extracted content across a bounded batch. Supports text/code/config/JSON/CSV/XML, safe ZIP listings, DOCX/PPTX/XLSX text, audio/video transcription, image identification, generic binary metadata/strings, iRacing .sto opaque-container metadata plus structured notes, and exact iRacing setup values from simulator Garage HTML exports or SDK .ibt telemetry containing CarSetup data. Multiple Discord files are inspected together by default when safely bounded; use batchMode=list or attachmentIdOrName to narrow them. Never claim scoped files or supported public media are inaccessible before trying this tool; if none is supplied, ask for the media.",
+      "Download and inspect permission-visible Discord file attachments from the current request, reply chain, or an explicit Discord message link/ID. It can also resolve a public X/Twitter status URL that appears in the current request or reply chain; pass that exact URL as publicMediaUrl. It transcribes public X videos and reads the public preview exposed for X Articles. Use this for requests to read, open, parse, identify, summarize, compare, inspect, or transcribe files and media. It fetches fresh bounded media, detects real formats, transcribes common audio/video attachments including QuickTime MOV, and deduplicates identical extracted content across a bounded batch. Supports text/code/config/JSON/CSV/XML, safe ZIP listings, DOCX/PPTX/XLSX text, audio/video transcription, image identification, generic binary metadata/strings, iRacing .sto opaque-container metadata plus structured notes, and exact iRacing setup values from simulator Garage HTML exports or SDK .ibt telemetry containing CarSetup data. Multiple Discord files are inspected together by default when safely bounded; use batchMode=list or attachmentIdOrName to narrow them. Never claim scoped files or supported public media are inaccessible before trying this tool; if none is supplied, ask for the media.",
     mutates: false,
     group: "discord-retrieval",
     category: "discord",
@@ -137,7 +137,7 @@ export const discordContextFileToolContracts = [
       "detected file type, parser, size, and SHA-256",
       "bounded extracted content labeled as untrusted data",
       "bounded audio/video transcript labeled as untrusted data when media is supplied",
-      "bounded public X/Twitter video transcript when its status URL is present in current request scope",
+      "bounded public X/Twitter video transcript or article preview when its status URL is present in current request scope",
       "explicit parser limitations or safe failure reason"
     ],
     examples: [
@@ -162,7 +162,7 @@ export const discordContextFileToolContracts = [
         },
         publicMediaUrl: {
           type: "string",
-          description: "Optional public X/Twitter status video URL copied from the current request or Discord reply chain. The tool rejects URLs outside current requester scope."
+          description: "Optional public X/Twitter status URL copied from the current request or Discord reply chain. The tool transcribes videos and reads article previews, and rejects URLs outside current requester scope."
         },
         question: {
           type: "string",

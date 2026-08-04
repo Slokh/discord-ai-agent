@@ -45,13 +45,11 @@ describe("sandbox callback server", () => {
     expect(response.status).toBe(401);
   });
 
-  it("persists terminal task state but rejects unrecognized automated regression tools", async () => {
+  it("moves linked improvement work to verification after task success", async () => {
     const repo = {
-      getAgentTask: vi.fn(async () => ({ status: "running", taskType: "bug_report" })),
-      getDiscordBugReportForTask: vi.fn(async () => ({ sourceExecutionId: "source-run" })),
+      getAgentTask: vi.fn(async () => ({ status: "running", taskType: "code_update" })),
       markAgentTaskSucceeded: vi.fn(async () => undefined),
-      completeDiscordBugReportForTask: vi.fn(async () => undefined),
-      upsertRunFeedback: vi.fn(async () => undefined),
+      completeImprovementWorkForTask: vi.fn(async () => undefined),
     };
     runtime = await startSandboxCallbackServer({ config: testConfig(), repo: repo as never, agentRuntime: {} as never });
 
@@ -59,51 +57,30 @@ describe("sandbox callback server", () => {
       status: "succeeded",
       branchName: "kartik/fix",
       prUrl: "https://github.com/example/repo/pull/1",
-      metadata: {
-        sandboxRunId: "sandbox-1",
-        bugReportDisposition: "confirmed_fixed",
-        bugReportRegression: {
-          failureMode: "wrong_tool",
-          expectedBehavior: "Uses current evidence.",
-          expectedTools: ["deletedTool"],
-        },
-      },
+      metadata: { sandboxRunId: "sandbox-1" },
     });
 
     expect(response.status).toBe(200);
     expect(repo.markAgentTaskSucceeded).toHaveBeenCalledWith(expect.objectContaining({ taskId: "task-1" }));
-    expect(repo.completeDiscordBugReportForTask).toHaveBeenCalledWith(expect.objectContaining({
-      taskId: "task-1",
-      disposition: "confirmed_fixed",
-    }));
-    expect(repo.upsertRunFeedback).not.toHaveBeenCalled();
+    expect(repo.completeImprovementWorkForTask).toHaveBeenCalledWith(expect.objectContaining({ taskId: "task-1", succeeded: true }));
   });
 
-  it("does not label the source run bad when triage finds expected behavior", async () => {
+  it("returns linked improvement work to actionable after task failure", async () => {
     const repo = {
-      getAgentTask: vi.fn(async () => ({ status: "running", taskType: "bug_report" })),
-      getDiscordBugReportForTask: vi.fn(async () => ({ sourceExecutionId: "source-run" })),
+      getAgentTask: vi.fn(async () => ({ status: "running", taskType: "code_update" })),
       markAgentTaskFailed: vi.fn(async () => undefined),
-      completeDiscordBugReportForTask: vi.fn(async () => undefined),
-      upsertRunFeedback: vi.fn(async () => undefined),
+      completeImprovementWorkForTask: vi.fn(async () => undefined),
     };
     runtime = await startSandboxCallbackServer({ config: testConfig(), repo: repo as never, agentRuntime: {} as never });
 
     const response = await signedPost(runtime.url, "task-1", "sandbox-1", "/internal/tasks/task-1/complete", {
       status: "no_changes",
-      error: "This matches the intended behavior.",
-      metadata: {
-        sandboxRunId: "sandbox-1",
-        bugReportDisposition: "expected_behavior",
-        bugReportSummary: "This matches the intended behavior.",
-      },
+      error: "No safe diff was produced.",
+      metadata: { sandboxRunId: "sandbox-1" },
     });
 
     expect(response.status).toBe(200);
-    expect(repo.completeDiscordBugReportForTask).toHaveBeenCalledWith(expect.objectContaining({
-      disposition: "expected_behavior",
-    }));
-    expect(repo.upsertRunFeedback).not.toHaveBeenCalled();
+    expect(repo.completeImprovementWorkForTask).toHaveBeenCalledWith(expect.objectContaining({ taskId: "task-1", succeeded: false }));
   });
 
   it("stores sandbox artifacts on the task-linked runtime execution", async () => {

@@ -10,7 +10,7 @@ export type RevisionQuality = {
   tools: Record<string, unknown>[];
   signals: Record<string, unknown>[];
   deliveries: Record<string, unknown>[];
-  feedback: Record<string, unknown>[];
+  improvements: Record<string, unknown>[];
 };
 
 export type RevisionHealthPolicy = {
@@ -18,7 +18,7 @@ export type RevisionHealthPolicy = {
   minimumToolCalls: number;
   maxAnswerFailureRate: number;
   maxToolFailureRate: number;
-  maxBadFeedbackRate: number;
+  maxImprovementSignalRate: number;
   maxP95Ms: number;
   maxPendingDeliveries: number;
   maxAbandonedDeliveries: number;
@@ -46,9 +46,8 @@ export type RevisionHealthAssessment = {
     recoveredValidationRetries: number;
     toolFailures: number;
     toolFailureRate: number;
-    feedback: number;
-    badFeedback: number;
-    badFeedbackRate: number;
+    improvementSignals: number;
+    improvementSignalRate: number;
     p95Ms: number;
     pendingDeliveries: number;
     abandonedDeliveries: number;
@@ -63,7 +62,7 @@ export const defaultRevisionHealthPolicy: RevisionHealthPolicy = Object.freeze({
   minimumToolCalls: 5,
   maxAnswerFailureRate: 0.1,
   maxToolFailureRate: 0.15,
-  maxBadFeedbackRate: 0.2,
+  maxImprovementSignalRate: 0.2,
   maxP95Ms: 120_000,
   maxPendingDeliveries: 0,
   maxAbandonedDeliveries: 0,
@@ -78,7 +77,7 @@ export async function collectRevisionQuality(
   revision: string,
   hours: number,
 ): Promise<RevisionQuality> {
-  const [answers, tools, signals, deliveries, feedback] = await Promise.all([
+  const [answers, tools, signals, deliveries, improvements] = await Promise.all([
     pool.query(
       `SELECT coalesce(nullif(execution.model, ''), 'unknown') AS model,
               execution.status,
@@ -157,19 +156,14 @@ export async function collectRevisionQuality(
       [hours, revision],
     ),
     pool.query(
-      `SELECT feedback.rating,
-              coalesce(feedback.failure_mode, 'unclassified') AS failure_mode,
-              count(*)::int AS count
-       FROM agent_run_feedback feedback
-       JOIN agent_runtime_executions execution ON execution.execution_id = feedback.run_id
-       JOIN agent_runtime_sessions session ON session.session_id = execution.session_id
-       WHERE feedback.updated_at >= now() - ($1::text || ' hours')::interval
-         AND execution.task_id IS NULL
-         AND execution.harness = 'nanocodex'
-         AND ${MEMBER_COHORT_SQL}
-         AND coalesce(nullif(execution.metadata->>'appRevision', ''), nullif(session.metadata->>'appRevision', ''), 'unknown') = $2
-       GROUP BY feedback.rating, feedback.failure_mode
-       ORDER BY feedback.rating, feedback.failure_mode`,
+      `SELECT signal.source, case_row.classification, count(*)::int AS count
+       FROM improvement_signals signal
+       JOIN improvement_cases case_row ON case_row.case_id = signal.case_id
+       WHERE signal.observed_at >= now() - ($1::text || ' hours')::interval
+         AND signal.active = true
+         AND signal.app_revision = $2
+       GROUP BY signal.source, case_row.classification
+       ORDER BY signal.source, case_row.classification`,
       [hours, revision],
     ),
   ]);
@@ -182,7 +176,7 @@ export async function collectRevisionQuality(
     tools: tools.rows,
     signals: signals.rows,
     deliveries: deliveries.rows,
-    feedback: feedback.rows,
+    improvements: improvements.rows,
   };
 }
 
@@ -228,8 +222,8 @@ export function assessRevisionQuality(
   if (metrics.toolCalls >= policy.minimumToolCalls && metrics.toolFailureRate > policy.maxToolFailureRate) {
     violations.push(`tool failure rate ${percent(metrics.toolFailureRate)} exceeds ${percent(policy.maxToolFailureRate)}`);
   }
-  if (metrics.answers >= policy.minimumAnswers && metrics.badFeedbackRate > policy.maxBadFeedbackRate) {
-    violations.push(`bad feedback per answer ${percent(metrics.badFeedbackRate)} exceeds ${percent(policy.maxBadFeedbackRate)}`);
+  if (metrics.answers >= policy.minimumAnswers && metrics.improvementSignalRate > policy.maxImprovementSignalRate) {
+    violations.push(`improvement signals per answer ${percent(metrics.improvementSignalRate)} exceeds ${percent(policy.maxImprovementSignalRate)}`);
   }
   if (metrics.answers >= policy.minimumAnswers && metrics.p95Ms > policy.maxP95Ms) {
     violations.push(`answer p95 ${metrics.p95Ms}ms exceeds ${policy.maxP95Ms}ms`);
@@ -277,8 +271,7 @@ function qualityMetrics(quality: RevisionQuality): RevisionHealthAssessment["met
   const toolRetries = totalField(quality.tools, "retry_count");
   const recoveredValidationRetries = totalField(quality.tools, "recovered_validation_retry_count");
   const toolFailures = total(quality.tools, (row) => !["ok", "succeeded", "success", "reused"].includes(String(row.status)));
-  const feedback = total(quality.feedback);
-  const badFeedback = total(quality.feedback, (row) => String(row.rating) === "bad");
+  const improvementSignals = total(quality.improvements);
   return {
     answers,
     answerFailures,
@@ -289,9 +282,8 @@ function qualityMetrics(quality: RevisionQuality): RevisionHealthAssessment["met
     recoveredValidationRetries,
     toolFailures,
     toolFailureRate: rate(toolFailures, toolCalls),
-    feedback,
-    badFeedback,
-    badFeedbackRate: rate(badFeedback, answers),
+    improvementSignals,
+    improvementSignalRate: rate(improvementSignals, answers),
     p95Ms: Math.max(0, ...quality.answers.map((row) => numeric(row.p95_ms))),
     pendingDeliveries: total(quality.deliveries, (row) => String(row.state) === "pending"),
     abandonedDeliveries: total(quality.deliveries, (row) => String(row.state) === "abandoned"),

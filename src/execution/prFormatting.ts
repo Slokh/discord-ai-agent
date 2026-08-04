@@ -69,7 +69,7 @@ export async function codeUpdatePullRequestMetadata(input: {
   const systemPrompt = [
     "Write accurate public GitHub pull-request metadata from a source-code diff.",
     "The diff is the only authority. Describe the behavior and implementation that actually changed.",
-    "Do not mention task IDs, Discord message IDs, bug-report validation, agents, sandboxes, prompts, or workflow metadata.",
+    "Do not mention task IDs, Discord message IDs, private improvement cases, agents, sandboxes, prompts, or workflow metadata.",
     "Avoid generic wording such as 'implement the requested change', 'update files', or 'add tests'.",
     "Return one JSON object with exactly these fields:",
     "- title: imperative, specific, no trailing punctuation, at most 72 characters",

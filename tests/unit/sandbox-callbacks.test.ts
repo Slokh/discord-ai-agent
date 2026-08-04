@@ -109,7 +109,6 @@ function sandboxEnv(callbackServerUrl: string): SandboxEnv {
     sandboxRunId,
     taskTitle: "Test callbacks",
     taskRequest: "Verify callback authentication.",
-    bugReportResultPath: "/tmp/task-1-bug-report-result.json",
     requestedBy: "test",
     targetBranch: null,
     targetPullRequestNumber: null,

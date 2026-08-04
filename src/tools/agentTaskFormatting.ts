@@ -56,17 +56,11 @@ export function formatAgentTaskResult(input: {
   }
 
   if (job.status === "succeeded" && job.prUrl) {
-    if (job.taskType === "bug_report") {
-      return `🐛 Confirmed and fixed: ${job.prUrl}\nRequired checks will auto-merge it, then the normal production deployment will start.`;
-    }
     const draftNote = job.draft ? " It opened as a draft." : "";
     return [`Done: ${job.prUrl}${draftNote}`, formatAgentTaskTimingSummary(input.taskEvents)].filter(Boolean).join("\n");
   }
 
   if (job.status === "no_changes") {
-    if (job.taskType === "bug_report") {
-      return `🐛 Validation finished: ${truncateForDiscord(job.error ?? "I couldn’t confirm a product bug, so I left the code unchanged.", 700)}`;
-    }
     const diagnosis = agentTaskFailureDiagnosis(input.taskEvents);
     return [
       diagnosis
@@ -92,9 +86,6 @@ export function formatAgentTaskResult(input: {
 
   if (job.status === "failed") {
     const diagnosis = agentTaskFailureDiagnosis(input.taskEvents);
-    if (job.taskType === "bug_report") {
-      return `🐛 Validation could not finish: ${diagnosis?.summary ?? "the repair environment failed before it could safely publish a change."} Try 🔄 to retry it.`;
-    }
     return [
       diagnosis
         ? `No PR opened: ${diagnosis.summary}`

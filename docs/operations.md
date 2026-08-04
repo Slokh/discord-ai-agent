@@ -79,21 +79,21 @@ The runtime ledger is canonical Postgres data, not an HTTP operator API. Investi
 npm run release:status -- --pr <number>
 ```
 
-Normal-reply friction is the deliberate direct-database exception because Frog owns its configured store interface. The application wrapper resolves the existing database configuration and selects only the private `discord-ai-agent` namespace:
+Improvement cases are the single operator stream for member reports, model-detected impediments, developer friction, and automated runtime/deployment/CI/eval detections:
 
 ```bash
-npm run frog:agent -- migrate
-npm run frog:agent -- list
-npm run frog:agent -- resolve <entry-id>
+npm run improve -- --target local inbox
+npm run improve -- --target local show <case-id>
+npm run improve -- --target local suggest <case-id>
+npm run improve -- --target local evidence <case-id> --kind runtime_trace --disposition supports --summary "..."
+npm run improve -- --target local contract <case-id> --expected "..." --check '{"kind":"test","reference":"focused-test"}'
 ```
 
-The wrapper maps the application's existing database URL to Frog's scoped database setting, which selects the Postgres store, and supplies the fixed private namespace. `migrate` is idempotent and normally needed only when preparing a database outside the application migration flow. For production, run commands inside a configured application pod or explicitly supply the production environment; do not let a local default masquerade as production evidence. `npx frog list` is different: it shows repository-development friction from the default file store.
-
-The production image intentionally removes npm and npx. Use the compiled wrapper in a pod:
+Production access is explicit and requires confirmation. The production image omits npm, so use the compiled CLI in a configured pod:
 
 ```bash
-kubectl -n discord-ai-agent exec deploy/discord-ai-agent-worker -- node dist/scripts/frogAgent.js list
-kubectl -n discord-ai-agent exec deploy/discord-ai-agent-worker -- node dist/scripts/frogAgent.js resolve <entry-id>
+kubectl -n discord-ai-agent exec deploy/discord-ai-agent-worker -- node dist/scripts/improve.js --target production --confirm-production inbox
+kubectl -n discord-ai-agent exec deploy/discord-ai-agent-worker -- node dist/scripts/improve.js --target production --confirm-production show <case-id>
 ```
 
 The API role is an internal-only signed callback receiver. It exposes only `/healthz` and task-scoped callback writes from isolated code-update sandboxes; it has no operator reads, metrics, browser UI, public service, or password configuration.
@@ -118,17 +118,15 @@ Investigation order:
 
 Do not begin with browser scraping, provider blame, or source speculation when the runtime ledger can show what happened. Runtime diagnostics are retained for trusted operator workflows; they are not a model-facing Discord capability. Private chain of thought is not available or required.
 
-## Native bug inbox
+## Improvement inbox
 
-The Unicode `🐛` reaction marks a Discord message for requester-scoped debugging. `listDiscordBugMarkers` returns only markers and context the requester may see. Removing the reaction clears the marker.
+The Unicode `🐛` reaction creates a private `member_report` signal for the current requester. `listMyImprovementSignals` returns only their active signals in channels they may currently see. Removing the reaction withdraws that signal; if it was the last signal on an untriaged case, the case is dismissed.
 
-For operator triage, use the in-Discord tool for the requester's visible markers and the trusted runtime ledger for the associated task lifecycle. The in-Discord path re-evaluates current channel visibility and must remain the source for marked-message content.
+Every source feeds the same case stream. Source keys provide exact idempotency; deterministic fingerprints coalesce only high-confidence matches; uncertain semantic matches require the explicit `merge` command. A report never launches a sandbox or replays a request automatically.
 
-Unqualified requests such as “show my bug reports” or “fix my bugs” refer to this native inbox. GitHub/repository issue work requires explicit repository context. This distinction lives in tool contracts rather than keyword routing.
+Operators attach supporting, contradictory, or inconclusive evidence. Moving a case to `actionable` requires supporting evidence and an accepted contract with at least one machine-executable check. `suggest` returns same-boundary title candidates but never merges them. Explicitly requested linked coding work moves the case to `in_progress`; member-owned cases can link during `runCodingAgent`, while operator cases can attach an already queued/running task with `link-task <case-id> --task <task-id>`. Success moves the case to `verifying`, while failure returns it to `actionable`. Record deployed proof and resolve atomically with `improve verify <case-id> --revision <sha> --summary "..."`. Never copy private source evidence into a public issue, PR metadata, or tracked fixtures.
 
-The workflow first reconstructs the linked run and performs evidence-only triage on a clean checkout. The marker is a report, not proof. Only a `confirmed_unfixed` verdict with a machine-checkable regression contract unlocks a separate repair phase; other verdicts leave source unchanged. When evidence is insufficient, the terminal result replies on the marked bot message, pings only the reporter, and identifies the context needed for a safe decision. Only a marker from the original request author can start automated triage/repair and authorize a post-deploy replay. A confirmed repair adds focused regression coverage, opens a focused PR, and deploys after normal review. Once live, the marked reply becomes a persistent `Bug fix` update and its successful posting triggers the original prompt again into a fresh reply. That contextual update does not replace the release-wide announcement; every verified revision still publishes its complete release-notes entry. Never copy private marker content into Frog, a public issue, PR metadata, or tracked fixtures.
-
-Only a confirmed automated defect is captured as private negative feedback. Add expected/forbidden tools or required/forbidden answer text to the private regression suite, then run:
+Active contracts that the prompt evaluator can represent are exported into the private regression suite:
 
 ```bash
 npm run eval:regressions
@@ -163,7 +161,7 @@ After Helm completes, deployment verifies each role's image and `APP_REVISION`, 
 
 Each post-deploy stage—immediate health, capability canary, private regressions, the 30-second stability window, and durable promotion—gets one bounded retry with a short delay. The workflow records typed stage/attempt outcomes; a failed private-regression command also retains its aggregate-only safe summary, never prompt or reply content. If a stage still fails, it rolls back to the exact Helm revision captured before the upgrade and verifies that prior revision with the same restart-free health gate. A failed rollback remains a distinct terminal outcome and never hides the original failed stage. First-time installs have no rollback target and fail explicitly. Migrations remain forward-only and must preserve the preceding application revision long enough for this recovery path.
 
-The bot does not retry bug reports or publish a deployment announcement merely because a new pod became ready. Release pods wait for the workflow to write the verified revision and unique rollout ID to Postgres after every gate passes; only then do those member-visible actions run. The rollout ID prevents a repeated deployment of the same commit from reusing an older approval. A rejected candidate therefore cannot announce itself or retry an original prompt before rollback. Local, non-SHA revisions bypass this production-only promotion gate.
+The bot does not resolve improvement cases or publish a deployment announcement merely because a new pod became ready. Release pods wait for the workflow to write the verified revision and unique rollout ID to Postgres after every gate passes. Case-specific acceptance evidence is then recorded explicitly; the system never replays a member's old request as authority. Local, non-SHA revisions bypass this production-only promotion gate.
 
 Each capability attempt uses a fresh session, and one isolated retry absorbs ordinary model-call variance without retrying a tool inside an attempt. Retrieval passes only with exactly one successful stats result; randomness passes only with exactly one successful `drawRandom` completion and no runtime error event; web passes only with exactly one successful non-empty result plus provider-recorded hosted execution. Completion markers alone are insufficient evidence. A persistently failed boundary fails the rollout instead of treating configured tool metadata as readiness. After all canaries and private regressions, the typed deployment-health gate requires API, bot, and worker to remain aligned, fully ready, generation-current, and restart-free for 30 seconds. Build, migration, rollout, readiness, capability verification, and Discord delivery remain distinct stages. Durable delivery behavior is exercised by the reliability and database suites, while production observation reports failures and pending delivery obligations from real traffic without generating synthetic member-visible messages.
 

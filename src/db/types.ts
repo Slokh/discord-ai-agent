@@ -49,70 +49,72 @@ export type SearchResult = {
   link: string;
 };
 
-export type DiscordBugMarker = {
-  guildId: string;
-  channelId: string;
-  messageId: string;
-  userId: string;
-  markedAt: Date;
-  messageAuthorId: string;
-  messageAuthorUsername: string | null;
-  messageAuthorIsBot: boolean;
-  messageContent: string;
-  messageCreatedAt: Date;
-  messageLink: string;
-  promptMessageId: string | null;
-  promptAuthorId: string | null;
-  promptAuthorUsername: string | null;
-  promptContent: string | null;
-  promptCreatedAt: Date | null;
-  promptLink: string | null;
-};
+export type ImprovementCaseStatus = "open" | "needs_evidence" | "actionable" | "in_progress" | "verifying" | "resolved" | "dismissed";
+export type ImprovementClassification = "unknown" | "defect" | "product_gap" | "data_quality" | "developer_friction" | "external_incident" | "expected_behavior";
+export type ImprovementSeverity = "low" | "medium" | "high" | "critical";
+export type ImprovementPrivacy = "private" | "publication_safe";
+export type ImprovementSignalSource = "member_report" | "agent_report" | "operator_report" | "developer_report" | "runtime_detection" | "deployment_detection" | "ci_detection" | "eval_detection";
 
-export type DiscordBugReportStatus = "pending" | "queued" | "running" | "completed" | "failed";
-export type DiscordBugReportDisposition =
-  | "confirmed_fixed"
-  | "confirmed_unfixed"
-  | "expected_behavior"
-  | "not_reproducible"
-  | "already_fixed"
-  | "insufficient_evidence";
-
-export type DiscordBugReport = {
-  reportId: string;
-  guildId: string;
-  channelId: string;
-  sourceMessageId: string;
-  sourceSessionId: string | null;
-  sourceExecutionId: string | null;
-  sourceRevision: string;
-  reportedByUserId: string;
-  taskId: string | null;
-  statusMessageId: string | null;
-  status: DiscordBugReportStatus;
-  disposition: DiscordBugReportDisposition | null;
-  summary: string | null;
-  prUrl: string | null;
-  mergeCommitSha: string | null;
-  deployedRevision: string | null;
-  retryStatus: "running" | "succeeded" | "failed" | null;
-  retryExecutionId: string | null;
-  announcementMessageId: string | null;
-  retriedAt: Date | null;
+export type ImprovementCase = {
+  caseId: string;
+  guildId: string | null;
+  scope: "guild" | "repository" | "deployment" | "global";
+  privacy: ImprovementPrivacy;
+  title: string;
+  status: ImprovementCaseStatus;
+  classification: ImprovementClassification;
+  severity: ImprovementSeverity;
+  owningDomain: string | null;
+  fingerprint: string | null;
+  mergedIntoCaseId: string | null;
+  resolution: string | null;
+  version: number;
+  metadata: Record<string, unknown>;
+  firstSeenAt: Date;
+  lastSeenAt: Date;
+  resolvedAt: Date | null;
   createdAt: Date;
   updatedAt: Date;
-  completedAt: Date | null;
 };
 
-export type DiscordBugInboxStatus = {
-  markedAt: Date;
-  validationStatus: DiscordBugReportStatus | "marked";
-  disposition: DiscordBugReportDisposition | null;
-  prUrl: string | null;
-  deployedRevision: string | null;
-  retryStatus: DiscordBugReport["retryStatus"];
+export type ImprovementSignal = {
+  signalId: string;
+  caseId: string;
+  source: ImprovementSignalSource;
+  sourceKey: string;
+  reporterKind: "member" | "agent" | "operator" | "developer" | "automation";
+  reporterId: string | null;
+  guildId: string | null;
+  channelId: string | null;
+  messageId: string | null;
+  executionId: string | null;
+  taskId: string | null;
+  appRevision: string | null;
+  privacy: ImprovementPrivacy;
+  summary: string;
+  details: string | null;
+  severityHint: ImprovementSeverity | null;
+  classificationHint: ImprovementClassification | null;
+  owningDomainHint: string | null;
+  fingerprint: string | null;
+  active: boolean;
+  metadata: Record<string, unknown>;
+  observedAt: Date;
+  withdrawnAt: Date | null;
+  createdAt: Date;
   updatedAt: Date;
 };
+
+export type ImprovementContractCheck =
+  | { kind: "tool"; name: string; expectation: "required" | "forbidden" }
+  | { kind: "answer_text"; value: string; expectation: "required" | "forbidden" }
+  | { kind: "runtime_event"; name: string; expectation: "required" | "forbidden" }
+  | { kind: "delivery_state"; state: string }
+  | { kind: "test"; reference: string }
+  | { kind: "eval"; reference: string }
+  | { kind: "database_invariant"; reference: string }
+  | { kind: "deployment_canary"; reference: string }
+  | { kind: "manual"; description: string };
 
 export type DiscordUserLookupResult = {
   id: string;
@@ -337,6 +339,7 @@ export type AgentTaskRecord = {
   discordResponseChannelId: string | null;
   discordResponseMessageId: string | null;
   retriedFromTaskId: string | null;
+  improvementCaseId: string | null;
   taskType: string;
   title: string;
   request: string;
@@ -388,21 +391,6 @@ export type AgentRuntimeEvent = {
   metadata: Record<string, unknown>;
   durationMs: number | null;
   createdAt: Date;
-};
-
-export type AgentRunFeedback = {
-  runId: string;
-  rating: "good" | "bad";
-  note: string | null;
-  expectedBehavior: string | null;
-  failureMode: "wrong_answer" | "unnecessary_refusal" | "wrong_tool" | "missing_evidence" | "permission" | "delivery" | "latency" | "other" | null;
-  expectedTools: string[];
-  forbiddenTools: string[];
-  mustContain: string[];
-  mustNotContain: string[];
-  captureEval: boolean;
-  createdAt: Date;
-  updatedAt: Date;
 };
 
 export type AgentRuntimeMessage = {

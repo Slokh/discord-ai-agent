@@ -23,15 +23,13 @@ Focused repositories under `src/db/` own persistence:
 | Retrieval and aggregates | `retrievalRepository.ts`, `retrievalStatsRepository.ts` |
 | Embedding queue and vectors | `embeddingRepository.ts` |
 | Conversation continuity and compaction | `conversationMemoryRepository.ts`, `conversationCompaction.ts` |
-| Human run review and private regression contracts | `agent_run_feedback` through `repositories.ts` |
+| Unified improvement cases, signals, evidence, contracts, and events | `improvementRepository.ts` |
 | Final Discord rendering obligations | `deliveryObligationsRepository.ts` |
-| Bug markers, automated reports, deployment, and retry outcomes | `discordBugMarkerRepository.ts`, `discordBugReportRepository.ts` |
 | Components V2 actions | `discordComponentActionRepository.ts` |
 | Code-update projections | `agentTaskRepository.ts` and focused read repositories |
 | Audits and costs | `auditRepository.ts` |
 | Payments and randomness | focused payment repositories and `rngRepository.ts` |
 | Server overlays and model settings | `serverOverlayRepository.ts`, `agentSettingsRepository.ts` |
-| Private normal-reply friction | `frictionRepository.ts` through Frog's namespaced PostgreSQL store |
 
 `src/db/repositories.ts` delegates to these modules for existing callers. New durable behavior belongs in the focused owner.
 
@@ -105,20 +103,17 @@ Tracked files contain neutral behavior only. Private data lives in:
 
 - `.discord-ai-agent/prompt-overlay.md` for local deployment-specific prompt guidance;
 - `.discord-ai-agent/evals/` for private regression prompts;
-- Postgres for server overlays, Discord content, aliases, bug markers, model settings, canonical runtime records, and memory.
-- the `discord-ai-agent` Frog namespace in Postgres for generalized normal-reply friction and its runtime references.
+- Postgres for server overlays, Discord content, aliases, improvement cases, model settings, canonical runtime records, and memory.
 
 `npm run scan:release` rejects secret-shaped values, private markers, and real-looking Discord identifiers in tracked content. Never paste production prompt artifacts, member names, message links, dumps, or eval cases into public GitHub metadata.
 
-Run feedback stores reviewer rating, failure classification, expected behavior, and optional observable assertions. Capture-enabled rows export to `.discord-ai-agent/evals/`; private prompts and requester/channel coordinates never enter tracked fixtures. The feedback table is the durable source, while exported JSON is a disposable local projection used by the eval runner.
+`improvement_cases` is the canonical materialized lifecycle. `improvement_signals` preserves source-specific provenance and exact idempotency; `improvement_evidence` records bounded conclusions and retained-ledger references; `improvement_contracts` versions observable expected behavior and executable checks; `improvement_case_events` is the append-only operator stream. Cases are private unless explicitly marked publication-safe.
 
-Frog's production namespace stores unresolved normal-reply friction as serialized entries plus deduplicated occurrence counts. The application stores only a generalized title/body, severity, category, affected capability, deployed revision, and canonical runtime identifiers. Operators use `npm run frog:agent -- list` and `npm run frog:agent -- resolve <id>` in the intended database environment. The repository-local Frog file store is a separate development context; production entries are never copied there or synchronized to public issue trackers.
+Coalescing is conservative. A unique source key prevents duplicate intake, while a deterministic fingerprint may attach a new signal to one open case in the same guild/privacy boundary. Semantic similarity never merges automatically. Merging moves signals and evidence to the target while retaining the source case as a dismissed audit record.
 
-Bug markers do not immediately create negative feedback. Evidence-only triage may attach a bounded regression contract only for a confirmed defect: one supported failure class, an observable expected behavior, and at least one expected/forbidden tool or required/forbidden answer fragment. That contract gates the mutation-capable repair phase. The signed sandbox callback receiver revalidates tool names and bounds before updating the original private feedback row at terminal completion. Cases without a machine-checkable assertion request reporter context and remain human-review candidates instead of becoming misleading automated tests. Revision-quality reports count good/bad classifications by revision without exporting the underlying prompt or note.
+Actionable cases require supporting evidence and an active contract with a machine-executable check. Linked code tasks use `agent_tasks.improvement_case_id`; terminal success moves the case to verification and failure returns it to actionable. Resolution requires supporting `deployment_verification` evidence. Prompt-compatible contract checks export to `.discord-ai-agent/evals/`; tests, database invariants, delivery checks, and deployment canaries remain executable in their owning harness.
 
-Private regression replay also requires the original input to be reconstructable. The evaluator restores requester and channel scope, but it does not reproduce Discord attachments; feedback that asserts file inspection therefore remains a review case until attachment replay is explicitly supported.
-
-Bug-report deployment processing durably records the revision retained on the source execution, the deployed revision, contextual update message, and whether retrying the original prompt succeeded or failed. The reporter must match the retained source requester before automatic validation or replay. The authenticated operator projection is deliberately content-free and requester-keyed; current message content remains available only through the normal Discord permission-filtered tool path. Contextual updates do not claim the separate release-wide announcement record. A content-free deployment verification row keys promotion by revision and unique rollout ID only after post-deploy gates pass, preventing startup-time bug retries and announcements from racing verification, rollback, or a repeated rollout of the same commit.
+The evaluator restores requester and channel scope from retained runtime evidence but does not reproduce Discord attachments. File-inspection contracts therefore require another executable check or manual review. A content-free deployment verification row still gates release promotion by revision and unique rollout ID; it is separate from case-specific acceptance evidence.
 
 ## Migrations and consistency
 
@@ -132,7 +127,7 @@ DB integration tests mirror that ownership boundary. Each test file creates, mig
 
 Worker maintenance bounds canonical runtime events, runtime sessions, artifacts, transient budget reservations, and audit logs using the configured retention windows. A value of zero disables the corresponding automatic cleanup. Conversation compaction separately limits raw continuity rows.
 
-Privacy deletion covers the archive, embeddings, attachments, emoji-derived state, bug markers/reports, conversation threads and snapshots derived from the requester, agent-runtime sessions/artifacts, run feedback, normal-reply Frog entries linked to those runtime sessions, and code-update tasks. Entire affected conversation threads are removed because summaries and assistant/tool turns may derive from the deleted message even when they have another author. Operational payment/randomness evidence may retain redacted structure when required to explain a transaction, but it must not retain deleted private message bodies unnecessarily.
+Privacy deletion covers the archive, embeddings, attachments, emoji-derived state, reporter-owned improvement signals and linked private evidence, conversation threads and snapshots derived from the requester, agent-runtime sessions/artifacts, and code-update tasks. Empty cases are removed; shared cases retain only evidence not derived from the deleted reporter. Entire affected conversation threads are removed because summaries and assistant/tool turns may derive from the deleted message even when they have another author. Operational payment/randomness evidence may retain redacted structure when required to explain a transaction, but it must not retain deleted private message bodies unnecessarily.
 
 ## Verification
 

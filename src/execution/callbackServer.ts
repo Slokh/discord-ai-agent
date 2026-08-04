@@ -1,10 +1,8 @@
 import http from "node:http";
 import type { AppConfig } from "../config/env.js";
 import { assertTaskCallbackConfig } from "../config/env.js";
-import type { DiscordBugReportDisposition } from "../db/types.js";
 import type { DiscordAiAgentRepository } from "../db/repositories.js";
 import type { AgentRuntimeRepository } from "../db/agentRuntimeRepository.js";
-import { TOOL_NAMES } from "../tools/toolDefinition.js";
 import { logger } from "../util/logger.js";
 import {
   taskCallbackSecret,
@@ -18,23 +16,8 @@ const ARTIFACT_KINDS = [
   "tool_transcript", "crawl_summary", "embedding_summary", "raw_json",
   "response", "diagnostic",
 ] as const;
-const BUG_DISPOSITIONS = [
-  "confirmed_fixed", "confirmed_unfixed", "expected_behavior",
-  "not_reproducible", "already_fixed", "insufficient_evidence",
-] as const satisfies readonly DiscordBugReportDisposition[];
-const FAILURE_MODES = [
-  "wrong_answer", "unnecessary_refusal", "wrong_tool", "missing_evidence",
-  "permission", "delivery", "latency", "other",
-] as const;
-const KNOWN_FEEDBACK_TOOLS = new Set([
-  ...TOOL_NAMES,
-  "openrouter:web_search",
-  "openrouter:web_fetch",
-  "openrouter:datetime",
-]);
 
 type CallbackKind = "progress" | "complete" | "commands" | "artifacts";
-type FailureMode = typeof FAILURE_MODES[number];
 
 export type SandboxCallbackRuntime = {
   close: () => Promise<void>;
@@ -172,7 +155,12 @@ export async function handleSandboxCallbackRequest(input: {
       metadata,
     });
   }
-  await completeBugReport(input.repo, taskId, task?.taskType, status, optionalString(body.error), optionalString(body.prUrl), metadata);
+  await input.repo.completeImprovementWorkForTask({
+    taskId,
+    succeeded: status === "succeeded",
+    prUrl: optionalString(body.prUrl),
+    summary: optionalString(body.error) ?? `Task completed with status ${status}.`,
+  });
   sendJson(input.response, 200, { ok: true });
 }
 
@@ -185,59 +173,6 @@ function authorizedCallback(config: AppConfig, request: http.IncomingMessage, ta
   const taskSecret = taskCallbackSecret({ taskId, sandboxRunId, secret: config.execution.taskSigningSecret });
   return verifyCallbackBodySignature({ secret: taskSecret, timestamp, signature, rawBody })
     || verifyCallbackBodySignature({ secret: config.execution.taskSigningSecret, timestamp, signature, rawBody });
-}
-
-async function completeBugReport(repo: DiscordAiAgentRepository, taskId: string, taskType: string | undefined, status: string, error: string | null, prUrl: string | null, metadata: Record<string, unknown>) {
-  if (taskType !== "bug_report") return;
-  const disposition = bugDisposition(metadata.bugReportDisposition);
-  const report = await repo.getDiscordBugReportForTask(taskId);
-  await repo.completeDiscordBugReportForTask({
-    taskId,
-    status: status === "failed" || status === "cancelled" ? "failed" : "completed",
-    disposition,
-    summary: optionalString(metadata.bugReportSummary) ?? error ?? status,
-    prUrl,
-  });
-  const regression = automatedBugRegression(metadata.bugReportRegression);
-  if (report?.sourceExecutionId && disposition && regression && ["confirmed_fixed", "confirmed_unfixed", "already_fixed"].includes(disposition)) {
-    await repo.upsertRunFeedback({
-      runId: report.sourceExecutionId,
-      rating: "bad",
-      note: "Classified automatically from private bug validation.",
-      ...regression,
-      captureEval: true,
-    });
-  }
-}
-
-function automatedBugRegression(value: unknown): {
-  expectedBehavior: string;
-  failureMode: FailureMode;
-  expectedTools: string[];
-  forbiddenTools: string[];
-  mustContain: string[];
-  mustNotContain: string[];
-} | null {
-  const body = objectValue(value);
-  const failureMode = optionalString(body.failureMode);
-  const expectedBehavior = optionalString(body.expectedBehavior);
-  const expectedTools = stringList(body.expectedTools);
-  const forbiddenTools = stringList(body.forbiddenTools);
-  const mustContain = stringList(body.mustContain);
-  const mustNotContain = stringList(body.mustNotContain);
-  if (
-    !isFailureMode(failureMode)
-    || !expectedBehavior
-    || expectedTools.length + forbiddenTools.length + mustContain.length + mustNotContain.length === 0
-    || [...expectedTools, ...forbiddenTools].some((tool) => !KNOWN_FEEDBACK_TOOLS.has(tool))
-  ) return null;
-  return { expectedBehavior, failureMode, expectedTools, forbiddenTools, mustContain, mustNotContain };
-}
-
-function bugDisposition(value: unknown): DiscordBugReportDisposition | null {
-  return BUG_DISPOSITIONS.includes(value as DiscordBugReportDisposition)
-    ? value as DiscordBugReportDisposition
-    : null;
 }
 
 function completionStatus(value: unknown): "succeeded" | "failed" | "no_changes" | "cancelled" {
@@ -328,15 +263,11 @@ function commandLogContent(input: {
   return ["Recent tail:", full.slice(-1_600), "", "Full command log:", full].join("\n");
 }
 
-function isFailureMode(value: string | null): value is FailureMode {
-  return FAILURE_MODES.includes(value as FailureMode);
-}
 function isTerminalTaskStatus(status: string) { return ["succeeded", "failed", "no_changes", "cancelled"].includes(status); }
 function optionalString(value: unknown) { return typeof value === "string" && value.trim() ? value.trim() : null; }
 function requiredString(value: unknown, name: string) { const result = optionalString(value); if (!result) throw new Error(`${name} is required.`); return result; }
 function finiteInteger(value: unknown) { return typeof value === "number" && Number.isFinite(value) ? Math.trunc(value) : null; }
 function objectValue(value: unknown): Record<string, unknown> { return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {}; }
-function stringList(value: unknown) { return [...new Set((Array.isArray(value) ? value : typeof value === "string" ? value.split("\n") : []).filter((item): item is string => typeof item === "string").map((item) => item.trim()).filter(Boolean))].slice(0, 50); }
 function singleHeader(value: string | string[] | undefined) { return Array.isArray(value) ? value[0] : value; }
 function parseObject(raw: Buffer) { if (!raw.length) return {}; const value = JSON.parse(raw.toString("utf8")); if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Callback body must be an object."); return value as Record<string, unknown>; }
 async function readRawBody(request: http.IncomingMessage) { let total = 0; const chunks: Buffer[] = []; for await (const chunk of request) { const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk); total += buffer.length; if (total > MAX_BODY_BYTES) throw new Error("Callback body is too large."); chunks.push(buffer); } return Buffer.concat(chunks); }

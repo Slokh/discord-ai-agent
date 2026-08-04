@@ -3,7 +3,7 @@ import { installedToolHandlers } from "../../src/capabilities/catalog.js";
 import { coreToolHandlers } from "../../src/tools/handlers/core.js";
 import { discordRetrievalToolHandlers } from "../../src/tools/handlers/discord-retrieval.js";
 import { opsToolHandlers } from "../../src/tools/handlers/ops.js";
-import { frictionToolHandlers } from "../../src/tools/handlers/friction.js";
+import { improvementToolHandlers } from "../../src/tools/handlers/improvements.js";
 import { discordActionToolHandlers } from "../../src/tools/handlers/discord-action.js";
 import { codegenToolHandlers } from "../../src/tools/handlers/codegen.js";
 import { imageToolHandlers } from "../../src/tools/handlers/image.js";
@@ -18,7 +18,7 @@ const handlerFamilies = {
   core: coreToolHandlers,
   discordRetrieval: discordRetrievalToolHandlers,
   ops: opsToolHandlers,
-  friction: frictionToolHandlers,
+  improvements: improvementToolHandlers,
   discordAction: discordActionToolHandlers,
   codegen: codegenToolHandlers,
   image: imageToolHandlers,
@@ -31,7 +31,7 @@ const handlerFamilies = {
 const expectedFamilyTools = {
   core: ["loadSkillContext"],
   discordRetrieval: [
-    "findDiscordUsers", "findDiscordChannels", "listDiscordBugMarkers", "inspectDiscordFile",
+    "findDiscordUsers", "findDiscordChannels", "listMyImprovementSignals", "inspectDiscordFile",
     "summarizeDiscordThread", "getRecentDiscordMessages", "getRecentAgentMemory", "getAgentMemoryStats",
     "getDiscordMessageContext", "searchDiscordAttachments", "getDiscordStats", "getDiscordChannelTopics",
     "summarizeDiscordHistory", "searchDiscordHistory",
@@ -40,7 +40,7 @@ const expectedFamilyTools = {
     "reportStatus", "setAgentModel",
     "getDeploymentStatus", "getSpendSummary",
   ],
-  friction: ["reportAgentFriction"],
+  improvements: ["reportImprovementSignal"],
   discordAction: [
     "composeDiscordResponse", "addDiscordReaction", "createDiscordPoll", "updateBotAvatar", "createDiscordEmoji",
     "undoConversationTurns", "drawRandom", "revealRandomness", "settleRandomWager",

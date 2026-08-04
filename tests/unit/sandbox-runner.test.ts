@@ -5,8 +5,6 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
 import {
-  bugReportRepairPrompt,
-  bugReportTriagePrompt,
   codeUpdatePrompt,
   codeUpdateRecoveryPrompt,
   codeUpdateVerificationRepairPrompt,
@@ -120,42 +118,10 @@ describe("sandboxRunner", () => {
     expect(prompt).toContain("Keep the checkout unchanged");
   });
 
-  it("separates evidence-only bug triage from mutation-capable repair", () => {
-    const env = {
-      taskType: "bug_report" as const,
-      bugReportResultPath: "/tmp/bug-result.json",
-      taskId: "bug-1",
-      requestedBy: "Reporter (u1)",
-      taskRequest: "retained private run evidence"
-    };
-    const triage = bugReportTriagePrompt(env);
-    expect(triage).toContain("request to investigate, not proof");
-    expect(triage).toContain("Keep the checkout unchanged");
-    expect(triage).toContain("confirmed_unfixed");
-    expect(triage).toContain("exactly what the reporter should provide");
-
-    const repair = bugReportRepairPrompt(env, {
-      disposition: "confirmed_unfixed",
-      summary: "The reply omitted required evidence.",
-      regression: {
-        failureMode: "missing_evidence",
-        expectedBehavior: "The reply cites the current source.",
-        expectedTools: ["searchDiscordHistory"],
-        forbiddenTools: [],
-        mustContain: [],
-        mustNotContain: []
-      }
-    });
-    expect(repair).toContain("repairing a confirmed");
-    expect(repair).toContain("smallest general root-cause fix");
-    expect(repair).toContain('"expectedTools": [');
-  });
-
-  it("allows bug triage and diagnosis to finish clean but not ordinary code updates", () => {
-    expect(acceptsCleanNanoCodexResult("bug_report", 0, "triage complete")).toBe(true);
+  it("allows diagnosis to finish clean but not ordinary code updates", () => {
     expect(acceptsCleanNanoCodexResult("diagnosis", 0, "diagnosis complete")).toBe(true);
     expect(acceptsCleanNanoCodexResult("code_update", 0, "analysis only")).toBe(false);
-    expect(acceptsCleanNanoCodexResult("bug_report", 1, "triage failed")).toBe(false);
+    expect(acceptsCleanNanoCodexResult("diagnosis", 1, "diagnosis failed")).toBe(false);
   });
 
   it("installs GitHub CLI in the sandbox runtime image", async () => {
@@ -281,14 +247,14 @@ describe("sandboxRunner", () => {
       diffPatch,
       complete: async () => ({
         content: JSON.stringify({
-          title: "Validate Discord bug report private-request-marker",
-          why: "Validate the report.",
+          title: "Improve request routing",
+          why: "Apply the requested change.",
           changes: ["Implement the requested change."],
         }),
       }),
     });
     expect(metadata).toEqual(expect.objectContaining({
-      title: "Validate Discord bug report private-request-marker",
+      title: "Improve request routing",
       source: "diff_model",
     }));
 

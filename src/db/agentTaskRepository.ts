@@ -1,5 +1,6 @@
 import type { DbPool } from "./pool.js";
 import { queuedAgentTaskStatusMessage, removeUndefinedValues } from "./shared.js";
+import { completeImprovementWorkForTask } from "./improvementRepository.js";
 
 export async function upsertAgentTaskQueued(pool: DbPool, input: {
     taskId: string;
@@ -12,6 +13,7 @@ export async function upsertAgentTaskQueued(pool: DbPool, input: {
     discordResponseChannelId?: string | null;
     discordResponseMessageId?: string | null;
     retriedFromTaskId?: string | null;
+    improvementCaseId?: string | null;
     taskType: string;
     title: string;
     request: string;
@@ -26,10 +28,10 @@ export async function upsertAgentTaskQueued(pool: DbPool, input: {
       `
         INSERT INTO agent_tasks(
           task_id, pgboss_job_id, trace_id, guild_id, channel_id, user_id,
-          thread_key, discord_response_channel_id, discord_response_message_id, retried_from_task_id,
+          thread_key, discord_response_channel_id, discord_response_message_id, retried_from_task_id, improvement_case_id,
           task_type, title, request, requested_by, backend, status, current_step, status_message, progress_updated_at, updated_at
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, 'queued', 'queued', $16, now(), now())
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, 'queued', 'queued', $17, now(), now())
         ON CONFLICT(task_id) DO UPDATE SET
           pgboss_job_id = coalesce(EXCLUDED.pgboss_job_id, agent_tasks.pgboss_job_id),
           trace_id = coalesce(EXCLUDED.trace_id, agent_tasks.trace_id),
@@ -40,6 +42,7 @@ export async function upsertAgentTaskQueued(pool: DbPool, input: {
           discord_response_channel_id = coalesce(EXCLUDED.discord_response_channel_id, agent_tasks.discord_response_channel_id),
           discord_response_message_id = coalesce(EXCLUDED.discord_response_message_id, agent_tasks.discord_response_message_id),
           retried_from_task_id = coalesce(EXCLUDED.retried_from_task_id, agent_tasks.retried_from_task_id),
+          improvement_case_id = coalesce(EXCLUDED.improvement_case_id, agent_tasks.improvement_case_id),
           task_type = EXCLUDED.task_type,
           title = EXCLUDED.title,
           request = EXCLUDED.request,
@@ -62,6 +65,7 @@ export async function upsertAgentTaskQueued(pool: DbPool, input: {
         input.discordResponseChannelId ?? null,
         input.discordResponseMessageId ?? null,
         input.retriedFromTaskId ?? null,
+        input.improvementCaseId ?? null,
         input.taskType,
         input.title,
         input.request,
@@ -380,6 +384,7 @@ export async function markAgentTaskSucceeded(pool: DbPool, input: {
         [input.taskId, input.branchName, input.prUrl, input.draft, input.verifyPassed, JSON.stringify(input.metadata ?? {})]
       )
       .catch(() => undefined);
+    await completeImprovementWorkForTask(pool, { taskId: input.taskId, succeeded: true, prUrl: input.prUrl });
   }
 
 export async function markAgentTaskFailed(pool: DbPool, input: {
@@ -449,6 +454,7 @@ export async function markAgentTaskFailed(pool: DbPool, input: {
         [input.taskId, input.status ?? "failed", input.error, JSON.stringify(input.metadata ?? {})]
       )
       .catch(() => undefined);
+    await completeImprovementWorkForTask(pool, { taskId: input.taskId, succeeded: false, summary: input.error });
   }
 
 

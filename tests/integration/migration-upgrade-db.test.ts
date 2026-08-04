@@ -8,7 +8,7 @@ import { createPool } from "../../src/db/pool.js";
 const runDbTests = process.env.DISCORD_AI_AGENT_DB_TESTS === "true";
 
 describe.skipIf(!runDbTests)("forward migration upgrades", () => {
-  it("upgrades the previous schema through runtime spans, projections, and feedback without losing events", async () => {
+  it("replaces legacy report stores with improvement cases without losing runtime events", async () => {
     const pool = createPool(loadConfig());
     const schema = `upgrade_${randomUUID().replaceAll("-", "")}`;
     const client = await pool.connect();
@@ -173,6 +173,15 @@ describe.skipIf(!runDbTests)("forward migration upgrades", () => {
         .resolves.toEqual(expect.objectContaining({ rows: [] }));
       await expect(client.query("SELECT guild_id, message_id, user_id, emoji FROM discord_retry_reactions LIMIT 0"))
         .resolves.toEqual(expect.objectContaining({ rows: [] }));
+      await client.query(await readFile(path.resolve("migrations/039_improvement_cases.sql"), "utf8"));
+      await expect(client.query("SELECT case_id, status, classification FROM improvement_cases LIMIT 0"))
+        .resolves.toEqual(expect.objectContaining({ rows: [] }));
+      await expect(client.query("SELECT signal_id, case_id, source FROM improvement_signals LIMIT 0"))
+        .resolves.toEqual(expect.objectContaining({ rows: [] }));
+      for (const retired of ["discord_bug_markers", "discord_bug_reports", "agent_run_feedback", "frog_entries"]) {
+        await expect(client.query("SELECT to_regclass($1) AS relation", [retired]))
+          .resolves.toEqual(expect.objectContaining({ rows: [{ relation: null }] }));
+      }
     } finally {
       await client.query("RESET search_path").catch(() => undefined);
       await client.query(`DROP SCHEMA IF EXISTS ${schema} CASCADE`).catch(() => undefined);

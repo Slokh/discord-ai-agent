@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { bugReportResultReplyPayload, renderAgentTaskMessage } from "../../src/discord/taskNotifications.js";
+import { renderAgentTaskMessage } from "../../src/discord/taskNotifications.js";
 import type { AgentTaskRecord, TaskEvent } from "../../src/db/repositories.js";
 
 describe("agent task Discord notifications", () => {
@@ -70,29 +70,6 @@ describe("agent task Discord notifications", () => {
     );
   });
 
-  it("pings only the bug reporter when triage needs more context", () => {
-    const payload = bugReportResultReplyPayload(
-      { disposition: "insufficient_evidence", reportedByUserId: "reporter-1" },
-      "🐛 Validation finished: I need the expected result.",
-      2_000,
-    );
-
-    expect(payload.content).toContain("<@reporter-1>");
-    expect(payload.content).toContain("Please reply to this message");
-    expect(payload.allowedMentions).toEqual({ parse: [], users: ["reporter-1"], repliedUser: false });
-  });
-
-  it("does not ping the reporter for a conclusive bug verdict", () => {
-    const payload = bugReportResultReplyPayload(
-      { disposition: "expected_behavior", reportedByUserId: "reporter-1" },
-      "🐛 Validation finished: this matches the intended behavior.",
-      2_000,
-    );
-
-    expect(payload.content).not.toContain("<@reporter-1>");
-    expect(payload.allowedMentions).toEqual({ parse: [], repliedUser: false });
-  });
-
 });
 
 function agentTask(overrides: Partial<AgentTaskRecord> = {}): AgentTaskRecord {
@@ -132,7 +109,8 @@ function agentTask(overrides: Partial<AgentTaskRecord> = {}): AgentTaskRecord {
     lastRenderedAt: null,
     terminalRenderedAt: null,
     updatedAt: now,
-    ...overrides
+    ...overrides,
+    improvementCaseId: overrides.improvementCaseId ?? null,
   };
 }
 

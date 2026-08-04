@@ -158,10 +158,10 @@ describe("toolRegistry", () => {
 
     expect(properties.request.description).toContain("Preserve the user's desired outcome");
     expect(properties.title.description).toContain("Name the intended change");
-    expect(definition.function.description).toContain("Generic requests about my bugs");
-    const bugInbox = toolDefinitionsForModel().find((tool) => "function" in tool && tool.function.name === "listDiscordBugMarkers");
-    if (!bugInbox || !("function" in bugInbox)) throw new Error("listDiscordBugMarkers definition not found");
-    expect(bugInbox.function.description).toContain("default for requests about my bugs");
+    expect(definition.function.description).toContain("Generic requests about my reports");
+    const improvementInbox = toolDefinitionsForModel().find((tool) => "function" in tool && tool.function.name === "listMyImprovementSignals");
+    if (!improvementInbox || !("function" in improvementInbox)) throw new Error("listMyImprovementSignals definition not found");
+    expect(improvementInbox.function.description).toContain("requester's active improvement reports");
   });
 
   it("exposes bounded batch controls for Discord file inspection", () => {

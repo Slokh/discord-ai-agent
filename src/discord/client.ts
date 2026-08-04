@@ -15,7 +15,7 @@ import { sweepDiscordDeliveryObligations } from "./deliverySweep.js";
 import { handleMessageCreate, queueIncomingMessageEmbedding } from "./messageIngress.js";
 import { handleUndoCrossReaction, persistReactionMessage, persistReactionMessageUpdate } from "./reactions.js";
 import { handleDiscordRetryReaction, releaseDiscordRetryReaction } from "./retryReaction.js";
-import { clearDiscordBugMarkersForMessage, clearDiscordBugMarkersForReaction, handleDiscordBugMarkerReaction } from "./bugMarkerReaction.js";
+import { clearDiscordImprovementSignalsForMessage, clearDiscordImprovementSignalsForReaction, handleDiscordImprovementReaction } from "./improvementReaction.js";
 import { deletedMessageIdsForConfiguredGuild, isSelfMessage, isSelfUser, shouldProcessGuildEvent } from "./mentionParsing.js";
 import { discordMessageTraceContext } from "./requestContext.js";
 import { logger } from "../util/logger.js";
@@ -24,7 +24,6 @@ import { announceDeployment } from "./deploymentAnnouncements.js";
 import { handleDiscordRichInteraction } from "./components/interactionHandler.js";
 import { DiscordInteractionResponder } from "./components/interactionResponder.js";
 import { DiscordTaskSupervisor } from "./taskSupervisor.js";
-import { retryDeployedDiscordBugReports } from "./deployedBugRetry.js";
 import { waitForDeploymentPromotion } from "./deploymentPromotion.js";
 
 export type DiscordAiAgentBotRuntime = {
@@ -106,14 +105,6 @@ export function createDiscordAiAgentBot(input: {
       if (!promoted) {
         logger.warn({ revision: input.config.appRevision }, "Skipping deployment announcements because release verification was not promoted");
         return;
-      }
-      if (input.agentRuntime) {
-        try {
-          const retryResult = await retryDeployedDiscordBugReports({ ...input, client: readyClient });
-          if (retryResult.eligible > 0) logger.info({ ...retryResult, revision: input.config.appRevision }, "Processed deployed Discord bug retries");
-        } catch (error) {
-          logger.warn({ err: error, revision: input.config.appRevision }, "Could not process deployed Discord bug retries before announcing the deployment");
-        }
       }
       const announcementResult = await announceDeployment({
         client: readyClient,
@@ -205,8 +196,8 @@ export function createDiscordAiAgentBot(input: {
         persistReactionMessageUpdate(input, reaction).catch((error) => {
           logger.warn({ err: error }, "Failed to persist reaction add");
         }),
-        handleDiscordBugMarkerReaction({ ...input, botUserId: client.user?.id }, reaction, user, true).catch((error) => {
-          logger.warn({ err: error }, "Failed to add Discord bug marker");
+        handleDiscordImprovementReaction({ ...input, botUserId: client.user?.id }, reaction, user, true).catch((error) => {
+          logger.warn({ err: error }, "Failed to record Discord improvement signal");
         })
       ]);
     }),
@@ -218,8 +209,8 @@ export function createDiscordAiAgentBot(input: {
         persistReactionMessageUpdate(input, reaction).catch((error) => {
           logger.warn({ err: error }, "Failed to persist reaction remove");
         }),
-        handleDiscordBugMarkerReaction({ ...input, botUserId: client.user?.id }, reaction, user, false).catch((error) => {
-          logger.warn({ err: error }, "Failed to remove Discord bug marker");
+        handleDiscordImprovementReaction({ ...input, botUserId: client.user?.id }, reaction, user, false).catch((error) => {
+          logger.warn({ err: error }, "Failed to withdraw Discord improvement signal");
         }),
         releaseDiscordRetryReaction(input, reaction, user).catch((error) => {
           logger.warn({ err: error }, "Failed to release Discord retry reaction");
@@ -233,7 +224,7 @@ export function createDiscordAiAgentBot(input: {
       await persistReactionMessageUpdate(input, reaction).catch((error) => {
         logger.warn({ err: error }, "Failed to persist reaction emoji removal");
       });
-      await clearDiscordBugMarkersForReaction(input, reaction);
+      await clearDiscordImprovementSignalsForReaction(input, reaction);
     }),
   }));
 
@@ -242,7 +233,7 @@ export function createDiscordAiAgentBot(input: {
       await persistReactionMessage(input, message).catch((error) => {
         logger.warn({ err: error }, "Failed to persist reaction clear");
       });
-      await clearDiscordBugMarkersForMessage(input, message);
+      await clearDiscordImprovementSignalsForMessage(input, message);
     }),
   }));
 

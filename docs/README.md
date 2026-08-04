@@ -18,6 +18,7 @@ Then open only the guide that owns the change:
 | Discord history, retrieval, memory, database, privacy, retention | [Data](data.md) |
 | Wallets, transfers, wagers, games, randomness | [Payments and games](payments.md) |
 | Code-update tasks, sandboxes, GitHub publication | [Code updates](code-updates.md) |
+| Bugs, friction, reports, evidence, acceptance contracts | [Improvement cases](improvements.md) |
 | Local setup, deployment, sandbox callbacks, production debugging | [Operations](operations.md) |
 | Accepted environment variables and their ownership | [Configuration](configuration.md) |
 
@@ -29,6 +30,7 @@ Then open only the guide that owns the change:
 - [Data](data.md) explains Discord indexing, permission-filtered retrieval, conversation memory, the runtime ledger, privacy, migrations, and retention.
 - [Payments and games](payments.md) explains managed wallets, transfer authority, receipt verification, wager state, settlement, and provable RNG.
 - [Code updates](code-updates.md) explains how a conversational request becomes a sandboxed, verified pull request.
+- [Improvement cases](improvements.md) explains unified intake, coalescing, evidence, contracts, work linkage, verification, and resolution.
 - [Operations](operations.md) explains configuration, process roles, local and Kubernetes operation, observability, and incident investigation.
 - [Configuration](configuration.md) is generated from the runtime manifest and lists every accepted deployment variable.
 - [Development](development.md) explains how agents should navigate, change, test, evaluate, and document the repository.

@@ -1434,7 +1434,7 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
       guildId,
       channelId,
       userId,
-      toolName: "inspectAgentLogs",
+      toolName: "reportStatus",
       resultSummary: "visible audit",
       estimatedCostUsd: 0.001
     });
@@ -1467,7 +1467,7 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
       {
         traceId,
         channelId,
-        toolName: "inspectAgentLogs",
+        toolName: "reportStatus",
         resultSummary: "visible audit",
         estimatedCostUsd: 0.001
       }
@@ -1678,11 +1678,7 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
       statusMessage: "Kubernetes Job failed.",
       error: "Kubernetes Job failed."
     });
-    await expect(repo.getProcessRun(taskId)).resolves.toMatchObject({
-      runId: taskId,
-      status: "failed",
-      summary: "Kubernetes Job failed."
-    });
+    await expect(repo.getProcessRun(taskId)).resolves.toBeUndefined();
   });
 
   it("tracks agent task notifications, command output, cancellation, and history", async () => {

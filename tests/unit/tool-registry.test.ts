@@ -20,6 +20,13 @@ describe("toolRegistry", () => {
     expect(Buffer.byteLength(JSON.stringify(localToolDefinitionsForModel()), "utf8")).toBeLessThan(80_000);
   });
 
+  it("keeps operational reads behind the strict operator policy", () => {
+    for (const name of ["reportStatus", "getDeploymentStatus", "getSpendSummary"] as const) {
+      expect(toolRegistry.find((tool) => tool.name === name)?.accessPolicy).toBe("strict_ops");
+    }
+    expect(toolRegistry.some((tool) => String(tool.name) === "inspectAgentLogs")).toBe(false);
+  });
+
   it("derives the rich presentation tool contract from the exhaustive runtime schema", () => {
     const tool = toolRegistry.find((entry) => entry.name === "composeDiscordResponse");
     const schema = JSON.stringify(tool?.parameters);
@@ -147,18 +154,6 @@ describe("toolRegistry", () => {
     expect(definition.function.description).toContain("exact iRacing setup values");
     expect(definition.function.description).toContain("SDK .ibt telemetry containing CarSetup data");
     expect(definition.function.description).toContain("deduplicates identical extracted content");
-  });
-
-  it("exposes reply-aware bounded model I/O controls for agent debugging", () => {
-    const definition = toolDefinitionsForModel().find(
-      (tool) => "function" in tool && tool.function.name === "inspectAgentLogs"
-    );
-    if (!definition || !("function" in definition)) throw new Error("inspectAgentLogs definition not found");
-    const properties = definition.function.parameters.properties as Record<string, { enum?: string[]; description?: string }>;
-
-    expect(properties.detail.enum).toEqual(["summary", "model_io"]);
-    expect(definition.function.description).toContain("omit traceId to resolve the reply chain automatically");
-    expect(definition.function.description).toContain("secret-redacted");
   });
 
   it("classifies local tools into the model-facing taxonomy", () => {

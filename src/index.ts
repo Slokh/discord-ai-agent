@@ -155,7 +155,7 @@ async function main() {
     { startsApi, startsBot, startsWorker, startsCrawlWorker, startsEmbeddingWorker, startsTaskWorker, startsAgentRuntimeWorker },
     "Job runtime ready"
   );
-  const callbackServer = startsApi ? await startSandboxCallbackServer({ config, repo }) : null;
+  const callbackServer = startsApi ? await startSandboxCallbackServer({ config, repo, agentRuntime: agentRuntimeRepo }) : null;
   const staleRunReconciler = startsApi
     ? startStaleRunReconciler({
         repo,

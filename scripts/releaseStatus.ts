@@ -91,15 +91,6 @@ export function collectReleaseStatus(input: {
         "--hours", "48", "--compare",
       ]), warnings, "revision quality")
     : null;
-  const taskSnapshot = workerName
-    ? jsonResult(runner("kubectl", [
-        "--namespace", namespace, "exec", `deployment/${workerName}`, "--",
-        "node", "dist/scripts/agentTaskStatus.js", "--source", "db", "--json",
-        "--limit", "20",
-      ]), warnings, "task reconciliation")
-    : null;
-  const tasks = taskSummary(taskSnapshot);
-
   return {
     generatedAt: new Date().toISOString(),
     branch,
@@ -113,7 +104,7 @@ export function collectReleaseStatus(input: {
     deploymentHealth,
     deploymentRun,
     quality,
-    tasks,
+    tasks: null,
     warnings,
   };
 }
@@ -143,9 +134,7 @@ export function releaseStatusExitCode(status: ReleaseStatus) {
     ["FAILURE", "CANCELLED", "TIMED_OUT", "ACTION_REQUIRED"].includes(String(check.conclusion ?? check.state ?? "").toUpperCase()));
   const deploymentFailed = String(status.deploymentRun?.conclusion ?? "").toLowerCase() === "failure";
   const qualityFailed = (status.quality?.assessment as any)?.status === "fail";
-  const taskRecoveryNeeded = Number(status.tasks?.staleActive ?? 0) > 0
-    || Number(status.tasks?.pendingCleanup ?? 0) > 0;
-  return checksFailed || deploymentFailed || qualityFailed || taskRecoveryNeeded
+  return checksFailed || deploymentFailed || qualityFailed
     || !status.revisionsAligned || !status.rolloutReady ? 1 : 0;
 }
 
@@ -188,39 +177,6 @@ function helmSummary(value: Record<string, any> | null): Record<string, unknown>
         }
       : null,
   };
-}
-
-function taskSummary(value: Record<string, any> | null): Record<string, unknown> | null {
-  if (!value) return null;
-  const activeExecutions = array(value.activeAgentExecutions);
-  const activeTasks = array(value.activeTasks);
-  const activeSandboxes = array(value.activeSandboxRuns);
-  const pendingCleanup = array(value.pendingSandboxCleanup);
-  const staleAfterMs = Number(value.staleAfterMs ?? 15 * 60 * 1000);
-  const generatedAt = new Date(String(value.generatedAt ?? Date.now())).getTime();
-  const staleExecutions = activeExecutions.filter((item) => staleAt(item?.updatedAt, generatedAt, staleAfterMs));
-  return {
-    activeExecutions: activeExecutions.length,
-    memberExecutions: activeExecutions.filter((item) => item?.qualityCohort === "member").length,
-    syntheticExecutions: activeExecutions.filter((item) => item?.qualityCohort === "synthetic").length,
-    activeTasks: activeTasks.length,
-    activeSandboxes: activeSandboxes.length,
-    pendingCleanup: pendingCleanup.length,
-    staleActive: staleExecutions.length + activeTasks.filter((item) => staleAt(
-      item?.progressUpdatedAt ?? item?.updatedAt ?? item?.startedAt ?? item?.createdAt,
-      generatedAt,
-      staleAfterMs,
-    )).length,
-  };
-}
-
-function staleAt(value: unknown, generatedAt: number, staleAfterMs: number) {
-  const timestamp = new Date(String(value ?? "")).getTime();
-  return Number.isFinite(timestamp) && generatedAt - timestamp >= staleAfterMs;
-}
-
-function array(value: unknown): any[] {
-  return Array.isArray(value) ? value : [];
 }
 
 function numberValue(value: unknown) {

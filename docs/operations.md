@@ -110,13 +110,13 @@ Investigation order:
 
 1. Resolve the deployed revision and rollout time.
 2. Confirm ingress captured the intended current message and reply chain.
-3. Inspect the persisted turn envelope, memory, and operative model input.
+3. Inspect the persisted turn envelope and memory scope.
 4. Inspect selected tools, canonical arguments, typed results, and rejected gates.
 5. Separate model completion from delivery intent and Discord network writes.
 6. Cluster repeated failures by revision before changing code.
 7. Fix the smallest canonical owner and add focused regression coverage.
 
-Do not begin with browser scraping, provider blame, or source speculation when the runtime ledger can show what happened. Model I/O may be inspected after authorization and redaction; private chain of thought is not available or required.
+Do not begin with browser scraping, provider blame, or source speculation when the runtime ledger can show what happened. Runtime diagnostics are retained for trusted operator workflows; they are not a model-facing Discord capability. Private chain of thought is not available or required.
 
 ## Native bug inbox
 

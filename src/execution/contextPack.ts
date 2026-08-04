@@ -101,8 +101,8 @@ export async function buildCodegenContextPack(checkoutDir: string, taskRequest =
     {
       area: "Runtime ledger and sandbox callbacks",
       purpose: "Runs, spans, events, and artifacts are retained in the runtime ledger; isolated sandboxes can only append signed task callbacks.",
-      files: ["src/observability/runs.ts", "src/observability/runtimeEventSchema.ts", "src/execution/callbackServer.ts", "docs/operations.md"],
-      checks: ["tests/unit/observability.test.ts", "tests/unit/sandbox-callback-server.test.ts"]
+      files: ["src/observability/runtimeEventSchema.ts", "src/execution/callbackServer.ts", "docs/operations.md"],
+      checks: ["tests/unit/sandbox-callback-server.test.ts"]
     },
     {
       area: "Architecture guides",

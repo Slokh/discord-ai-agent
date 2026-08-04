@@ -246,7 +246,6 @@ async function verifySandboxCallback(database: ReturnType<typeof createPool>) {
     await core.deleteNamespacedSecret({ namespace, name: secretName }).catch((error: unknown) => {
       if (kubernetesStatus(error) !== 404) throw error;
     });
-    await database.query("DELETE FROM process_runs WHERE run_id = $1", [taskId]);
     await database.query("DELETE FROM agent_tasks WHERE task_id = $1", [taskId]);
   }
 }

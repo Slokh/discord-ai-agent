@@ -16,7 +16,7 @@ describe("sandbox callback server", () => {
       getAgentTask: vi.fn(async () => ({ status: "running", taskType: "code_update" })),
       markAgentTaskProgress: vi.fn(async () => undefined),
     };
-    runtime = await startSandboxCallbackServer({ config: testConfig(), repo: repo as never });
+    runtime = await startSandboxCallbackServer({ config: testConfig(), repo: repo as never, agentRuntime: {} as never });
 
     await expect(fetch(`${runtime.url}/healthz`).then((response) => response.json())).resolves.toEqual({ status: "ok" });
     await expect(fetch(`${runtime.url}/not-a-route`).then((response) => response.status)).resolves.toBe(404);
@@ -36,7 +36,7 @@ describe("sandbox callback server", () => {
   });
 
   it("rejects unsigned callback writes", async () => {
-    runtime = await startSandboxCallbackServer({ config: testConfig(), repo: {} as never });
+    runtime = await startSandboxCallbackServer({ config: testConfig(), repo: {} as never, agentRuntime: {} as never });
     const response = await fetch(`${runtime.url}/internal/tasks/task-1/events`, {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -53,7 +53,7 @@ describe("sandbox callback server", () => {
       completeDiscordBugReportForTask: vi.fn(async () => undefined),
       upsertRunFeedback: vi.fn(async () => undefined),
     };
-    runtime = await startSandboxCallbackServer({ config: testConfig(), repo: repo as never });
+    runtime = await startSandboxCallbackServer({ config: testConfig(), repo: repo as never, agentRuntime: {} as never });
 
     const response = await signedPost(runtime.url, "task-1", "sandbox-1", "/internal/tasks/task-1/complete", {
       status: "succeeded",
@@ -77,6 +77,31 @@ describe("sandbox callback server", () => {
       disposition: "confirmed_fixed",
     }));
     expect(repo.upsertRunFeedback).not.toHaveBeenCalled();
+  });
+
+  it("stores sandbox artifacts on the task-linked runtime execution", async () => {
+    const agentRuntime = {
+      getExecution: vi.fn(async () => ({ sessionId: "session-1", executionId: "agent-task-execution-task-1" })),
+      storeArtifact: vi.fn(async () => ({ artifactId: "artifact-1" })),
+    };
+    runtime = await startSandboxCallbackServer({ config: testConfig(), repo: {} as never, agentRuntime: agentRuntime as never });
+
+    const response = await signedPost(runtime.url, "task-1", "sandbox-1", "/internal/tasks/task-1/artifacts", {
+      kind: "diagnostic",
+      name: "Verification failure",
+      content: "npm run verify failed",
+      contentType: "text/plain",
+      metadata: { sandboxRunId: "sandbox-1" },
+    });
+
+    expect(response.status).toBe(200);
+    expect(agentRuntime.getExecution).toHaveBeenCalledWith({ executionId: "agent-task-execution-task-1" });
+    expect(agentRuntime.storeArtifact).toHaveBeenCalledWith(expect.objectContaining({
+      sessionId: "session-1",
+      executionId: "agent-task-execution-task-1",
+      kind: "diagnostic",
+      name: "Verification failure",
+    }));
   });
 });
 

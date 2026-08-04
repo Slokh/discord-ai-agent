@@ -37,7 +37,6 @@ describe.skipIf(!runDbTests)("pg-boss database behavior", () => {
         await pool.query("DELETE FROM agent_runtime_sessions WHERE thread_key = ANY($1::text[])", [
           taskIds.map((taskId) => `agent-task:${taskId}`)
         ]);
-        await pool.query("DELETE FROM process_runs WHERE run_id = ANY($1::text[])", [taskIds]);
         await pool.query("DELETE FROM agent_tasks WHERE task_id = ANY($1::text[])", [taskIds]);
       }
     } finally {
@@ -285,15 +284,6 @@ describe.skipIf(!runDbTests)("pg-boss database behavior", () => {
           })
         })
       ]);
-      await expect(repo.getProcessRun(taskId)).resolves.toEqual(
-        expect.objectContaining({
-          metadata: expect.objectContaining({
-            parentAgentSessionId: "agent-session-parent",
-            parentAgentExecutionId: "agent-execution-parent",
-            parentAgentThreadKey: "discord:guild:channel"
-          })
-        })
-      );
     } finally {
       await runtime.stop();
       await pool.end();

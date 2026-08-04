@@ -1,5 +1,4 @@
 import type { DbPool } from "./pool.js";
-import * as processRunRepository from "./processRunRepository.js";
 import { rowToTaskEvent, rowToSandboxRun, rowToAgentTask, rowToSandboxCommandEvent } from "./shared.js";
 import type { AgentTaskStatus, AgentTaskRecord, TaskEvent, SandboxRunRecord, SandboxCommandEvent } from "./shared.js";
 
@@ -280,12 +279,6 @@ export async function cancelAgentTask(pool: DbPool, input: { taskId: string; rea
     );
     const cancelled = Boolean(result.rowCount && result.rowCount > 0);
     if (cancelled) {
-      await processRunRepository.updateProcessRun(pool, {
-        runId: input.taskId,
-        status: "cancelled",
-        summary: message,
-        metadata: { error: message }
-      }).catch(() => undefined);
       await pool
         .query(
           `
@@ -356,22 +349,6 @@ export async function recordSandboxCommandEvent(pool: DbPool, input: {
         input.durationMs == null ? null : Math.trunc(input.durationMs)
       ]
     );
-    await processRunRepository.recordProcessRunEvent(pool, {
-      runId: input.taskId,
-      eventName: "sandbox.command",
-      level: input.exitCode === 0 || input.exitCode == null ? "info" : "error",
-      summary: `${input.step}${input.exitCode == null ? "" : ` exited ${input.exitCode}`}`,
-      durationMs: input.durationMs ?? null,
-      metadata: {
-        sandboxRunId: input.sandboxRunId ?? null,
-        step: input.step,
-        command: input.command ?? null,
-        exitCode: input.exitCode ?? null,
-        stdoutChars: input.outputTail?.length ?? 0,
-        stderrChars: input.errorTail?.length ?? 0,
-        ...(input.metadata ?? {})
-      }
-    }).catch(() => undefined);
   }
 
 

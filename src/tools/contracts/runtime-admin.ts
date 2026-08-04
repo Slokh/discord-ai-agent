@@ -9,6 +9,7 @@ export const runtimeAdminToolContracts = [
     description: "Report local database, crawl, and tool status.",
     mutates: false,
     group: "ops",
+    accessPolicy: "strict_ops",
     parameters: {
       type: "object",
       properties: {},

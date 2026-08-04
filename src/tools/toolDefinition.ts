@@ -12,7 +12,7 @@ export const TOOL_NAMES_BY_CAPABILITY = {
   ],
   images: ["inspectDiscordImages", "getDiscordUserAvatar", "generateImage"],
   generatedData: ["readGeneratedFile", "queryGeneratedCsv", "queryGeneratedTable"],
-  operations: ["getDeploymentStatus", "getSpendSummary", "inspectAgentLogs", "reportStatus", "setAgentModel"],
+  operations: ["getDeploymentStatus", "getSpendSummary", "reportStatus", "setAgentModel"],
   friction: ["reportAgentFriction"],
   codeUpdates: ["runCodingAgent", "getAgentTaskStatus", "listAgentTasks", "retryAgentTask", "cancelAgentTask"],
   discordActions: ["undoConversationTurns", "addDiscordReaction", "createDiscordPoll", "createDiscordEmoji", "updateBotAvatar"],

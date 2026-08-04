@@ -1,11 +1,9 @@
 import http from "node:http";
 import type { AppConfig } from "../config/env.js";
 import { assertTaskCallbackConfig } from "../config/env.js";
-import type {
-  DiscordBugReportDisposition,
-  ProcessRunArtifactKind,
-} from "../db/types.js";
+import type { DiscordBugReportDisposition } from "../db/types.js";
 import type { DiscordAiAgentRepository } from "../db/repositories.js";
+import type { AgentRuntimeRepository } from "../db/agentRuntimeRepository.js";
 import { TOOL_NAMES } from "../tools/toolDefinition.js";
 import { logger } from "../util/logger.js";
 import {
@@ -19,7 +17,7 @@ const ARTIFACT_KINDS = [
   "prompt", "command_log", "diff", "pr_body", "model_transcript",
   "tool_transcript", "crawl_summary", "embedding_summary", "raw_json",
   "response", "diagnostic",
-] as const satisfies readonly ProcessRunArtifactKind[];
+] as const;
 const BUG_DISPOSITIONS = [
   "confirmed_fixed", "confirmed_unfixed", "expected_behavior",
   "not_reproducible", "already_fixed", "insufficient_evidence",
@@ -50,6 +48,7 @@ export type SandboxCallbackRuntime = {
 export async function startSandboxCallbackServer(input: {
   config: AppConfig;
   repo: DiscordAiAgentRepository;
+  agentRuntime: AgentRuntimeRepository;
 }): Promise<SandboxCallbackRuntime> {
   assertTaskCallbackConfig(input.config);
   const server = http.createServer(async (request, response) => {
@@ -73,6 +72,7 @@ export async function startSandboxCallbackServer(input: {
 export async function handleSandboxCallbackRequest(input: {
   config: AppConfig;
   repo: DiscordAiAgentRepository;
+  agentRuntime: AgentRuntimeRepository;
   request: http.IncomingMessage;
   response: http.ServerResponse;
 }) {
@@ -132,14 +132,18 @@ export async function handleSandboxCallbackRequest(input: {
   }
 
   if (kind === "artifacts") {
-    const artifact = await input.repo.storeProcessRunArtifact({
-      runId: taskId,
-      kind: artifactKind(body.kind),
-      name: (optionalString(body.name) ?? "raw_json").slice(0, 200),
-      content: typeof body.content === "string" ? body.content : JSON.stringify(body.content ?? "", null, 2),
-      contentType: optionalString(body.contentType) ?? "text/plain",
-      metadata: objectValue(body.metadata),
-    });
+    const execution = await input.agentRuntime.getExecution({ executionId: agentTaskExecutionId(taskId) });
+    const artifact = execution
+      ? await input.agentRuntime.storeArtifact({
+          sessionId: execution.sessionId,
+          executionId: execution.executionId,
+          kind: artifactKind(body.kind),
+          name: (optionalString(body.name) ?? "raw_json").slice(0, 200),
+          content: typeof body.content === "string" ? body.content : JSON.stringify(body.content ?? "", null, 2),
+          contentType: optionalString(body.contentType) ?? "text/plain",
+          metadata: objectValue(body.metadata),
+        })
+      : null;
     sendJson(input.response, 200, { ok: true, artifactId: artifact?.artifactId ?? null });
     return;
   }
@@ -241,16 +245,20 @@ function completionStatus(value: unknown): "succeeded" | "failed" | "no_changes"
   throw new Error("Completion status must be succeeded, failed, no_changes, or cancelled.");
 }
 
-function artifactKind(value: unknown): ProcessRunArtifactKind {
+function artifactKind(value: unknown): typeof ARTIFACT_KINDS[number] {
   const kind = typeof value === "string" ? value : "raw_json";
-  if (!ARTIFACT_KINDS.includes(kind as ProcessRunArtifactKind)) throw new Error("Invalid artifact kind.");
-  return kind as ProcessRunArtifactKind;
+  if (!ARTIFACT_KINDS.includes(kind as typeof ARTIFACT_KINDS[number])) throw new Error("Invalid artifact kind.");
+  return kind as typeof ARTIFACT_KINDS[number];
 }
 
 function callbackKind(value: string | undefined): CallbackKind {
   if (value === "events") return "progress";
   if (value === "complete" || value === "commands" || value === "artifacts") return value;
   throw new Error("Invalid callback path.");
+}
+
+function agentTaskExecutionId(taskId: string) {
+  return `agent-task-execution-${taskId}`;
 }
 
 function isFailureMode(value: string | null): value is FailureMode {

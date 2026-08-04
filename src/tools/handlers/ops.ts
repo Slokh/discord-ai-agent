@@ -1,6 +1,6 @@
 import { getDeploymentStatus } from "../agentTaskTools.js";
 import { setAgentModel } from "../agentModelTools.js";
-import { inspectAgentLogs, reportStatus } from "../discordOpsTools.js";
+import { reportStatus } from "../discordOpsTools.js";
 import { getSpendSummary } from "../spendTools.js";
 import { cleanToolResponse } from "../responseFormatting.js";
 import { stringArgument, numberArgument } from "./arguments.js";
@@ -19,18 +19,6 @@ export const opsToolHandlers = {
           model: stringArgument(route.arguments, "model"),
         });
     return { ...response, content: cleanToolResponse(response.content, ctx.config.maxReplyChars) };
-  },
-  "inspectAgentLogs": async (ctx, route, _originalText) => {
-    return {
-          content: cleanToolResponse(
-            await inspectAgentLogs(ctx, {
-              traceId: stringArgument(route.arguments, "traceId"),
-              limit: numberArgument(route.arguments, "limit"),
-              detail: stringArgument(route.arguments, "detail") === "model_io" ? "model_io" : "summary",
-            }),
-            Math.max(ctx.config.maxReplyChars, 6_000),
-          ),
-        };
   },
   "getDeploymentStatus": async (ctx, _route, _originalText) => {
     return {

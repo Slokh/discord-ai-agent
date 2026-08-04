@@ -17,7 +17,7 @@ The sandbox supervisor never receives the Discord token or database URL. It rece
 3. Discord task notification code creates or edits one progress message for queued, running, and terminal state.
 4. `src/execution/backend.ts` creates an isolated Kubernetes Job.
 5. `src/execution/runnerPipeline.ts` runs the complete repository pipeline.
-6. Sandbox progress, commands, timings, cache state, and terminal callbacks become `agent.task.*` events in the canonical runtime ledger.
+6. Sandbox progress, commands, timings, cache state, and terminal callbacks become `agent.task.*` events in the canonical runtime ledger. Task lifecycle is not mirrored into generic trace events.
 7. The task ends as succeeded, failed, cancelled, or no-change, with a PR link or concrete reason.
 
 After a confirmed automated bug repair reaches production, the marked bot reply becomes a persistent `Bug fix` update using the same format as ordinary deployment notes. Posting that contextual update triggers a retry of the original request into a fresh reply; the release-notes channel does not receive a duplicate update for that revision.

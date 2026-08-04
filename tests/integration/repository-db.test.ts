@@ -1105,6 +1105,11 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
         expect.objectContaining({ execution_id: agentExecutionId, event_name: "agent.task.completed", summary: "Opened pull request." })
       ])
     );
+    const traceMirrors = await pool.query(
+      "SELECT count(*)::int AS count FROM trace_events WHERE request_id = $1",
+      [taskId]
+    );
+    expect(traceMirrors.rows[0]?.count).toBe(0);
   });
 
   it("fans terminal task failures into executions and releases warm leases", async () => {

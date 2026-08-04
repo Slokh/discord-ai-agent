@@ -4,10 +4,16 @@ import type { ToolName } from "../tools/toolDefinition.js";
 import { logger } from "../util/logger.js";
 
 type TraceInput = Parameters<ToolContext["repo"]["recordTraceEvent"]>[0];
-type SpanInput = Omit<
-  Parameters<ToolContext["repo"]["recordProcessRunSpan"]>[0],
-  "runId"
->;
+type SpanInput = {
+  spanId: string;
+  parentSpanId?: string | null;
+  name: string;
+  status?: string | null;
+  startedAt?: Date | null;
+  completedAt?: Date | null;
+  durationMs?: number | null;
+  metadata?: Record<string, unknown>;
+};
 type AuditInput = Parameters<ToolContext["repo"]["auditTool"]>[0];
 
 export type AgentEventInput = Partial<TraceInput> &
@@ -42,10 +48,8 @@ export async function recordAgentEvent(
     input.span ?? (input.spanId ? spanFromTopLevel(input) : undefined);
 
   // Runtime events share a monotonically increasing per-execution sequence.
-  // Keep writes ordered so a trace event and its span cannot race for the same
-  // sequence value under the canonical runtime ledger.
   await recordTraceEvent(ctx, trace);
-  await recordProcessRunSpan(ctx, span);
+  await recordRuntimeSpan(ctx, span);
   await recordToolAudit(ctx, input.audit);
 }
 
@@ -93,7 +97,7 @@ function stringMetadata(value: unknown) {
   return typeof value === "string" && value.trim() ? value : null;
 }
 
-async function recordProcessRunSpan(
+async function recordRuntimeSpan(
   ctx: ToolContext,
   input: SpanInput | undefined,
 ) {
@@ -132,22 +136,6 @@ async function recordProcessRunSpan(
       });
     return;
   }
-  const runId = ctx.requestId;
-  if (!runId) return;
-  const recorder = (
-    ctx.repo as unknown as {
-      recordProcessRunSpan?: (
-        span: Parameters<ToolContext["repo"]["recordProcessRunSpan"]>[0],
-      ) => Promise<unknown>;
-    }
-  ).recordProcessRunSpan;
-  if (!recorder) return;
-  await recorder.call(ctx.repo, { runId, ...input }).catch((error: unknown) => {
-    logger.warn(
-      { err: error, runId, spanId: input.spanId },
-      "Failed to record process run span",
-    );
-  });
 }
 
 async function recordToolAudit(

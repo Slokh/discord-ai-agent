@@ -127,33 +127,6 @@ async function main() {
       config,
     });
     if (!runtimeRef) throw new Error("Could not create the NanoCodex runtime ledger for the local prompt.");
-    await repo.upsertProcessRun({
-      runId: requestId,
-      traceId: requestId,
-      kind: "prompt",
-      status: "running",
-      title: `Local prompt: ${args.prompt.slice(0, 80)}`,
-      summary: args.prompt,
-      guildId,
-      channelId: currentChannel.id,
-      userId: args.userId,
-      requester: args.userName,
-      source: "cli.prompt",
-      metadata: {
-        memory: args.memory,
-        useDiscordMemory: args.useDiscordMemory,
-        visibleChannelCount: visibleChannelIds.length,
-        threadKey: args.memory ? threadKey : null
-      }
-    });
-    await repo.storeProcessRunArtifact({
-      runId: requestId,
-      kind: "prompt",
-      name: "CLI prompt",
-      content: args.prompt,
-      contentType: "text/plain",
-      metadata: { channelId: currentChannel.id, channelName: currentChannel.name }
-    });
     const agentStartedAt = Date.now();
     const response = await runWithTrace(
       {
@@ -209,22 +182,6 @@ async function main() {
             durationMs: Date.now() - agentStartedAt,
             executorName: "nanocodex",
           });
-          await repo.recordProcessRunSpan({
-            runId: requestId,
-            spanId: "agent.request",
-            name: "Run local prompt",
-            status: "failed",
-            startedAt: new Date(agentStartedAt),
-            completedAt: new Date(),
-            durationMs: Date.now() - agentStartedAt,
-            metadata: { error: error instanceof Error ? error.message : String(error) }
-          });
-          await repo.updateProcessRun({
-            runId: requestId,
-            status: "failed",
-            summary: error instanceof Error ? error.message : String(error),
-            metadata: { error: error instanceof Error ? error.message : String(error), durationMs: Date.now() - agentStartedAt }
-          });
           throw error;
         }
       }
@@ -241,31 +198,6 @@ async function main() {
       durationMs: Date.now() - agentStartedAt,
       executorName: "nanocodex",
     });
-    await repo.recordProcessRunSpan({
-      runId: requestId,
-      spanId: "agent.request",
-      name: "Run local prompt",
-      status: "succeeded",
-      startedAt: new Date(agentStartedAt),
-      completedAt: new Date(),
-      durationMs: Date.now() - agentStartedAt,
-      metadata: { responseChars: response.content.length, fileCount: response.files?.length ?? 0 }
-    });
-    await repo.storeProcessRunArtifact({
-      runId: requestId,
-      kind: "response",
-      name: "CLI response",
-      content: response.content,
-      contentType: "text/plain",
-      metadata: { fileCount: response.files?.length ?? 0 }
-    });
-    await repo.updateProcessRun({
-      runId: requestId,
-      status: "succeeded",
-      summary: `Answered with ${response.content.length} characters.`,
-      metadata: { responseChars: response.content.length, durationMs: Date.now() - agentStartedAt }
-    });
-
     const savedFiles = await saveAgentFiles(response.files ?? [], args.saveFilesDir);
     if (args.memory) {
       for (const memoryEvent of response.memoryEvents ?? []) {

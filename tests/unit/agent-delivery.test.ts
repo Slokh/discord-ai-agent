@@ -4,13 +4,11 @@ import { runQueuedAgentRuntimeExecution } from "../../src/discord/agentDelivery.
 describe("queued Discord agent delivery", () => {
   it("does not rerun an execution whose Discord reply was already delivered", async () => {
     const getByExecutionId = vi.fn(async () => ({ state: "delivered" }));
-    const getProcessRun = vi.fn();
-
     await runQueuedAgentRuntimeExecution(
       {
         client: {},
         deliveryObligations: { getByExecutionId },
-        repo: { getProcessRun },
+        repo: {},
       } as never,
       {
         runId: "run-1",
@@ -29,6 +27,5 @@ describe("queued Discord agent delivery", () => {
     );
 
     expect(getByExecutionId).toHaveBeenCalledWith("execution-1");
-    expect(getProcessRun).not.toHaveBeenCalled();
   });
 });

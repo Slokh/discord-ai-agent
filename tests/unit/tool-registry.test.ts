@@ -76,6 +76,16 @@ describe("toolRegistry", () => {
     }));
   });
 
+  it("requires current group-level evidence for demographic health comparisons", () => {
+    const tool = toolRegistry.find((entry) => entry.name === "web__run");
+
+    expect(tool?.description).toContain("ALWAYS call this");
+    expect(tool?.description).toContain("demographic comparisons involving health outcomes or life expectancy");
+    expect(tool?.description).toContain("exact phrase `group-level`");
+    expect(tool?.description).toContain("from an individual prediction");
+    expect(tool?.description).toContain("without substituting unsolicited personal or relationship advice");
+  });
+
   it("exposes explicit image alpha controls and transparent emoji validation", () => {
     const imageProperties = toolRegistry.find((entry) => entry.name === "generateImage")?.parameters.properties;
     const emojiProperties = toolRegistry.find((entry) => entry.name === "createDiscordEmoji")?.parameters.properties;

@@ -38,8 +38,9 @@ describe("web__run", () => {
       raw: {},
       });
     }) as unknown as ToolContext["openRouter"]["chat"];
+    const ctx = context(chat);
     const result = await externalResearchToolHandlers.web__run!(
-      context(chat),
+      ctx,
       {
         id: "call-1",
         name: "web__run",
@@ -65,6 +66,11 @@ describe("web__run", () => {
     ]));
     expect(JSON.stringify(submitted?.messages)).not.toContain("What is the date?");
     expect(JSON.stringify(submitted?.messages)).toContain("do not answer, mention, or infer any other part of the outer request");
+    expect(ctx.repo.auditTool).toHaveBeenCalledWith(expect.objectContaining({
+      toolName: "web__run",
+      error: undefined,
+      resultSummary: expect.stringContaining("citationCount"),
+    }));
   });
 
   it("offers only the hosted capability requested by the operation", async () => {
@@ -133,8 +139,9 @@ describe("web__run", () => {
   });
 
   it("maps provider failures into a stable tool result", async () => {
+    const ctx = context(vi.fn(async () => { throw new Error("provider unavailable with private detail"); }));
     const result = await externalResearchToolHandlers.web__run!(
-      context(vi.fn(async () => { throw new Error("provider unavailable with private detail"); })),
+      ctx,
       {
         id: "call-1",
         name: "web__run",
@@ -146,5 +153,9 @@ describe("web__run", () => {
 
     expect(result).toMatchObject({ status: "error", errorCode: "external_evidence_missing", retryable: true });
     expect(result.content).not.toContain("private detail");
+    expect(ctx.repo.auditTool).toHaveBeenCalledWith(expect.objectContaining({
+      toolName: "web__run",
+      error: "hosted_web_research_failed",
+    }));
   });
 });

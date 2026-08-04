@@ -1,13 +1,12 @@
 name: Deploy EKS
 
 on:
-  workflow_run:
-    workflows:
-      - CI
-    types:
-      - completed
-    branches:
-      - main
+  workflow_call:
+    inputs:
+      image_tag:
+        description: Immutable application and sandbox image tag to deploy
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -19,7 +18,6 @@ concurrency:
 
 jobs:
   deploy-eks:
-    if: github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' && vars.AWS_REGION != '' && vars.EKS_CLUSTER_NAME != '' && vars.ECR_REPOSITORY != ''
     runs-on: ubuntu-latest
     env:
       AWS_REGION: ${{ vars.AWS_REGION }}
@@ -28,7 +26,7 @@ jobs:
       HELM_RELEASE: ${{ vars.HELM_RELEASE || 'discord-ai-agent' }}
       K8S_NAMESPACE: ${{ vars.K8S_NAMESPACE || 'discord-ai-agent' }}
       RELEASE_NOTES_CHANNEL_ID: ${{ vars.RELEASE_NOTES_CHANNEL_ID }}
-      IMAGE_TAG: ${{ github.event.workflow_run.head_sha }}
+      IMAGE_TAG: ${{ inputs.image_tag }}
     steps:
       - uses: aws-actions/configure-aws-credentials@v6
         with:
@@ -36,30 +34,16 @@ jobs:
           aws-region: ${{ env.AWS_REGION }}
       - id: ecr
         uses: aws-actions/amazon-ecr-login@v2
-      - id: release
-        name: Check whether this revision has deployable images
-        run: |
-          deploy=false
-          if aws ecr describe-images --repository-name "$ECR_REPOSITORY" --image-ids "imageTag=$IMAGE_TAG" >/dev/null 2>&1 \
-            && aws ecr describe-images --repository-name "$ECR_REPOSITORY-sandbox" --image-ids "imageTag=$IMAGE_TAG" >/dev/null 2>&1; then
-            deploy=true
-          fi
-          echo "deploy=$deploy" >>"$GITHUB_OUTPUT"
       - uses: actions/checkout@v7
-        if: steps.release.outputs.deploy == 'true'
         with:
-          ref: ${{ github.event.workflow_run.head_sha }}
+          ref: ${{ inputs.image_tag }}
       - uses: actions/setup-node@v7
-        if: steps.release.outputs.deploy == 'true'
         with:
           node-version: 22
           cache: npm
-      - if: steps.release.outputs.deploy == 'true'
-        run: npm ci --ignore-scripts
+      - run: npm ci --ignore-scripts
       - uses: azure/setup-helm@v5
-        if: steps.release.outputs.deploy == 'true'
       - name: Deploy Helm chart
-        if: steps.release.outputs.deploy == 'true'
         env:
           REGISTRY: ${{ steps.ecr.outputs.registry }}
         run: |
@@ -95,7 +79,6 @@ jobs:
             --timeout 10m \
             "${helm_args[@]}"
       - name: Verify release and recover on failure
-        if: steps.release.outputs.deploy == 'true'
         run: |
           args=(
             --namespace "$K8S_NAMESPACE"

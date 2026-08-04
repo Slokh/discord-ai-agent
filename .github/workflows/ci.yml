@@ -12,7 +12,7 @@ permissions:
 
 concurrency:
   group: ci-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name != 'push' }}
 
 jobs:
   changes:
@@ -462,3 +462,23 @@ jobs:
             *.cache-from=type=gha,scope=runtime
             runtime.cache-to=type=gha,mode=max,scope=runtime,ignore-error=true
             codegen.cache-to=type=gha,mode=max,scope=codegen,ignore-error=true
+
+  deploy-eks:
+    needs: [changes, verify, publish-images]
+    if: >-
+      always() &&
+      github.event_name == 'push' &&
+      github.ref == 'refs/heads/main' &&
+      needs.changes.outputs.deployable == 'true' &&
+      needs.verify.result == 'success' &&
+      needs.publish-images.result == 'success' &&
+      vars.AWS_REGION != '' &&
+      vars.EKS_CLUSTER_NAME != '' &&
+      vars.ECR_REPOSITORY != ''
+    permissions:
+      contents: read
+      id-token: write
+    uses: ./.github/workflows/deploy-eks.yml
+    with:
+      image_tag: ${{ github.sha }}
+    secrets: inherit

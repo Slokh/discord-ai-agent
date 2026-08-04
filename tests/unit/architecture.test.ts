@@ -19,6 +19,22 @@ const requiredArchitectureGuides = [
 ];
 
 describe("architecture guardrails", () => {
+  it("keeps production deployment in the main CI check graph", async () => {
+    const ci = await fs.readFile(path.join(process.cwd(), ".github/workflows/ci.yml"), "utf8");
+    const deployment = await fs.readFile(
+      path.join(process.cwd(), ".github/workflows/deploy-eks.yml"),
+      "utf8",
+    );
+
+    expect(ci).toContain("cancel-in-progress: ${{ github.event_name != 'push' }}");
+    expect(ci).toMatch(/deploy-eks:\n\s+needs: \[changes, verify, publish-images\]/);
+    expect(ci).toContain("uses: ./.github/workflows/deploy-eks.yml");
+    expect(ci).toContain("image_tag: ${{ github.sha }}");
+    expect(deployment).toContain("workflow_call:");
+    expect(deployment).toContain("IMAGE_TAG: ${{ inputs.image_tag }}");
+    expect(deployment).not.toContain("workflow_run:");
+  });
+
   it("does not mount Kubernetes API credentials into app or sandbox service accounts", async () => {
     const serviceAccounts = await fs.readFile(path.join(process.cwd(), "deploy/helm/discord-ai-agent/templates/serviceaccounts.yaml"), "utf8");
     expect(serviceAccounts.match(/automountServiceAccountToken: false/g)).toHaveLength(2);

@@ -5,7 +5,7 @@ import type { AppConfig } from "../config/env.js";
 import { OpenRouterClient } from "../models/openrouter.js";
 import { complete, progress, recordArtifact } from "./callbacks.js";
 import { categoryForCodegenPhase, CodegenTaskError, diagnoseCodegenFailure, renderCodegenFailureDiagnosis, type CodegenFailureDiagnosis } from "./codegenFailureDiagnosis.js";
-import { renderCodegenContextPack } from "./codegenPrompts.js";
+import { codeUpdateVerificationRepairPrompt, renderCodegenContextPack } from "./codegenPrompts.js";
 import { runCommand } from "./commands.js";
 import { buildCodegenContextPack } from "./contextPack.js";
 import { changedDependencyManifestFiles, codegenNpmScriptEnv, prepareDependencies, readDependencyManifestState } from "./dependencyCache.js";
@@ -30,7 +30,7 @@ import {
 import { loadSandboxEnv, type SandboxEnv, type TaskTimings } from "./sandboxEnv.js";
 import { writeSandboxToolShims } from "./sandboxToolShims.js";
 import { parseGitHubRepository } from "../github/repository.js";
-import { conciseError, formatDuration, uniqueStrings } from "./sandboxUtils.js";
+import { conciseError, formatDuration, tail, uniqueStrings } from "./sandboxUtils.js";
 
 type CacheSummary = {
   repo?: "hit" | "miss";
@@ -209,7 +209,11 @@ export async function runCodeUpdate(env: SandboxEnv, timings: TaskTimings, total
       }
     });
 
-    const nanoCodexSummary = await runNanoCodexPhase({ env, timings, input: nanoCodexInput });
+    const nanoCodexSummary = await runNanoCodexPhase({
+      env,
+      timings,
+      input: { ...nanoCodexInput, attempt: 1, totalAttempts: 2 }
+    });
 
     const bugReportResult = env.taskType === "bug_report" ? await readBugReportResult(env.bugReportResultPath) : null;
 
@@ -266,23 +270,6 @@ export async function runCodeUpdate(env: SandboxEnv, timings: TaskTimings, total
       throw new Error("Bug task produced code changes without a confirmed_fixed validation result; refusing to push.");
     }
     await progress(env, "diff_detected", "Detected generated code changes.", gitChangeStateMetadata(changeState));
-    const diffStat = await runCommand("git", ["diff", "--stat", baseRevision, "--"], { cwd: checkoutDir, taskEnv: env, step: "diff_stat" });
-    await recordArtifact(env, {
-      kind: "diff",
-      name: "Git diff stat",
-      content: diffStat.stdout,
-      contentType: "text/plain",
-      metadata: { command: `git diff --stat ${baseRevision} --`, ...gitChangeStateMetadata(changeState) }
-    });
-    const diffPatch = await runCommand("git", ["diff", "--no-ext-diff", baseRevision, "--"], { cwd: checkoutDir, taskEnv: env, step: "diff_patch" });
-    await recordArtifact(env, {
-      kind: "diff",
-      name: "Git patch",
-      content: diffPatch.stdout,
-      contentType: "text/x-diff",
-      metadata: { command: `git diff --no-ext-diff ${baseRevision} --`, ...gitChangeStateMetadata(changeState) }
-    });
-
     const dependencyStateAfterCodegen = await readDependencyManifestState(checkoutDir);
     const dependencyFilesChanged = changedDependencyManifestFiles(dependencyStateBeforeCodegen, dependencyStateAfterCodegen);
     if (dependencyFilesChanged.length > 0) {
@@ -309,18 +296,62 @@ export async function runCodeUpdate(env: SandboxEnv, timings: TaskTimings, total
 
     const npmScriptEnv = codegenNpmScriptEnv(process.env);
     npmScriptEnv.NODE_OPTIONS = [npmScriptEnv.NODE_OPTIONS, "--max-old-space-size=3072"].filter(Boolean).join(" ");
-    const typecheck = await timedPhase(env, timings, "typecheck", "Running the required TypeScript verification before publication.", async () =>
-      runCommand("npm", ["run", "typecheck"], { cwd: checkoutDir, allowFailure: true, taskEnv: env, step: "typecheck", env: npmScriptEnv })
-    );
-    if (typecheck.exitCode !== 0) {
-      throw new CodegenTaskError("verification", "typecheck", "TypeScript verification failed after agent task; refusing to publish generated changes.");
+    let verification = await runPrePublicationVerification({ env, timings, checkoutDir, npmScriptEnv });
+    if (verification.exitCode !== 0) {
+      const failureOutput = tail(`${verification.stdout}\n${verification.stderr}`, 12_000);
+      await recordArtifact(env, {
+        kind: "diagnostic",
+        name: "Pre-publication verification failure",
+        content: failureOutput,
+        contentType: "text/plain",
+        metadata: { command: "npm run verify", exitCode: verification.exitCode }
+      });
+      await progress(env, "verify_repair", "Verification failed; asking NanoCodex for one focused repair.", {
+        command: "npm run verify",
+        exitCode: verification.exitCode
+      });
+      await runNanoCodexPhase({
+        env,
+        timings,
+        phase: "nanocodex_repair",
+        message: "Running NanoCodex to repair the failed verification.",
+        input: {
+          ...nanoCodexInput,
+          attempt: 2,
+          totalAttempts: 2,
+          prompt: codeUpdateVerificationRepairPrompt(env, {
+            command: "npm run verify",
+            output: failureOutput,
+            contextPack
+          })
+        }
+      });
+      verification = await runPrePublicationVerification({ env, timings, checkoutDir, npmScriptEnv, retry: true });
+      if (verification.exitCode !== 0) {
+        throw new CodegenTaskError("verification", "verify", "Full repository verification failed after the repair attempt; refusing to publish generated changes.");
+      }
     }
-    const scan = await timedPhase(env, timings, "scan", "Running release scan before pushing generated changes.", async () =>
-      runCommand("npm", ["run", "scan:release"], { cwd: checkoutDir, allowFailure: true, taskEnv: env, step: "scan", env: npmScriptEnv })
-    );
-    if (scan.exitCode !== 0) {
-      throw new CodegenTaskError("release_scan", "scan", "Release scan failed after agent task; refusing to push generated changes.");
+
+    const finalChangeState = await readGitChangeState(checkoutDir, baseRevision);
+    if (!finalChangeState.hasChanges) {
+      throw new CodegenTaskError("no_diff", "verify", "Verification repair removed all generated changes; no PR will be opened.");
     }
+    const diffStat = await runCommand("git", ["diff", "--stat", baseRevision, "--"], { cwd: checkoutDir, taskEnv: env, step: "diff_stat" });
+    await recordArtifact(env, {
+      kind: "diff",
+      name: "Git diff stat",
+      content: diffStat.stdout,
+      contentType: "text/plain",
+      metadata: { command: `git diff --stat ${baseRevision} --`, ...gitChangeStateMetadata(finalChangeState) }
+    });
+    const diffPatch = await runCommand("git", ["diff", "--no-ext-diff", baseRevision, "--"], { cwd: checkoutDir, taskEnv: env, step: "diff_patch" });
+    await recordArtifact(env, {
+      kind: "diff",
+      name: "Git patch",
+      content: diffPatch.stdout,
+      contentType: "text/x-diff",
+      metadata: { command: `git diff --no-ext-diff ${baseRevision} --`, ...gitChangeStateMetadata(finalChangeState) }
+    });
 
     const prMetadata = target.pullRequestNumber
       ? null
@@ -521,19 +552,48 @@ async function timedPhase<T>(
   }
 }
 
+async function runPrePublicationVerification(input: {
+  env: SandboxEnv;
+  timings: TaskTimings;
+  checkoutDir: string;
+  npmScriptEnv: NodeJS.ProcessEnv;
+  retry?: boolean;
+}) {
+  const step = input.retry ? "verify_repair" : "verify";
+  return timedPhase(
+    input.env,
+    input.timings,
+    step,
+    input.retry
+      ? "Running full repository verification after the NanoCodex repair."
+      : "Running full repository verification before publication.",
+    async () =>
+      runCommand("npm", ["run", "verify"], {
+        cwd: input.checkoutDir,
+        allowFailure: true,
+        taskEnv: input.env,
+        step,
+        env: input.npmScriptEnv
+      })
+  );
+}
+
 async function runNanoCodexPhase(input: {
   env: SandboxEnv;
   timings: TaskTimings;
   input: NanoCodexRunInput;
+  phase?: string;
+  message?: string;
 }) {
+  const phase = input.phase ?? "nanocodex";
   return timedPhase(
     input.env,
     input.timings,
-    "nanocodex",
-    "Running NanoCodex to implement the requested change.",
+    phase,
+    input.message ?? "Running NanoCodex to implement the requested change.",
     async () => {
       const summary = await runNanoCodex(input.input);
-      await recordAgentAttemptSummary(input.env, "NanoCodex attempt summary", summary);
+      await recordAgentAttemptSummary(input.env, phase === "nanocodex" ? "NanoCodex attempt summary" : "NanoCodex verification repair summary", summary);
       return summary;
     },
     { model: `openai/${nanoCodexModel(input.env.openRouterCodegenModel)}`, harness: NANOCODEX_RUNTIME_LABEL }

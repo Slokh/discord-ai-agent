@@ -32,10 +32,11 @@ The runner:
 4. builds an agent-oriented context pack from `AGENTS.md`, current docs, exact request anchors, nearby source, and focused checks;
 5. runs the embedded NanoCodex runtime with workspace tools;
 6. refreshes dependencies if the task changed manifests;
-7. verifies the change and runs the private-data release scan;
-8. rejects empty or unsafe diffs;
-9. pushes an allowed task branch and creates or updates the intended PR;
-10. reports a terminal callback with exact output metadata.
+7. runs `npm run verify`, including the private-data release scan;
+8. if verification fails, gives the bounded failure output to the coding agent for one focused repair and verifies again;
+9. rejects empty, unsafe, or still-failing diffs;
+10. pushes an allowed task branch and creates or updates the intended PR;
+11. reports a terminal callback with exact output metadata.
 
 The runner owns commit, push, and PR publication. The coding agent inside the sandbox edits and verifies but does not publish independently.
 

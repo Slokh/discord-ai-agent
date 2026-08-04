@@ -33,4 +33,7 @@ export type NanoCodexRunInput = {
   toolShimDir: string;
   contextPack: CodegenContextPack;
   baseRevision: string;
+  prompt?: string;
+  attempt?: number;
+  totalAttempts?: number;
 };

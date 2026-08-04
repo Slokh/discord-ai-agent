@@ -135,9 +135,8 @@ function renderPullRequestBody(why: string, changes: string[]) {
     "",
     "## Testing",
     "",
-    "- `npm run typecheck`: passed",
-    "- `npm run scan:release`: passed",
-    "- Required pull-request checks provide the remaining repository verification.",
+    "- `npm run verify`: passed",
+    "- Required pull-request checks run again on the published revision.",
   ].join("\n");
 }
 

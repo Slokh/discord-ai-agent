@@ -125,6 +125,7 @@ function shouldEmitCommandActivity(step: string) {
     step === "nanocodex" ||
     step.startsWith("nanocodex_attempt_") ||
     step === "verify" ||
+    step === "verify_repair" ||
     step === "scan" ||
     step === "dependencies"
   );

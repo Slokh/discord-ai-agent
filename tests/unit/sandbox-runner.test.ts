@@ -7,6 +7,7 @@ import { describe, expect, it } from "vitest";
 import {
   codeUpdatePrompt,
   codeUpdateRecoveryPrompt,
+  codeUpdateVerificationRepairPrompt,
   renderCodegenContextPack,
 } from "../../src/execution/codegenPrompts.js";
 import {
@@ -201,9 +202,8 @@ describe("sandboxRunner", () => {
         "",
         "## Testing",
         "",
-        "- `npm run typecheck`: passed",
-        "- `npm run scan:release`: passed",
-        "- Required pull-request checks provide the remaining repository verification."
+        "- `npm run verify`: passed",
+        "- Required pull-request checks run again on the published revision."
       ].join("\n")
     );
     expect(prompts.join("\n")).toContain("timeout_output_recovered");
@@ -434,7 +434,7 @@ describe("sandboxRunner", () => {
       expect(rendered).toContain("npm test -- tests/unit/discord-client.test.ts");
       expect(prompt).toContain("Run suggested anchor checks");
       expect(prompt).toContain("Validation ladder");
-      expect(prompt).toContain("Do not run `npm run verify` or broad test suites");
+      expect(prompt).toContain("The runner performs `npm run verify` before publication");
     } finally {
       await fs.rm(tempDir, { recursive: true, force: true });
     }
@@ -486,6 +486,26 @@ describe("sandboxRunner", () => {
     expect(recovery).toContain("Do not restart broad analysis");
     expect(recovery).toContain("make the smallest focused test or implementation edit now");
     expect(recovery).toContain("looked at task notifications");
+  });
+
+  it("gives a verification repair attempt the failed command output and preserves the original request", () => {
+    const prompt = codeUpdateVerificationRepairPrompt(
+      {
+        taskId: "task-1",
+        requestedBy: "kartik",
+        taskRequest: "Repair the generated update."
+      },
+      {
+        command: "npm run verify",
+        output: "FAIL tests/unit/architecture.test.ts\nsource file exceeded its line budget"
+      }
+    );
+
+    expect(prompt).toContain("failed required pre-publication verification");
+    expect(prompt).toContain("Repair the generated update.");
+    expect(prompt).toContain("npm run verify");
+    expect(prompt).toContain("source file exceeded its line budget");
+    expect(prompt).toContain("Do not commit, push, or open a PR yourself.");
   });
 
   it("guides the coding agent toward repo-owned implementation before broad exploration", () => {

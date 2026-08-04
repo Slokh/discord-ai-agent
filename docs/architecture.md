@@ -101,6 +101,7 @@ See [Code updates](code-updates.md) for publication and sandbox details.
 | Random sessions and draws | `rngRepository.ts` |
 | Server prompt overlays | `serverOverlayRepository.ts` |
 | Per-guild agent model selection | `agentSettingsRepository.ts` |
+| Private normal-reply friction | `frictionRepository.ts` using Frog's `discord-ai-agent` Postgres namespace |
 
 `src/db/repositories.ts` composes the focused repository functions with one pool. It contains only cross-repository lifecycle coordination; SQL stays in the focused owner.
 
@@ -111,6 +112,7 @@ See [Code updates](code-updates.md) for publication and sandbox details.
 | Generic prompt and NanoCodex execution | `src/agent/capabilityRuntime.ts`, `nanocodexAgentRuntime.ts`, `promptBuilder.ts` | architecture, NanoCodex runtime, prompt, and agent integration tests |
 | Installed capability lifecycle and feature orchestration | `src/capabilities/` | focused capability tests plus architecture boundary tests |
 | Tool contract and dispatch | `src/capabilities/catalog.ts`, `toolContracts.ts`, `src/tools/contracts/`, `src/tools/handlers/` | capability-catalog, registry, contract-validation, handler-conformance tests |
+| Private friction intake and lifecycle | `src/tools/contracts/friction.ts`, `src/tools/handlers/friction.ts`, `src/db/frictionRepository.ts` | handler-conformance plus runtime-recovery DB tests |
 | Discord ingress and delivery | `src/discord/client.ts`, `messageIngress.ts`, `agentDelivery.ts`, `responseSink.ts` | Discord client/delivery/response-sink tests |
 | Discord data and retrieval | `src/discord/crawler.ts`, `src/db/*Repository.ts`, `src/memory/`, retrieval tools | crawler/search/tool tests and DB integration tests |
 | Control plane and console | `src/control/internalApiServer.ts`, `src/control/`, `src/control/console/` | internal API, observability, and console tests |

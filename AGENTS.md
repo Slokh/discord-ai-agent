@@ -62,10 +62,17 @@ contains the implementation and verification workflow.
 They are stored as markers and resolved through run evidence and focused repair
 work. Removing the reaction clears the marker.
 
-Frog logs separate repository-development friction encountered by agents (for
-example a confusing API or broken test setup). It is not a replacement for the
-Discord bug inbox. Never copy marker excerpts, Discord links, member identities,
-or private-server context into Frog or GitHub.
+Frog is the shared friction record format with deliberately separate stores.
+`npx frog` uses the repository-local file store for development friction such as
+a confusing API or broken test setup. Normal reply agents use the private
+Postgres store for reusable product friction and never sync it to GitHub. Neither
+store replaces the Discord bug inbox. Never copy marker excerpts, Discord links,
+member identities, prompts, or private-server context into repository Frog files
+or GitHub.
+
+Use `npm run frog:agent -- migrate`, `npm run frog:agent -- list`, and
+`npm run frog:agent -- resolve <id>` in the intended database environment for
+the private normal-reply namespace. Migration is idempotent.
 
 ## Implementation Standards
 

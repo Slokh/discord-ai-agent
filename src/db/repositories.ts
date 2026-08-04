@@ -10,6 +10,7 @@ import * as discordBugReports from "./discordBugReportRepository.js";
 import * as discordComponentActions from "./discordComponentActionRepository.js";
 import * as discordEmojiUsage from "./discordEmojiUsageRepository.js";
 import * as embeddings from "./embeddingRepository.js";
+import * as friction from "./frictionRepository.js";
 import * as processRuns from "./processRunRepository.js";
 import * as retrieval from "./retrievalRepository.js";
 import * as serverOverlays from "./serverOverlayRepository.js";
@@ -47,6 +48,7 @@ export function createAppDatabase(pool: DbPool) {
     ...bindRepository(pool, discordBugReports),
     ...bindRepository(pool, discordComponentActions),
     ...bindRepository(pool, embeddings),
+    ...bindRepository(pool, friction),
     ...bindRepository(pool, processRuns),
     ...bindRepository(pool, retrieval),
     ...bindRepository(pool, serverOverlays),
@@ -62,6 +64,7 @@ export function createAppDatabase(pool: DbPool) {
       await discordEmojiUsage.clearDiscordEmojiUsageForMessage(pool, messageId);
     },
     async requestUserDeletion(userId: string) {
+      await friction.clearAgentFrictionForUser(pool, userId);
       await discordArchive.requestUserDeletion(pool, userId);
       await discordEmojiUsage.clearDiscordEmojiUsageForAuthor(pool, userId);
     },

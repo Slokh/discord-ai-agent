@@ -143,6 +143,7 @@ describe.skipIf(!runDbTests)("forward migration upgrades", () => {
         "032_bug_report_retry_outcomes",
         "033_release_verifications",
         "034_release_verification_instances",
+        "035_frog_entries",
       ]) {
         await client.query(await readFile(path.resolve(`migrations/${version}.sql`), "utf8"));
       }
@@ -164,6 +165,8 @@ describe.skipIf(!runDbTests)("forward migration upgrades", () => {
       await expect(client.query("SELECT retry_status, retried_at FROM discord_bug_reports LIMIT 0"))
         .resolves.toEqual(expect.objectContaining({ rows: [] }));
       await expect(client.query("SELECT revision, deployment_id, verified_at FROM deployment_verifications LIMIT 0"))
+        .resolves.toEqual(expect.objectContaining({ rows: [] }));
+      await expect(client.query("SELECT namespace, id, dedupe_key, contents, occurrence_count FROM frog_entries LIMIT 0"))
         .resolves.toEqual(expect.objectContaining({ rows: [] }));
     } finally {
       await client.query("RESET search_path").catch(() => undefined);

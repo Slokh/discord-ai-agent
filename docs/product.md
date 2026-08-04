@@ -85,7 +85,7 @@ Randomness and wagers add two rules: exposure is reserved before entropy is cons
 6. A code-update task or contributor opens a reviewable PR.
 7. CI, the post-deploy capability canary, and a Discord retest confirm the result.
 
-Native bug markers are private and requester-scoped. Repository-development friction belongs in Frog. Neither private Discord content nor member identity belongs in public issues, PR bodies, fixtures, or docs.
+Native bug markers are private, requester-scoped reports of a bad Discord result. Frog records reusable friction through separate storage contexts: repository-development friction stays in its local file store, while normal reply agents can privately record a generalized capability or tool-contract impediment in Postgres. Product reports are silent, deduplicated, operator-only, and never automatically published or synchronized to GitHub. Neither Frog store should contain a member prompt, identity, Discord link, secret, or unrelated server context.
 
 ## Non-goals
 

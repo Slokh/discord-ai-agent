@@ -31,6 +31,7 @@ Focused repositories under `src/db/` own persistence:
 | Audits, costs, and process projections | `auditRepository.ts`, `processRunRepository.ts` |
 | Payments and randomness | focused payment repositories and `rngRepository.ts` |
 | Server overlays and model settings | `serverOverlayRepository.ts`, `agentSettingsRepository.ts` |
+| Private normal-reply friction | `frictionRepository.ts` through Frog's namespaced PostgreSQL adapter |
 
 `src/db/repositories.ts` delegates to these modules for existing callers. New durable behavior belongs in the focused owner.
 
@@ -102,10 +103,13 @@ Tracked files contain neutral behavior only. Private data lives in:
 - `.discord-ai-agent/prompt-overlay.md` for local deployment-specific prompt guidance;
 - `.discord-ai-agent/evals/` for private regression prompts;
 - Postgres for server overlays, Discord content, aliases, bug markers, model settings, traces, and memory.
+- the `discord-ai-agent` Frog namespace in Postgres for generalized normal-reply friction and its runtime references.
 
 `npm run scan:release` rejects secret-shaped values, private markers, and real-looking Discord identifiers in tracked content. Never paste production prompt artifacts, member names, message links, dumps, or eval cases into public GitHub metadata.
 
 Run feedback stores reviewer rating, failure classification, expected behavior, and optional observable assertions. Capture-enabled rows export to `.discord-ai-agent/evals/`; private prompts and requester/channel coordinates never enter tracked fixtures. The feedback table is the durable source, while exported JSON is a disposable local projection used by the eval runner.
+
+Frog's production namespace stores unresolved normal-reply friction as serialized entries plus deduplicated occurrence counts. The application stores only a generalized title/body, severity, category, affected capability, deployed revision, and canonical runtime identifiers. Operators use `npm run frog:agent -- list` and `npm run frog:agent -- resolve <id>` in the intended database environment. The repository-local Frog file store is a separate development context; production entries are never copied there or synchronized to public issue trackers.
 
 Confirmed automated bug validation may attach the same bounded regression contract: one supported failure class, an observable expected behavior, and at least one expected/forbidden tool or required/forbidden answer fragment. The control plane revalidates tool names and bounds before updating the original private feedback row. Cases without a machine-checkable assertion remain human-review candidates instead of becoming misleading automated tests. Revision-quality reports count good/bad classifications by revision without exporting the underlying prompt or note.
 
@@ -123,7 +127,7 @@ DB integration tests mirror that ownership boundary. Each test file creates, mig
 
 Worker maintenance bounds events, audits, embedding process runs, runtime sessions, and artifacts using the configured retention windows. A value of zero disables the corresponding automatic cleanup. Conversation compaction separately limits raw continuity rows.
 
-Privacy deletion covers the archive, embeddings, attachments, emoji-derived state, bug markers/reports, conversation threads and snapshots derived from the requester, agent-runtime sessions/artifacts, run feedback, code-update tasks, and process-run artifacts. Entire affected conversation threads are removed because summaries and assistant/tool turns may derive from the deleted message even when they have another author. Operational payment/randomness evidence may retain redacted structure when required to explain a transaction, but it must not retain deleted private message bodies unnecessarily.
+Privacy deletion covers the archive, embeddings, attachments, emoji-derived state, bug markers/reports, conversation threads and snapshots derived from the requester, agent-runtime sessions/artifacts, run feedback, normal-reply Frog entries linked to those runtime sessions, code-update tasks, and process-run artifacts. Entire affected conversation threads are removed because summaries and assistant/tool turns may derive from the deleted message even when they have another author. Operational payment/randomness evidence may retain redacted structure when required to explain a transaction, but it must not retain deleted private message bodies unnecessarily.
 
 ## Verification
 

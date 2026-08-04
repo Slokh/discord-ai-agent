@@ -80,6 +80,12 @@ Adding a capability should not require editing `nanocodexAgentRuntime.ts`, `prom
 
 The architecture test rejects known feature/tool names in the generic runtime and rejects reintroducing `src/agent/toolHandlers/`. This makes the boundary executable rather than relying on convention.
 
+### Private friction reporting
+
+The installed `friction` capability lets the normal reply model record a concrete, reusable impediment only when it materially harms the current answer. Typical entries describe a missing capability, contradictory instruction, unclear tool contract, unusable result, data-quality limitation, or delivery problem. The report must generalize the system issue rather than copy the member's prompt, identity, Discord link, secrets, or unrelated server content. Reporting is silent and never replaces the best answer the model can still provide.
+
+The application consumes Frog through its public `FrictionLog`, configurable CLI, and PostgreSQL adapter. Frog owns the entry format, normalized-title deduplication, occurrence counts, storage interface, and `list`/`log`/`resolve` commands; `src/db/frictionRepository.ts` owns the application namespace, runtime references, and privacy cleanup. The generic agent loop has no Frog-specific branch. `npm run frog:agent -- <command>` selects that private namespace using the existing database configuration. Production entries stay private, and there is no automatic GitHub synchronization.
+
 ## Tool execution
 
 For each selected tool:
@@ -94,6 +100,8 @@ For each selected tool:
 The generic boundary may unwrap a JSON-encoded object or array only when the schema explicitly requires that top-level type. It does not translate domain protocols, coerce scalar intent, invent fields, or repair prose with regex.
 
 Mutating tools require explicit current-user intent and must be idempotent or durably deduplicated where repetition would be harmful. A successful mutation is retained immediately. If the model, audit write, balance refresh, or final synthesis later fails, the runtime delivers the committed result with a partial limitation instead of inviting a duplicate retry.
+
+Private friction reporting is internal telemetry rather than a user-requested product mutation, so the model may record it without asking permission. Frog deduplicates concurrent reports with the same normalized title and increments their occurrence count; trusted operator workflows own explicit resolution.
 
 ## Typed results
 

@@ -74,7 +74,7 @@ export function formatAgentTaskResult(input: {
         : `No PR opened: the coding agent did not produce a code diff. Task ID: \`${input.taskId}\`.`,
       diagnosis?.finalResponse ? `Agent answer:\n${diagnosis.finalResponse}` : "",
       diagnosis?.nextAction ? `Next: ${diagnosis.nextAction}` : "",
-      diagnosis?.finalResponse ? "" : formatLastCommandFailure(input.commandEvents)
+      diagnosis?.finalResponse ? "" : formatLastCommandFailure(input.commandEvents, diagnosis?.category)
     ]
       .filter(Boolean)
       .join("\n");
@@ -92,12 +92,15 @@ export function formatAgentTaskResult(input: {
 
   if (job.status === "failed") {
     const diagnosis = agentTaskFailureDiagnosis(input.taskEvents);
+    if (job.taskType === "bug_report") {
+      return `🐛 Validation could not finish: ${diagnosis?.summary ?? "the repair environment failed before it could safely publish a change."} Try 🔄 to retry it.`;
+    }
     return [
       diagnosis
         ? `No PR opened: ${diagnosis.summary}`
         : `No PR opened: the sandbox failed. ${truncateForDiscord(job.error ?? "unknown error", 900)}`,
       diagnosis?.nextAction ? `Next: ${diagnosis.nextAction}` : "",
-      formatLastCommandFailure(input.commandEvents)
+      formatLastCommandFailure(input.commandEvents, diagnosis?.category)
     ]
       .filter(Boolean)
       .join("\n");
@@ -160,6 +163,7 @@ function agentTaskFailureDiagnosis(taskEvents: TaskEvent[] | undefined) {
     const finalResponse = typeof diagnosis?.finalResponse === "string" ? diagnosis.finalResponse.trim() : "";
     return {
       summary: truncateForDiscord(summary, 700),
+      category: typeof diagnosis?.category === "string" ? diagnosis.category : "",
       nextAction: nextAction ? truncateForDiscord(nextAction, 700) : "",
       finalResponse: finalResponse ? truncateForDiscord(finalResponse, 900) : ""
     };
@@ -167,9 +171,13 @@ function agentTaskFailureDiagnosis(taskEvents: TaskEvent[] | undefined) {
   return null;
 }
 
-function formatLastCommandFailure(events: SandboxCommandEvent[] | undefined) {
+function formatLastCommandFailure(events: SandboxCommandEvent[] | undefined, category?: string) {
   const event = events?.find((candidate) => candidate.exitCode !== 0) ?? events?.[0];
   if (!event) return "";
+  if (category === "sandbox_resource") {
+    const exit = event.exitCode == null ? "" : ` exit=${event.exitCode}`;
+    return `Last sandbox command: \`${event.command ?? event.step}\`${exit} (stopped by the sandbox resource limit)`;
+  }
   const tail = event.errorTail || event.outputTail;
   const detail = tail ? `\n${truncateForDiscord(tail.trim(), 900)}` : "";
   const exit = event.exitCode == null ? "" : ` exit=${event.exitCode}`;

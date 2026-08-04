@@ -14,6 +14,7 @@ import { persistDiscordMessage } from "./messagePersistence.js";
 import { sweepDiscordDeliveryObligations } from "./deliverySweep.js";
 import { handleMessageCreate, queueIncomingMessageEmbedding } from "./messageIngress.js";
 import { handleUndoCrossReaction, persistReactionMessage, persistReactionMessageUpdate } from "./reactions.js";
+import { handleDiscordRetryReaction, releaseDiscordRetryReaction } from "./retryReaction.js";
 import { clearDiscordBugMarkersForMessage, clearDiscordBugMarkersForReaction, handleDiscordBugMarkerReaction } from "./bugMarkerReaction.js";
 import { deletedMessageIdsForConfiguredGuild, isSelfMessage, isSelfUser, shouldProcessGuildEvent } from "./mentionParsing.js";
 import { discordMessageTraceContext } from "./requestContext.js";
@@ -192,6 +193,16 @@ export function createDiscordAiAgentBot(input: {
           return false;
         });
         if (handled) return;
+        const retried = await handleDiscordRetryReaction(input, client, reaction, user).catch((error) => {
+          logger.warn({ err: error }, "Failed to handle Discord retry reaction");
+          return false;
+        });
+        if (retried) {
+          await persistReactionMessageUpdate(input, reaction).catch((error) => {
+            logger.warn({ err: error }, "Failed to persist retry reaction add");
+          });
+          return;
+        }
       }
       await Promise.all([
         persistReactionMessageUpdate(input, reaction).catch((error) => {
@@ -212,6 +223,9 @@ export function createDiscordAiAgentBot(input: {
         }),
         handleDiscordBugMarkerReaction({ ...input, botUserId: client.user?.id }, reaction, user, false).catch((error) => {
           logger.warn({ err: error }, "Failed to remove Discord bug marker");
+        }),
+        releaseDiscordRetryReaction(input, reaction, user).catch((error) => {
+          logger.warn({ err: error }, "Failed to release Discord retry reaction");
         })
       ]);
     }),

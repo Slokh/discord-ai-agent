@@ -47,6 +47,8 @@ Blocked users, excluded channels, privacy deletion, and crawl cursors are durabl
 
 Stored messages are keyword-searchable immediately. Embedding jobs add 1536-dimensional vectors asynchronously. Changing the embedding dimension requires a migration of both the vector column and HNSW index.
 
+Native Discord polls put their visible question and answers outside the ordinary message body. Persistence derives bounded poll text into `normalized_content` while retaining the original payload in `raw`, so poll choices participate in retrieval without treating raw payload as model context. After deploying this behavior, run `npm run polls:backfill -- --apply` from a trusted configured environment, then `npm run embeddings:backfill`, to repair historical poll retrieval.
+
 History search can combine lexical and semantic candidates. Queries apply requester-visible channels plus explicit channel, thread, author, and date filters. A semantic-provider failure may degrade to lexical/recent candidates with an explicit limitation; it never widens scope.
 
 Retrieval output is bounded and includes enough provenance for the model to distinguish evidence from summary: matched snippets, authors/channels, timestamps, links where available, applied filters, result counts, and degradation notes.

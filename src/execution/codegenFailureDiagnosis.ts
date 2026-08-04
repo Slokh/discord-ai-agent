@@ -18,6 +18,7 @@ export type CodegenFailureCategory =
   | "git_push"
   | "github_pr"
   | "dependency_install"
+  | "sandbox_resource"
   | "verification"
   | "command_failed"
   | "unknown";
@@ -154,9 +155,20 @@ function classifyCodegenFailure(
   error: Error,
   failedPhase: string | null,
 ): CodegenFailureCategory {
+  if (isSandboxResourceFailure(error)) return "sandbox_resource";
   if (error instanceof CodegenTaskError) return error.category;
   if (error.name === "CodegenNoDiffError") return "no_diff";
   return categoryForCodegenPhase(failedPhase);
+}
+
+function isSandboxResourceFailure(error: Error) {
+  for (let current: unknown = error; current && typeof current === "object"; current = (current as { cause?: unknown }).cause) {
+    const candidate = current as { exitCode?: unknown; message?: unknown; stderr?: unknown };
+    if (candidate.exitCode === 137) return true;
+    const text = [candidate.message, candidate.stderr].filter((value): value is string => typeof value === "string").join("\n");
+    if (/\b(killed|oom|out of memory|memory limit)\b/i.test(text)) return true;
+  }
+  return false;
 }
 
 function inferFailedCodegenPhase(timings: TaskTimingsForDiagnosis) {
@@ -197,6 +209,8 @@ function codegenFailureSummary(category: CodegenFailureCategory) {
       return "The agent produced changes, but opening or updating the GitHub pull request failed.";
     case "dependency_install":
       return "Dependency preparation failed before the coding harness could complete.";
+    case "sandbox_resource":
+      return "The repair environment ran out of resources while validating the change; no code was published.";
     case "verification":
       return "The agent produced changes, but required TypeScript verification failed before publication.";
     case "command_failed":
@@ -220,6 +234,8 @@ function codegenFailureNextAction(category: CodegenFailureCategory, failedPhase:
       return "Inspect GitHub API errors, base branch configuration, and pull request permissions.";
     case "dependency_install":
       return "Inspect dependency command logs and cache state; verify the sandbox includes dev dependencies.";
+    case "sandbox_resource":
+      return "Inspect the sandbox memory limit and Node heap setting, then rerun the failed verification.";
     case "verification":
       return "Inspect the typecheck command log, fix the reported contract errors or sandbox resource limit, and rerun before publishing.";
     case "command_failed":

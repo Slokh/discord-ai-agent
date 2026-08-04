@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { reactionSummariesFromMessage } from "../../src/discord/messagePersistence.js";
+import { indexableMessageText, reactionSummariesFromMessage } from "../../src/discord/messagePersistence.js";
 
 describe("reactionSummariesFromMessage", () => {
   it("extracts stable reaction metadata without user lists", () => {
@@ -49,5 +49,17 @@ describe("reactionSummariesFromMessage", () => {
 
   it("returns an empty list when reactions are not cached", () => {
     expect(reactionSummariesFromMessage({ reactions: {} } as any)).toEqual([]);
+  });
+});
+
+describe("indexableMessageText", () => {
+  it("indexes native poll questions and answer text when Discord message content is empty", () => {
+    expect(indexableMessageText({
+      content: "",
+      poll: {
+        question: { text: "When should we meet?" },
+        answers: [{ poll_media: { text: "7 PM" } }, { poll_media: { text: "8 PM" } }]
+      }
+    } as any)).toBe("Poll: When should we meet?\nOptions: 7 PM | 8 PM");
   });
 });

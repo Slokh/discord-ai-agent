@@ -80,6 +80,8 @@ Reconcilers handle:
 
 Recovery produces an explicit terminal reason. It never silently publishes an unverified diff or marks a task successful only because a process exited.
 
+Members can add `🔄` or `🔃` to a terminal task update to queue a fresh retry. The reaction is durably deduplicated per member and target message, and the new task links back to the failed task. Bug-report retries keep their report lifecycle attached so a verified fix can still generate its normal post-deploy update and prompt retry.
+
 ## Operations and verification
 
 Inspect task state through the canonical runtime ledger from a trusted, configured application environment. The sandbox callback receiver accepts writes only; it deliberately has no task-reading HTTP API.

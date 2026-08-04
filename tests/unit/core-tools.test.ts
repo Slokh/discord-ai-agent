@@ -275,6 +275,21 @@ describe("formatAgentTaskResult", () => {
     expect(response).toContain("Next: Inspect the release scan command log.");
     expect(response).not.toContain("the sandbox failed");
   });
+
+  it("keeps failed bug-report updates concise and actionable", () => {
+    const response = formatAgentTaskResult({
+      taskId: "bug-1",
+      jobId: "job-1",
+      job: { taskId: "bug-1", pgBossJobId: "job-1", taskType: "bug_report", status: "failed", title: "validate bug", updatedAt: new Date() } as any,
+      taskEvents: [{
+        eventName: "agent.task.completed",
+        metadata: { failureDiagnosis: { summary: "The repair environment ran out of resources while validating the change; no code was published." } }
+      }] as any,
+    });
+    expect(response).toContain("🐛 Validation could not finish");
+    expect(response).toContain("Try 🔄 to retry it.");
+    expect(response).not.toContain("Last sandbox command");
+  });
 });
 
 describe("Discord lookup tools", () => {

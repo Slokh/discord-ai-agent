@@ -45,6 +45,9 @@ export const productConfig = {
     cpuLimit: "2",
     memoryRequest: "512Mi",
     memoryLimit: "2Gi",
+    // Keep V8's old-space limit below the 2 GiB container limit. Native
+    // allocations and child-process overhead need the remaining headroom.
+    nodeHeapMb: 1_536,
     taskTimeoutSeconds: 1_800,
     ttlSecondsAfterFinished: 3_600
   },

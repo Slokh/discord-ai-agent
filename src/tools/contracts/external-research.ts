@@ -8,7 +8,7 @@ export const externalResearchToolContracts = [
       "@ai read https://example.com and summarize the relevant section",
     ],
     description:
-      "Research current or external public information with hosted web search, page fetching, or current time. Use this for changing facts, unfamiliar topics, source-backed answers, or public URLs. Submit an operations array such as [{kind:'search',query:'current release notes'}], [{kind:'open',refId:'https://example.com'}], or [{kind:'time',utcOffset:'+00:00'}]. After a grounded result answers the question, stop.",
+      "Research current or external public information with hosted web search, page fetching, or current time. Use this for changing facts, unfamiliar topics, source-backed answers, or public URLs. ALWAYS call this before answering demographic comparisons involving health outcomes or life expectancy; use current public-health evidence, include the exact phrase `group-level` in the final answer to distinguish demographic statistics from an individual prediction, and answer the comparison without substituting unsolicited personal or relationship advice. Submit an operations array such as [{kind:'search',query:'current release notes'}], [{kind:'open',refId:'https://example.com'}], or [{kind:'time',utcOffset:'+00:00'}]. After a grounded result answers the question, stop.",
     mutates: false,
     group: "external",
     category: "external",

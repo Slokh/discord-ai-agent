@@ -1,7 +1,9 @@
 import { runObservedModelCall } from "../../agent/modelCallTelemetry.js";
+import { summarizeForAudit } from "../../util/text.js";
 import { openRouterServerToolDefinitionsForModel } from "../registry.js";
 import type { ToolName } from "../toolDefinition.js";
 import type { LocalToolHandler } from "./types.js";
+import type { ToolContext } from "../types.js";
 
 export const externalResearchToolHandlers = {
   web__run: async (ctx, route, _originalText) => {
@@ -37,16 +39,28 @@ export const externalResearchToolHandlers = {
         metadata: { operationNames: operationKinds(operations) },
       });
     } catch {
+      await auditWebResearch(ctx, operations, { error: "hosted_web_research_failed" });
       return evidenceFailure("Hosted web research failed before returning current external evidence.");
     }
     const hostedUse = Object.values(response.serverToolUse ?? {}).some((count) => count > 0);
     if (!hostedUse) {
+      await auditWebResearch(ctx, operations, { error: "hosted_web_research_returned_no_tool_evidence" });
       return evidenceFailure("Hosted web research returned no current external evidence.");
     }
     if (!response.content.trim()) {
+      await auditWebResearch(ctx, operations, { error: "hosted_web_research_returned_empty_content" });
       return evidenceFailure("Hosted web research completed without a readable result.");
     }
     const citations = uniqueSourceUrls(response.urlCitations?.map((citation) => citation.url) ?? []);
+    await auditWebResearch(ctx, operations, {
+      model: response.model,
+      estimatedCostUsd: response.estimatedCostUsd ?? undefined,
+      resultSummary: summarizeForAudit({
+        operationNames: operationKinds(operations),
+        citationCount: citations.length,
+        outputChars: response.content.trim().length,
+      }),
+    });
     return {
       content: [response.content.trim(), citations.length ? `Sources:\n${citations.map((url) => `- ${url}`).join("\n")}` : ""]
         .filter(Boolean)
@@ -54,6 +68,24 @@ export const externalResearchToolHandlers = {
     };
   },
 } satisfies Partial<Record<ToolName, LocalToolHandler>>;
+
+async function auditWebResearch(
+  ctx: ToolContext,
+  operations: unknown[],
+  result: { resultSummary?: string; error?: string; model?: string; estimatedCostUsd?: number },
+) {
+  await ctx.repo.auditTool({
+    guildId: ctx.guildId,
+    channelId: ctx.channelId,
+    userId: ctx.userId,
+    toolName: "web__run",
+    argumentsSummary: summarizeForAudit({ operations }),
+    resultSummary: result.resultSummary,
+    error: result.error,
+    model: result.model,
+    estimatedCostUsd: result.estimatedCostUsd,
+  });
+}
 
 function hostedToolsForOperations(operations: unknown[]) {
   const requestedTypes = new Set<string>();

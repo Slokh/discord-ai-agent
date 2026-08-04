@@ -264,16 +264,14 @@ export async function cancelAgentTask(pool: DbPool, input: { taskId: string; rea
               updated_at = now()
           WHERE task_id = $1
             AND status IN ('queued', 'running')
-          RETURNING task_id, trace_id, guild_id, channel_id, user_id
+          RETURNING task_id
         ),
         sandbox_update AS (
           UPDATE sandbox_runs
           SET status = 'cancelled', completed_at = coalesce(completed_at, now()), updated_at = now()
           WHERE task_id = $1 AND completed_at IS NULL
         )
-        INSERT INTO trace_events(trace_id, request_id, guild_id, channel_id, user_id, event_name, level, summary, metadata)
-        SELECT coalesce(trace_id, task_id), task_id, guild_id, channel_id, user_id, 'task.cancelled', 'info', $2, '{}'::jsonb
-        FROM updated
+        SELECT task_id FROM updated
       `,
       [input.taskId, message]
     );

@@ -173,22 +173,16 @@ export async function markAgentTaskProgress(pool: DbPool, input: {
   }) {
     const result = await pool.query(
       `
-        WITH updated AS (
-          UPDATE agent_tasks
-          SET backend = coalesce($4, backend),
-              current_step = $2,
-              status_message = $3,
-              progress_updated_at = now(),
-              updated_at = now()
-          WHERE task_id = $1
-            AND status NOT IN ('succeeded', 'failed', 'no_changes', 'cancelled')
-          RETURNING task_id, trace_id, guild_id, channel_id, user_id
-        )
-        INSERT INTO trace_events(trace_id, request_id, guild_id, channel_id, user_id, event_name, summary, metadata)
-        SELECT coalesce(trace_id, task_id), task_id, guild_id, channel_id, user_id, 'task.progress', $3, jsonb_build_object('step', $2) || $5::jsonb
-        FROM updated
+        UPDATE agent_tasks
+        SET backend = coalesce($4, backend),
+            current_step = $2,
+            status_message = $3,
+            progress_updated_at = now(),
+            updated_at = now()
+        WHERE task_id = $1
+          AND status NOT IN ('succeeded', 'failed', 'no_changes', 'cancelled')
       `,
-      [input.taskId, input.step, input.statusMessage, input.backend ?? null, JSON.stringify(input.metadata ?? {})]
+      [input.taskId, input.step, input.statusMessage, input.backend ?? null]
     );
     if ((result.rowCount ?? 0) === 0) return;
     await pool
@@ -334,18 +328,16 @@ export async function markAgentTaskSucceeded(pool: DbPool, input: {
               updated_at = now()
           WHERE task_id = $1
             AND status NOT IN ('succeeded', 'failed', 'no_changes', 'cancelled')
-          RETURNING task_id, trace_id, guild_id, channel_id, user_id
+          RETURNING task_id
         ),
         sandbox_update AS (
           UPDATE sandbox_runs
           SET status = 'succeeded', completed_at = now(), updated_at = now()
           WHERE task_id = $1 AND completed_at IS NULL
         )
-        INSERT INTO trace_events(trace_id, request_id, guild_id, channel_id, user_id, event_name, summary, metadata)
-        SELECT coalesce(trace_id, task_id), task_id, guild_id, channel_id, user_id, 'task.completed', 'Opened pull request.', $6::jsonb
-        FROM updated
+        SELECT task_id FROM updated
       `,
-      [input.taskId, input.branchName, input.prUrl, input.draft, input.verifyPassed, JSON.stringify(input.metadata ?? {})]
+      [input.taskId, input.branchName, input.prUrl, input.draft, input.verifyPassed]
     );
     await pool
       .query(
@@ -409,18 +401,16 @@ export async function markAgentTaskFailed(pool: DbPool, input: {
               updated_at = now()
           WHERE task_id = $1
             AND status NOT IN ('succeeded', 'failed', 'no_changes', 'cancelled')
-          RETURNING task_id, trace_id, guild_id, channel_id, user_id
+          RETURNING task_id
         ),
         sandbox_update AS (
           UPDATE sandbox_runs
           SET status = $2, completed_at = now(), updated_at = now()
           WHERE task_id = $1 AND completed_at IS NULL
         )
-        INSERT INTO trace_events(trace_id, request_id, guild_id, channel_id, user_id, event_name, level, summary, metadata)
-        SELECT coalesce(trace_id, task_id), task_id, guild_id, channel_id, user_id, 'task.completed', CASE WHEN $2 = 'cancelled' THEN 'info' ELSE 'error' END, $3, $4::jsonb
-        FROM updated
+        SELECT task_id FROM updated
       `,
-      [input.taskId, input.status ?? "failed", input.error, JSON.stringify(input.metadata ?? {})]
+      [input.taskId, input.status ?? "failed", input.error]
     );
     await pool
       .query(

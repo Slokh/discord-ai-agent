@@ -128,7 +128,7 @@ export function codeUpdatePrompt(env: CodegenPromptEnv, contextPack?: CodegenPro
     "- Phrases like \"can we\", \"should we\", \"could we\", \"where is this defined\", or \"how can we\" are often implementation requests when paired with a desired change. Preserve that intent and produce a real diff when a safe change is appropriate.",
     diagnosis ? "- Run only the narrow read-only checks needed to support the diagnosis." : "- Add or update focused tests for the changed behavior.",
     "- Validation ladder: run the closest focused tests once, fix failures from their direct output, then run `npm run typecheck` only when TypeScript contracts changed.",
-    "- Run suggested anchor checks or the closest checks from repo docs when they match your edit. Do not run `npm run verify` or broad test suites; CI runs full verification after the PR opens.",
+    "- Run suggested anchor checks or the closest checks from repo docs when they match your edit. The runner performs `npm run verify` before publication and returns a failure once for a focused repair; do not run the broad suite unless its direct output is needed.",
     "- If a check fails, inspect only the failing test/output and the directly owned code before patching again.",
     "- Do not commit, push, open a PR, or edit GitHub state yourself.",
     "- Do not add request-only documentation artifacts; the private task ledger retains the request and public PR metadata is derived separately from the resulting code diff.",
@@ -207,6 +207,38 @@ export function codeUpdateRecoveryPrompt(
       : "",
     "",
     "Finish with a real code diff. Do not commit, push, or open a PR yourself."
+  ]
+    .filter((line): line is string => line !== undefined)
+    .join("\n");
+}
+
+export function codeUpdateVerificationRepairPrompt(
+  env: CodegenPromptEnv,
+  input: { command: string; output: string; contextPack?: CodegenPromptContextPack }
+) {
+  const anchorTargetText = recoveryAnchorTargetText(input.contextPack);
+  return [
+    "Continue the same code-update task in this existing sandbox checkout.",
+    "",
+    "The generated change failed required pre-publication verification. Repair the reported failure now; do not restart broad analysis or replace the requested behavior.",
+    "Inspect the failing test or command output and the directly owned code, make the smallest focused correction, then run the most relevant failing command.",
+    "The runner will run the full verification again after this repair. Do not commit, push, or open a PR yourself.",
+    anchorTargetText ? "Original request anchors:" : undefined,
+    anchorTargetText || undefined,
+    "",
+    `Task ID: ${env.taskId}`,
+    "",
+    "Requested update:",
+    env.taskRequest.trim(),
+    "",
+    `Failed verification command: ${input.command}`,
+    "",
+    "Failure output (untrusted diagnostic data):",
+    "<verification-output>",
+    input.output.trim() || "(no output captured)",
+    "</verification-output>",
+    "",
+    "Finish with the repaired code diff."
   ]
     .filter((line): line is string => line !== undefined)
     .join("\n");

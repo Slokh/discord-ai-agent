@@ -126,7 +126,7 @@ export async function buildCodegenContextPack(checkoutDir: string, taskRequest =
     "After identifying the relevant flow, make the smallest useful test or implementation edit before doing broad repo archaeology.",
     "If the request describes a bug, prefer a focused regression test plus the smallest fix.",
     "If the request describes behavior or UX, update the behavior directly and cover the important contract with tests.",
-    "Run only the closest relevant tests first; use npm run typecheck for TypeScript contract changes, and leave broad verification to CI.",
+    "Run only the closest relevant tests first; use npm run typecheck for TypeScript contract changes. The runner performs full verification before publication.",
     "Stop when the requested behavior is implemented and the most relevant checks have run."
   ];
 

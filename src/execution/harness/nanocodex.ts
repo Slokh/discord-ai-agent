@@ -31,10 +31,10 @@ export function nanoCodexProcessEnv(
 }
 
 export async function runNanoCodex(input: NanoCodexRunInput): Promise<AgentRunSummary> {
-  const attempt = 1;
-  const totalAttempts = 1;
+  const attempt = input.attempt ?? 1;
+  const totalAttempts = input.totalAttempts ?? 1;
   const model = nanoCodexModel(input.env.openRouterCodegenModel);
-  const prompt = codeUpdatePrompt(input.env, input.contextPack);
+  const prompt = input.prompt ?? codeUpdatePrompt(input.env, input.contextPack);
   const startedAt = Date.now();
   const eventLines: string[] = [];
   let finalResponse: string | undefined;

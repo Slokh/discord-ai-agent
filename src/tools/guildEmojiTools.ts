@@ -1,6 +1,7 @@
 import sharp from "sharp";
 import { summarizeForAudit } from "../util/text.js";
 import { imageReferencesForInput } from "./imageTools.js";
+import { fetchPublicImage } from "./remoteImageFetch.js";
 import type { AgentResponse, ToolContext } from "./types.js";
 
 export type CreateDiscordEmojiInput = {
@@ -201,33 +202,8 @@ async function encodeEmoji(buffer: Buffer, animated: boolean): Promise<Buffer> {
 
 async function fetchImage(url: string): Promise<{ buffer: Buffer; contentType: string }> {
   if (url.startsWith("data:")) return decodeDataImage(url);
-  const response = await fetch(url, { redirect: "follow" });
-  if (!response.ok) throw new Error(`image fetch failed (HTTP ${response.status})`);
-  const contentType = normalizeContentType(response.headers.get("content-type") ?? "");
-  const declaredBytes = Number(response.headers.get("content-length"));
-  if (Number.isFinite(declaredBytes) && declaredBytes > MAX_SOURCE_BYTES) {
-    throw new Error(`source image exceeds ${MAX_SOURCE_BYTES / 1_000_000} MB`);
-  }
-  const buffer = await readBoundedBody(response, MAX_SOURCE_BYTES);
-  return { buffer, contentType };
-}
-
-async function readBoundedBody(response: Response, maxBytes: number) {
-  if (!response.body) return Buffer.alloc(0);
-  const reader = response.body.getReader();
-  const chunks: Buffer[] = [];
-  let total = 0;
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    total += value.byteLength;
-    if (total > maxBytes) {
-      await reader.cancel().catch(() => undefined);
-      throw new Error(`source image exceeds ${maxBytes / 1_000_000} MB`);
-    }
-    chunks.push(Buffer.from(value));
-  }
-  return Buffer.concat(chunks, total);
+  const result = await fetchPublicImage(url, { maxBytes: MAX_SOURCE_BYTES });
+  return { buffer: result.buffer, contentType: normalizeContentType(result.contentType) };
 }
 
 function decodeDataImage(value: string) {

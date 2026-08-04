@@ -147,10 +147,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+      - uses: docker/setup-buildx-action@v4
       - name: Build runtime and codegen images
-        run: |
-          docker build --target final -t discord-ai-agent:ci-runtime .
-          docker build --target codegen -t discord-ai-agent:ci-codegen .
+        uses: docker/bake-action@v6
+        with:
+          load: true
+          files: docker-bake.hcl
+          set: |
+            *.cache-from=type=gha,scope=container-security
+            *.cache-to=type=gha,mode=max,scope=container-security,ignore-error=true
       - name: Generate runtime SBOM
         uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
         with:

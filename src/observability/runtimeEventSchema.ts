@@ -17,7 +17,7 @@ type RuntimeEventFamily = {
  * provide an explicit category/phase for an exceptional event.
  */
 const runtimeEventFamilies: readonly RuntimeEventFamily[] = [
-  { category: "model", prefixes: ["agent.model.", "agent.synthesis."], kinds: ["model"] },
+  { category: "model", prefixes: ["agent.model.", "agent.synthesis.", "agent.nanocodex.model.", "agent.nanocodex.complete"], kinds: ["model"] },
   { category: "tool", prefixes: ["agent.tool."], kinds: ["tool"] },
   { category: "retrieval", prefixes: ["retrieval.", "memory.search."] },
   { category: "ingress", prefixes: ["discord.mention.", "budget.ingress."] },

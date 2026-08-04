@@ -5,7 +5,7 @@ import { assertExecutionConfig } from "../config/env.js";
 import type { SandboxRunRecord } from "../db/repositories.js";
 import { resolveGitHubTaskToken } from "./githubAuth.js";
 import { slugify } from "../util/text.js";
-import { taskBearerToken } from "./token.js";
+import { taskBearerToken, taskCallbackSecret } from "./token.js";
 import type { AgentTaskJob, AgentTaskStartResult } from "./types.js";
 
 export type ExecutionContext = {
@@ -72,6 +72,7 @@ export class KubernetesExecutionBackend implements ExecutionBackend {
     const name = kubernetesName(`agent-task-${slugify(job.taskId)}`);
     const namespace = this.config.execution.kubernetes.namespace;
     const token = taskBearerToken({ taskId: job.taskId, sandboxRunId, secret: this.config.execution.taskSigningSecret });
+    const callbackSecret = taskCallbackSecret({ taskId: job.taskId, sandboxRunId, secret: this.config.execution.taskSigningSecret });
     const githubToken = await resolveGitHubTaskToken(this.config);
     const labels = {
       "app.kubernetes.io/name": "discord-ai-agent",
@@ -94,7 +95,7 @@ export class KubernetesExecutionBackend implements ExecutionBackend {
         GITHUB_TOKEN: githubToken,
         OPENROUTER_API_KEY: this.config.openRouter.apiKey,
         AGENT_TASK_TOKEN: token,
-        AGENT_TASK_SIGNATURE_SECRET: this.config.execution.taskSigningSecret
+        AGENT_TASK_CALLBACK_SECRET: callbackSecret
       });
       await this.createConfigMap(namespace, configMapName, labels, {
         TASK_ID: job.taskId,

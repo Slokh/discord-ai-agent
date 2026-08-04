@@ -1,6 +1,7 @@
 import { summarizeForAudit } from "../util/text.js";
 import type { AgentFile, AgentResponse, ToolContext } from "./types.js";
 import { imageReferencesForInput } from "./imageTools.js";
+import { fetchPublicImage } from "./remoteImageFetch.js";
 import { updateDiscordBotAvatar } from "../discord/api.js";
 
 export type UpdateBotAvatarInput = {
@@ -152,17 +153,13 @@ async function toAvatarDataUri(source: Exclude<AvatarSource, { kind: "none" } | 
     return dataUriFromDataUrl(source.url);
   }
 
-  const response = await fetch(source.url, { redirect: "follow" });
-  if (!response.ok) {
-    return Promise.reject(new Error(`image fetch failed (HTTP ${response.status})`));
-  }
-  const contentType = normalizeContentType(response.headers.get("content-type") ?? "");
+  const downloaded = await fetchPublicImage(source.url, { maxBytes: MAX_AVATAR_BYTES });
+  const contentType = normalizeContentType(downloaded.contentType);
   if (!contentType || !contentType.startsWith("image/")) {
     return Promise.reject(new Error(`image URL did not return an image content-type (got ${contentType || "none"})`));
   }
   assertAllowedContentType(contentType);
-  const buffer = Buffer.from(await response.arrayBuffer());
-  assertSize(buffer.length);
+  const buffer = downloaded.buffer;
   return `data:${contentType};base64,${buffer.toString("base64")}`;
 }
 

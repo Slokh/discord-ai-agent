@@ -129,7 +129,7 @@ export async function dependencyCacheKey(checkoutDir: string) {
 }
 
 export function codegenNpmInstallEnv(baseEnv: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
-  const env = { ...baseEnv };
+  const env = codegenNpmScriptEnv(baseEnv);
   delete env.NODE_ENV;
   delete env.npm_config_production;
   delete env.NPM_CONFIG_PRODUCTION;
@@ -144,6 +144,7 @@ export function codegenNpmInstallEnv(baseEnv: NodeJS.ProcessEnv): NodeJS.Process
 }
 
 const CODEGEN_NPM_SCRIPT_ENV_PREFIXES = [
+  "AGENT_",
   "CODEGEN_",
   "CONTROL_",
   "CRAWL_",

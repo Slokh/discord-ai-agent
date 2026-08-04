@@ -23,7 +23,13 @@ export async function getAgentTask(pool: DbPool, taskId: string): Promise<AgentT
   }
 
 
-export async function listRecentAgentTasks(pool: DbPool, limit = 50): Promise<AgentTaskRecord[]> {
+export async function listRecentAgentTasks(pool: DbPool, input: number | {
+    limit?: number;
+    status?: AgentTaskStatus | null;
+    channelId?: string | null;
+    since?: Date | null;
+  } = 50): Promise<AgentTaskRecord[]> {
+    const options = typeof input === "number" ? { limit: input } : input;
     const result = await pool.query(
       `
         SELECT
@@ -34,10 +40,13 @@ export async function listRecentAgentTasks(pool: DbPool, limit = 50): Promise<Ag
           created_at, started_at, cancelled_at, completed_at, notified_at, notification_error,
           progress_updated_at, last_rendered_signature, last_rendered_at, terminal_rendered_at, updated_at
         FROM agent_tasks
+        WHERE ($2::text IS NULL OR status = $2)
+          AND ($3::text IS NULL OR channel_id = $3)
+          AND ($4::timestamptz IS NULL OR coalesce(started_at, created_at) >= $4)
         ORDER BY updated_at DESC, created_at DESC
         LIMIT $1
       `,
-      [Math.max(1, Math.min(100, Math.trunc(limit)))]
+      [Math.max(1, Math.min(200, Math.trunc(options.limit ?? 50))), options.status ?? null, options.channelId ?? null, options.since ?? null]
     );
     return result.rows.map(rowToAgentTask);
   }

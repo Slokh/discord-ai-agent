@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { callbackBodySignature, taskBearerToken, verifyCallbackBodySignature, verifyTaskBearerToken } from "../../src/execution/token.js";
+import { callbackBodySignature, taskBearerToken, taskCallbackSecret, verifyCallbackBodySignature, verifyTaskBearerToken } from "../../src/execution/token.js";
 
 describe("task callback tokens", () => {
   it("binds bearer tokens to task id and sandbox run id", () => {
@@ -20,5 +20,13 @@ describe("task callback tokens", () => {
     expect(verifyCallbackBodySignature({ secret: "secret", timestamp, rawBody, signature: "bad" })).toBe(false);
     expect(verifyCallbackBodySignature({ secret: "secret", timestamp: "1", rawBody, signature: callbackBodySignature({ secret: "secret", timestamp: "1", rawBody }), now: 3 * 60_000 })).toBe(false);
     expect(verifyCallbackBodySignature({ secret: "secret", timestamp: "1", rawBody, signature, now: 20 * 60_000 })).toBe(false);
+  });
+
+  it("derives callback signing authority for exactly one task run", () => {
+    const first = taskCallbackSecret({ taskId: "task-a", sandboxRunId: "run-a", secret: "master-secret" });
+    expect(first).toBe(taskCallbackSecret({ taskId: "task-a", sandboxRunId: "run-a", secret: "master-secret" }));
+    expect(first).not.toBe(taskCallbackSecret({ taskId: "task-b", sandboxRunId: "run-a", secret: "master-secret" }));
+    expect(first).not.toBe(taskCallbackSecret({ taskId: "task-a", sandboxRunId: "run-b", secret: "master-secret" }));
+    expect(first).not.toBe("master-secret");
   });
 });

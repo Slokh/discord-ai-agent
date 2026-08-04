@@ -59,9 +59,17 @@ export async function listRunSummaries(
       revision: input.revision,
       since: input.since,
     }),
-    repo.listRecentAgentTasks(limit),
-    typeof repo.listAgentRuntimeChatExecutions === "function"
-      ? repo.listAgentRuntimeChatExecutions({ limit })
+    (!input.kind || input.kind === "codegen") && !input.revision
+      ? repo.listRecentAgentTasks({ limit, status: input.status as never, channelId: input.channelId, since: input.since })
+      : Promise.resolve([]),
+    (!input.kind || input.kind === "discord") && typeof repo.listAgentRuntimeChatExecutions === "function"
+      ? repo.listAgentRuntimeChatExecutions({
+          limit,
+          status: input.status,
+          channelId: input.channelId,
+          revision: input.revision,
+          since: input.since,
+        })
       : Promise.resolve([]),
   ]);
   const byId = new Map<string, RunSummary>();

@@ -118,7 +118,7 @@ Then use the proportionate broad checks:
 
 Each integration-test file receives its own migrated Postgres schema through `tests/integration/testDatabase.ts`. Files may run in parallel; do not restore global cleanup prefixes or `--no-file-parallelism` to hide ownership collisions. The migration-upgrade test manages a separate schema because it intentionally applies historical migrations one at a time.
 
-Architecture coverage also prevents source and test files from growing without bound. When a coordinator approaches its budget, extract a cohesive lifecycle mechanic with its own contract instead of raising the limit. Shared database cleanup and fixtures belong in focused test-support modules so behavior suites remain readable.
+Architecture coverage also prevents source and test files from growing without bound. The current budgets are 752 lines for source and 3,300 for tests and should ratchet downward as remaining large modules split. When a coordinator approaches its budget, extract a cohesive lifecycle mechanic with its own contract instead of raising the limit. Shared database cleanup and fixtures belong in focused test-support modules so behavior suites remain readable.
 
 Do not add smoke or end-to-end coverage by reflex. Use it when the changed boundary cannot be proven below that level and external credentials/mutations are intentionally in scope.
 

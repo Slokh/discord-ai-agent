@@ -1,6 +1,9 @@
 import type { WalletAccount, WalletOwnerKind } from "../payments/types.js";
 import { mapAccount } from "./paymentRowMappers.js";
 import type { DbPool } from "./pool.js";
+import { stableId } from "../payments/money.js";
+
+const LEGACY_MODERATO_CHAIN_ID = 42431;
 
 const ACCOUNT_COLUMNS = `
   id, guild_id, owner_kind, discord_user_id, provider, provider_wallet_id,
@@ -101,4 +104,54 @@ export async function listConfirmedTransferTransactionHashes(
     total,
     hasMore: total > result.rows.length,
   };
+}
+
+export async function ensureWalletPlaceholder(pool: DbPool, input: {
+  guildId: string;
+  ownerKind: WalletOwnerKind;
+  discordUserId?: string | null;
+  externalId: string;
+  chainId: number;
+}): Promise<WalletAccount> {
+  const identityParts = [input.guildId, input.ownerKind, input.discordUserId ?? "bot"];
+  if (input.chainId !== LEGACY_MODERATO_CHAIN_ID) identityParts.push(String(input.chainId));
+  const result = await pool.query(
+    `INSERT INTO wallet_accounts(id, guild_id, owner_kind, discord_user_id, external_id, chain_id)
+     VALUES ($1, $2, $3, $4, $5, $6)
+     ON CONFLICT (external_id) DO UPDATE SET updated_at = wallet_accounts.updated_at
+     RETURNING ${ACCOUNT_COLUMNS}`,
+    [stableId("wallet", ...identityParts), input.guildId, input.ownerKind, input.discordUserId ?? null, input.externalId, input.chainId],
+  );
+  return mapAccount(result.rows[0]);
+}
+
+export async function claimWalletProvision(pool: DbPool, accountId: string): Promise<boolean> {
+  const result = await pool.query(
+    `UPDATE wallet_accounts
+     SET provision_attempts = provision_attempts + 1, last_provision_attempt_at = now(), status = 'provisioning',
+         error_message = NULL, updated_at = now()
+     WHERE id = $1 AND provider_wallet_id IS NULL AND status <> 'disabled'
+       AND (last_provision_attempt_at IS NULL OR last_provision_attempt_at < now() - interval '2 minutes')`,
+    [accountId],
+  );
+  return result.rowCount === 1;
+}
+
+export async function markWalletActive(pool: DbPool, input: { accountId: string; providerWalletId: string; address: string }): Promise<WalletAccount> {
+  const result = await pool.query(
+    `UPDATE wallet_accounts SET provider_wallet_id = $2, address = $3, status = 'active', error_message = NULL, updated_at = now()
+     WHERE id = $1 RETURNING ${ACCOUNT_COLUMNS}`,
+    [input.accountId, input.providerWalletId, input.address],
+  );
+  if (!result.rows[0]) throw new Error(`Wallet account ${input.accountId} does not exist`);
+  return mapAccount(result.rows[0]);
+}
+
+export async function markWalletError(pool: DbPool, accountId: string, errorMessage: string): Promise<void> {
+  await pool.query(`UPDATE wallet_accounts SET status = 'error', error_message = $2, updated_at = now() WHERE id = $1`, [accountId, errorMessage.slice(0, 2_000)]);
+}
+
+export async function getWallet(pool: DbPool, accountId: string): Promise<WalletAccount | null> {
+  const result = await pool.query(`SELECT ${ACCOUNT_COLUMNS} FROM wallet_accounts WHERE id = $1`, [accountId]);
+  return result.rows[0] ? mapAccount(result.rows[0]) : null;
 }

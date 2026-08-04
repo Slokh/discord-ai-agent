@@ -26,7 +26,10 @@ export const externalResearchToolHandlers = {
             },
           ],
           tools: hostedTools,
-          toolChoice: "auto",
+          // The outer agent has already selected and validated a concrete web
+          // operation. Requiring hosted execution avoids paying for a nested
+          // model completion that merely paraphrases the request without data.
+          toolChoice: "required",
           maxTokens: 1_200,
           reasoningEffort: "none",
           retryPolicy: "cheap",

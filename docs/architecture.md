@@ -43,7 +43,7 @@ Large entry points remain coordinators. Focused mechanics live beside them: keye
 - `src/agent/` is capability-agnostic. Installed product behavior enters through the capability session, tool contracts, and tool handlers rather than feature imports or tool-name branches in the model loop.
 - Every tool call is revalidated against its canonical schema, current deployment, requester scope, and access policy.
 - The current requester and current-turn intent are immutable authority.
-- Postgres owns durable state. In-memory values may cache or coordinate but cannot become an alternate source of truth.
+- Postgres owns durable state. In-memory values may cache or coordinate but cannot become an alternate source of truth. Run-console status, channel, revision, and time filters execute in repository queries before limits, with partial recent-execution indexes keeping the path bounded.
 - Migrations are forward-only. Fresh installs apply `migrations/001_initial.sql` and every later numbered migration.
 - Member-visible release actions require the deployed SHA and unique rollout ID's durable verification marker; pod readiness alone does not promote a release.
 - Private community content belongs in Postgres or `.discord-ai-agent/`, never tracked source.
@@ -125,6 +125,8 @@ See [Code updates](code-updates.md) for publication and sandbox details.
 Entrypoints must not reconstruct application-owned services independently. Add a durable repository or provider once in `src/runtime/applicationServices.ts`, then pass the composed dependency to the role-specific adapter. Test doubles remain local to tests.
 
 ## Observability
+
+NanoCodex provider-call tokens are normalized into the canonical usage fields, while its terminal turn event owns the aggregate cost estimate used by spend projections so costs are not double-counted.
 
 Important model, tool, provider, queue, sandbox, mutation, and delivery transitions are typed events. `runtimeEventSchema.ts` maps registered event namespaces and terminal segments to controlled category/phase dimensions; exceptional events may provide an explicit phase, while unknown names stay `system/progress` rather than being guessed from words embedded in a name. Large or sensitive details are retained as redacted artifacts rather than event metadata. The console, `runs:inspect`, `discord:debug`, task status, and metrics all project the same underlying ledger. Quality metrics group answer latency/cost/status by model and deployed revision, tool outcomes by typed status, reviewed feedback by failure mode, and recovered deliveries.
 

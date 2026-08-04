@@ -47,6 +47,10 @@ describe("KubernetesExecutionBackend", () => {
       const config = vi.mocked(clients.core.createNamespacedConfigMap).mock.calls[0]?.[0].body.data;
       expect(config).not.toHaveProperty("GITHUB_REPOSITORY");
       expect(config).not.toHaveProperty("GITHUB_BASE_BRANCH");
+      const secret = vi.mocked(clients.core.createNamespacedSecret).mock.calls[0]?.[0].body.stringData;
+      expect(secret).not.toHaveProperty("AGENT_TASK_SIGNATURE_SECRET");
+      expect(secret?.AGENT_TASK_CALLBACK_SECRET).toMatch(/^[a-f0-9]{64}$/);
+      expect(secret?.AGENT_TASK_CALLBACK_SECRET).not.toBe("task-secret");
       const job = vi.mocked(clients.batch.createNamespacedJob).mock.calls[0]?.[0].body;
       expect(job?.spec?.template.spec?.containers[0]?.image).toBe("registry.example/sandbox:test");
       expect(job?.spec?.template.spec).not.toHaveProperty("volumes");

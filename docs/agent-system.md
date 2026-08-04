@@ -48,7 +48,7 @@ Configuration is validated in `src/config/env.ts`:
 - Code updates default to Terra with medium reasoning.
 - Owner/ops may set a per-guild conversational override to Sol or Luna through the guarded model tool.
 
-Public-web research crosses the typed `web__run` application capability. Its focused handler sends only the authoritative typed web operations to the nested provider, never the full outer Discord request, and offers only the hosted search, fetch, or time capabilities those operations require. It rejects responses without recorded hosted execution and readable evidence. This prevents nested research from attempting unrelated work. Provider requests, usage, sources, and failures stay in the same runtime ledger. NanoCodex's provider-specific standalone search is disabled so the agent cannot bypass the configured provider or its application telemetry.
+Public-web research crosses the typed `web__run` application capability. Its focused handler sends only the authoritative typed web operations to the nested provider, never the full outer Discord request, offers only the matching hosted search, fetch, or time capabilities, and requires hosted execution after the outer agent selects a validated operation. It rejects responses without recorded hosted execution and readable evidence. This prevents nested research from attempting unrelated work. Provider requests, usage, sources, and failures stay in the same runtime ledger. NanoCodex's provider-specific standalone search is disabled so the agent cannot bypass the configured provider or its application telemetry.
 
 Embeddings, image generation, and transcription are also direct provider-backed tools. They are not alternate agent engines.
 
@@ -64,7 +64,7 @@ Each local tool is defined in a focused file under `src/tools/contracts/` and de
 - deployment requirement and access policy;
 - output promise, permission requirements, audit events, and examples.
 
-Model-facing schemas communicate the semantic shape without duplicating the runtime protocol. For structurally rich capabilities such as Discord Components V2, a compact recursive schema advertises the complete surface while the focused Zod parser remains the exact protocol and cross-field authority. Keep the full deployed capability list stable; reduce repeated schema bytes instead of hiding tools behind semantic routing.
+Model-facing schemas communicate the semantic shape without duplicating the runtime protocol. Generic retrieval and resolver output taxonomies remain canonical contract metadata but are not repeated in every model description; mutation, generation, coding, and external tools retain explicit output promises. A byte-budget test prevents the stable tool surface from regaining avoidable prompt cost. For structurally rich capabilities such as Discord Components V2, a compact recursive schema advertises the complete surface while the focused Zod parser remains the exact protocol and cross-field authority. Keep the full deployed capability list stable; reduce repeated schema bytes instead of hiding tools behind semantic routing.
 
 `src/capabilities/toolContracts.ts` is the dependency-safe contract manifest consumed by `src/tools/registry.ts`; `src/capabilities/catalog.ts` assigns those contracts and focused handlers to installed product capabilities. Neither becomes a behavioral switchboard. `toolContractValidation.ts` compiles the advertised schemas and validates canonical examples. Startup fails for missing, duplicate, or unknown contracts and handlers.
 
@@ -136,7 +136,7 @@ Do not add keyword routing, phrase-specific recovery, or a canned answer for one
 
 `inspectDiscordFile` performs permission-aware selection and bounded, non-executing inspection. It refreshes Discord attachment URLs and supports text/JSON, Office Open XML, safe ZIP metadata, images, common audio/video transcription, and explicitly supported domain formats. Unknown or proprietary fields are reported as opaque rather than guessed.
 
-Image inspection uses current/replied-to/requested attachments. Image generation accepts typed reference, size, background, output, aspect-ratio, and required-text controls. Exact typography and transparency are validated; bounded recovery may repair a provider miss, but unsafe opaque output fails closed.
+Image inspection uses current/replied-to/requested attachments. Operator-supplied avatar and emoji URLs resolve only through public addresses; every redirect is revalidated and response time and bytes are bounded before decoding. Image generation accepts typed reference, size, background, output, aspect-ratio, and required-text controls. Exact typography and transparency are validated; bounded recovery may repair a provider miss, but unsafe opaque output fails closed.
 
 Generated tables and files are referenced through turn-scoped handles. Deterministic tools answer exact count, filter, ranking, and extraction questions instead of asking the model to count visually or reread a large artifact.
 

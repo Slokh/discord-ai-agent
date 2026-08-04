@@ -16,6 +16,10 @@ describe("toolRegistry", () => {
     expect(toolDefinitionsForModel()).toBe(toolDefinitionsForModel());
   });
 
+  it("keeps the complete local model tool contract below its prompt-cost budget", () => {
+    expect(Buffer.byteLength(JSON.stringify(localToolDefinitionsForModel()), "utf8")).toBeLessThan(80_000);
+  });
+
   it("derives the rich presentation tool contract from the exhaustive runtime schema", () => {
     const tool = toolRegistry.find((entry) => entry.name === "composeDiscordResponse");
     const schema = JSON.stringify(tool?.parameters);
@@ -236,7 +240,7 @@ describe("toolRegistry", () => {
           type: "function",
           function: expect.objectContaining({
             name: "summarizeDiscordHistory",
-            description: expect.stringContaining("Returns: question or focus; sample window; grounded summary; coverage limits."),
+            description: expect.not.stringContaining("Returns: question or focus; sample window; grounded summary; coverage limits."),
             parameters: expect.objectContaining({
               required: ["question"],
               properties: expect.objectContaining({

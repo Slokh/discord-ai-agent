@@ -26,7 +26,7 @@ export function loadSandboxEnv(): SandboxEnv {
     targetPullRequestUrl: optionalEnv("TARGET_PULL_REQUEST_URL"),
     controlPlaneInternalUrl: argumentValue("--control-url") ?? productConfig.control.internalUrl,
     taskToken: requiredEnv("AGENT_TASK_TOKEN"),
-    taskSigningSecret: requiredEnv("AGENT_TASK_SIGNATURE_SECRET"),
+    taskCallbackSecret: requiredEnv("AGENT_TASK_CALLBACK_SECRET"),
     githubToken: requiredEnv("GITHUB_TOKEN"),
     githubRepository: productConfig.github.repository,
     githubBaseBranch: productConfig.github.baseBranch,

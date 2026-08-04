@@ -1,6 +1,6 @@
 import type { AppConfig } from "../config/env.js";
 import type { PaymentRepository } from "../db/paymentRepository.js";
-import { atomicToUsd, stableId, usdToAtomic } from "./money.js";
+import { atomicToUsd, usdToAtomic } from "./money.js";
 import type {
   PaymentEventRecorder,
   TokenInfo,
@@ -13,10 +13,11 @@ import type {
   WagerReservation
 } from "./types.js";
 import { getStarterTargetUsd as readStarterTargetUsd, getWalletFeeSummary, setStarterTargetAndRebalance as updateStarterTargetAndRebalance, type WalletAdministrationDependencies } from "./walletAdministration.js";
-import { activeManagedWallet, checkedAddress, checkedHash, errorMessage, networkExternalId, transactionHashFromError } from "./walletRuntimeHelpers.js";
+import { activeManagedWallet, checkedAddress, checkedHash, errorMessage, transactionHashFromError } from "./walletRuntimeHelpers.js";
 import { readPostTransferBalances } from "./postTransferBalances.js";
 import { listExistingUserWalletSummaries, recordBotWalletHealth } from "./walletReadOperations.js";
 import { emitPaymentEvent as emit, SHARED_BOT_GUILD_ID } from "./walletEvents.js";
+import { ensureProvisionedWallet } from "./walletProvisioning.js";
 
 export { SHARED_BOT_GUILD_ID } from "./walletEvents.js";
 
@@ -664,49 +665,7 @@ export class WalletService {
     input: { guildId: string; ownerKind: "bot" | "user"; discordUserId: string | null },
     record?: PaymentEventRecorder
   ): Promise<WalletAccount> {
-    const externalId =
-      input.ownerKind === "bot"
-        ? networkExternalId("discord_ai_agent_shared_bot", this.provider.chainId)
-        : networkExternalId(`guild_${input.guildId}_discord_${input.discordUserId}`, this.provider.chainId);
-    let account = await this.repo.ensureWalletPlaceholder({ ...input, externalId, chainId: this.provider.chainId });
-    if (account.status === "active") return account;
-    const claimed = await this.repo.claimWalletProvision(account.id);
-    if (!claimed) {
-      account = (await this.repo.getWallet(account.id)) ?? account;
-      if (account.status === "active") return account;
-      throw new Error(`Wallet ${account.id} provisioning is already in progress`);
-    }
-    await emit(record, {
-      eventName: "wallet.provision.started",
-      summary: `Provisioning ${input.ownerKind} wallet`,
-      metadata: { walletId: account.id, ownerKind: input.ownerKind }
-    });
-    try {
-      const wallet = await this.provider.createWallet({
-        externalId,
-        idempotencyKey: stableId("provision", externalId)
-      });
-      account = await this.repo.markWalletActive({
-        accountId: account.id,
-        providerWalletId: wallet.providerWalletId,
-        address: wallet.address
-      });
-      await emit(record, {
-        eventName: "wallet.provision.completed",
-        summary: `Provisioned ${input.ownerKind} wallet`,
-        metadata: { walletId: account.id, address: wallet.address }
-      });
-      return account;
-    } catch (error) {
-      await this.repo.markWalletError(account.id, errorMessage(error));
-      await emit(record, {
-        eventName: "wallet.provision.failed",
-        summary: `Failed to provision ${input.ownerKind} wallet`,
-        level: "error",
-        metadata: { walletId: account.id, error: errorMessage(error) }
-      });
-      throw error;
-    }
+    return ensureProvisionedWallet({ repo: this.repo, provider: this.provider, owner: input, record });
   }
 
   private async ensureInitialGrant(user: WalletAccount, starterTargetUsd: number, record?: PaymentEventRecorder): Promise<void> {

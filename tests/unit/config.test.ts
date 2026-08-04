@@ -105,6 +105,21 @@ describe("config", () => {
     });
   });
 
+  it("requires authentication for the production API even without a configured public URL", () => {
+    withEnv({
+      NODE_ENV: "production",
+      CONTROL_UI_PUBLIC_URL: "",
+      CONTROL_UI_AUTH_PASSWORD: "",
+      OPENROUTER_CHAT_MODEL: undefined,
+      OPENROUTER_UTILITY_MODEL: undefined,
+      GITHUB_REPOSITORY: undefined,
+    }, () => {
+      expect(() => loadConfig(["node", "index.js", "api"])).toThrow(/AUTH_PASSWORD is required/i);
+      expect(() => loadConfig(["node", "index.js", "all"])).toThrow(/AUTH_PASSWORD is required/i);
+      expect(loadConfig(["node", "index.js", "worker"]).processRole).toBe("worker");
+    });
+  });
+
   it("requires model and execution credentials at their capability boundaries", () => {
     withCleanEnv(() => {
       const config = loadConfig();

@@ -4,6 +4,7 @@ import type { AppConfig } from "../config/env.js";
 import {
   verifyCallbackBodySignature,
   verifyTaskBearerToken,
+  taskCallbackSecret,
 } from "../execution/token.js";
 import { singleHeader } from "./internalApiHttp.js";
 
@@ -21,13 +22,29 @@ export function authorized(
     : undefined;
   const timestamp = singleHeader(request.headers["x-agent-task-timestamp"]);
   const signature = singleHeader(request.headers["x-agent-task-signature"]);
-  return (
-    verifyTaskBearerToken({
+  const bearerIsValid = verifyTaskBearerToken({
       taskId,
       sandboxRunId,
       token,
       secret: config.execution.taskSigningSecret,
-    }) &&
+    });
+  if (!bearerIsValid) return false;
+
+  const callbackSecret = taskCallbackSecret({
+    taskId,
+    sandboxRunId,
+    secret: config.execution.taskSigningSecret,
+  });
+  return (
+    verifyCallbackBodySignature({
+      secret: callbackSecret,
+      timestamp,
+      signature,
+      rawBody,
+    }) ||
+    // Jobs started by the previous revision still hold the former callback key
+    // during a rolling deploy. Their short-lived task bearer token keeps this
+    // compatibility path bounded to the lifetime of those in-flight jobs.
     verifyCallbackBodySignature({
       secret: config.execution.taskSigningSecret,
       timestamp,

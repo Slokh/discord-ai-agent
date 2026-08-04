@@ -118,7 +118,7 @@ export function loadConfig(argv = process.argv) {
   }
   const env = parsed.data;
   const processRole = processRoleFromArgs(argv);
-  assertControlUiConfig(env.CONTROL_UI_PUBLIC_URL, env.CONTROL_UI_AUTH_PASSWORD, processRole);
+  assertControlUiConfig(env.CONTROL_UI_PUBLIC_URL, env.CONTROL_UI_AUTH_PASSWORD, processRole, env.NODE_ENV);
   const walletEnabled = Boolean(env.PRIVY_APP_ID?.trim() && env.PRIVY_APP_SECRET?.trim());
 
   return {
@@ -237,13 +237,15 @@ function defaultLogLevel(nodeEnv: string) {
   return "debug";
 }
 
-function assertControlUiConfig(publicUrl: string | undefined, password: string, processRole: ProcessRole) {
-  if (!publicUrl) return;
-  const url = new URL(publicUrl);
-  const local = url.hostname === "localhost" || url.hostname === "127.0.0.1" || url.hostname === "::1";
-  if (url.protocol !== "https:" && !local) throw new Error("CONTROL_UI_PUBLIC_URL must use HTTPS outside localhost.");
-  if ((processRole === "api" || processRole === "all") && !password) {
-    throw new Error("CONTROL_UI_AUTH_PASSWORD is required when the API serves a public control UI.");
+function assertControlUiConfig(publicUrl: string | undefined, password: string, processRole: ProcessRole, nodeEnv: string) {
+  if (publicUrl) {
+    const url = new URL(publicUrl);
+    const local = url.hostname === "localhost" || url.hostname === "127.0.0.1" || url.hostname === "::1";
+    if (url.protocol !== "https:" && !local) throw new Error("CONTROL_UI_PUBLIC_URL must use HTTPS outside localhost.");
+  }
+  const servesApi = processRole === "api" || processRole === "all";
+  if (servesApi && !password && (Boolean(publicUrl) || nodeEnv === "production")) {
+    throw new Error("CONTROL_UI_AUTH_PASSWORD is required when the API serves production or publicly routed control endpoints.");
   }
 }
 

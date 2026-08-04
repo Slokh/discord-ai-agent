@@ -55,7 +55,7 @@ describe("web__run", () => {
     expect(chat).toHaveBeenCalledWith(expect.objectContaining({
       model: "test/utility",
       tools: [{ type: "openrouter:web_search" }],
-      toolChoice: "auto",
+      toolChoice: "required",
       maxTokens: 1_200,
       reasoningEffort: "none",
       signal: undefined,
@@ -91,7 +91,7 @@ describe("web__run", () => {
     expect(result).toEqual({ content: "The current UTC date is August 3, 2026." });
     expect(chat).toHaveBeenCalledWith(expect.objectContaining({
       tools: [{ type: "openrouter:datetime" }],
-      toolChoice: "auto",
+      toolChoice: "required",
     }));
   });
 

@@ -14,7 +14,7 @@ import {
 import { createPool } from "../src/db/pool.js";
 import { createAppDatabase } from "../src/db/repositories.js";
 import { resolveGitHubTaskToken } from "../src/execution/githubAuth.js";
-import { taskBearerToken } from "../src/execution/token.js";
+import { taskBearerToken, taskCallbackSecret } from "../src/execution/token.js";
 import { parseGitHubRepository } from "../src/github/repository.js";
 import { passingRandomCanaryChannel, passingStatsCanaryChannel, passingWebCanaryChannel } from "../src/observability/postDeployCanaryEvidence.js";
 import { waitForSandboxCallback } from "../src/observability/sandboxCallbackCanary.js";
@@ -173,6 +173,7 @@ async function verifySandboxCallback(database: ReturnType<typeof createPool>) {
   });
   await repo.markAgentTaskRunning({ taskId, backend: "kubernetes-sandbox", step: "callback_canary" });
   const token = taskBearerToken({ taskId, sandboxRunId, secret: config.execution.taskSigningSecret });
+  const callbackSecret = taskCallbackSecret({ taskId, sandboxRunId, secret: config.execution.taskSigningSecret });
   const labels = {
     "app.kubernetes.io/name": "discord-ai-agent",
     "app.kubernetes.io/component": "sandbox",
@@ -189,7 +190,7 @@ async function verifySandboxCallback(database: ReturnType<typeof createPool>) {
           CANARY_TASK_ID: taskId,
           CANARY_SANDBOX_RUN_ID: sandboxRunId,
           CANARY_TASK_TOKEN: token,
-          CANARY_SIGNING_SECRET: config.execution.taskSigningSecret,
+          CANARY_SIGNING_SECRET: callbackSecret,
           CANARY_CALLBACK_URL: productConfig.control.internalUrl,
         },
       },

@@ -1,21 +1,11 @@
 import { randomUUID } from "node:crypto";
-import http from "node:http";
 import {
   enqueueAgentRuntimeSessionExecution,
   missingAgentRuntimeExecutionJobContext,
   storeAgentRuntimeExecutionInputLines,
 } from "../agent/runtimeControlPlane.js";
-import type { AppConfig } from "../config/env.js";
-import type { AgentRuntimeRepository } from "../db/agentRuntimeRepository.js";
-import type { PaymentRepository } from "../db/paymentRepository.js";
-import type { DbPool } from "../db/pool.js";
-import type { DiscordAiAgentRepository } from "../db/repositories.js";
-import type { JobRuntime } from "../jobs/queue.js";
-import { collectAgentTaskStatusSnapshot } from "../observability/agentTaskStatus.js";
-import { buildRunListAggregate } from "../observability/runAggregates.js";
 import {
   getRunSnapshot,
-  listRunSummaries,
   resolveRunReference,
 } from "../observability/runs.js";
 import { authorized, authorizedUi } from "./internalApiAuth.js";
@@ -36,121 +26,25 @@ import {
   parseAgentMessageBody,
   parseAgentSessionBody,
   parseArtifactEvent,
-  parseBoolean,
   parseCommandEvent,
   parseCompletionEvent,
   parseLimit,
   parseNullableInteger,
   parseProgressEvent,
   parseRunFeedbackBody,
-  parseStaleAfterMs,
   sandboxRunIdFromMetadata,
 } from "./internalApiParsers.js";
 import { streamAgentEvents, streamRunSnapshots } from "./internalApiStreams.js";
 import { handleInternalUiRoute } from "./internalApiUiRoutes.js";
+import { handleInternalOperatorRoute } from "./internalApiOperatorRoutes.js";
+import type { InternalApiInput } from "./internalApiTypes.js";
 
-export async function handleInternalApiRequest(input: {
-  config: AppConfig;
-  repo: DiscordAiAgentRepository;
-  agentRuntimeRepo?: AgentRuntimeRepository;
-  paymentRepo?: PaymentRepository;
-  db?: DbPool;
-  jobs?: Pick<JobRuntime, "enqueueAgentRuntimeExecution">;
-  request: http.IncomingMessage;
-  response: http.ServerResponse;
-}) {
+export async function handleInternalApiRequest(input: InternalApiInput) {
   const method = input.request.method ?? "GET";
   const url = new URL(input.request.url ?? "/", "http://internal");
 
   if (await handleInternalUiRoute(input, method, url)) return;
-
-  if (method === "GET" && url.pathname === "/api/runs") {
-    if (!authorizedUi(input.config, input.request, input.response, url)) return;
-    const limit = parseLimit(url.searchParams.get("limit"), 100, 200);
-    const includeEmbeddings = parseBoolean(
-      url.searchParams.get("includeEmbeddings"),
-    );
-    const sinceRaw = url.searchParams.get("since");
-    const since = sinceRaw ? new Date(sinceRaw) : undefined;
-    if (since && Number.isNaN(since.getTime())) {
-      sendJson(input.response, 400, { error: "invalid_since" });
-      return;
-    }
-    const runs = await listRunSummaries(input.repo, {
-      limit,
-      includeEmbeddings,
-      kind: url.searchParams.get("kind") ?? undefined,
-      status: url.searchParams.get("status") ?? undefined,
-      channelId: url.searchParams.get("channelId") ?? undefined,
-      revision: url.searchParams.get("revision") ?? undefined,
-      since,
-    });
-    sendJson(input.response, 200, {
-      runs,
-      aggregate: buildRunListAggregate(runs),
-      generatedAt: new Date().toISOString(),
-    });
-    return;
-  }
-
-  if (method === "GET" && url.pathname === "/api/payments") {
-    if (!authorizedUi(input.config, input.request, input.response, url)) return;
-    if (!input.paymentRepo) {
-      sendJson(input.response, 503, {
-        error: "payment_repository_unavailable",
-      });
-      return;
-    }
-    const snapshot = await input.paymentRepo.getPaymentsConsoleSnapshot({
-      guildId: url.searchParams.get("guildId") ?? undefined,
-      limit: parseLimit(url.searchParams.get("limit"), 100, 500),
-    });
-    sendJson(input.response, 200, snapshot);
-    return;
-  }
-
-  if (method === "GET" && url.pathname === "/api/tasks/status") {
-    if (!authorizedUi(input.config, input.request, input.response, url)) return;
-    if (!input.db) {
-      sendJson(input.response, 503, { error: "database_unavailable" });
-      return;
-    }
-    sendJson(
-      input.response,
-      200,
-      (await collectAgentTaskStatusSnapshot(input.db, {
-        limit: parseLimit(url.searchParams.get("limit"), 10, 100),
-        staleAfterMs: parseStaleAfterMs(url.searchParams.get("staleMinutes")),
-      })) as unknown as Record<string, unknown>,
-    );
-    return;
-  }
-
-  if (method === "GET" && url.pathname === "/api/bugs/status") {
-    if (!authorizedUi(input.config, input.request, input.response, url)) return;
-    const requesterUserId = url.searchParams.get("requesterUserId")?.trim();
-    if (!requesterUserId || !/^\d{10,}$/.test(requesterUserId)) {
-      sendJson(input.response, 400, { error: "invalid_requester_user_id" });
-      return;
-    }
-    const items = await input.repo.listDiscordBugInboxStatus({
-      guildId: input.config.discord.guildId,
-      requesterUserId,
-      limit: parseLimit(url.searchParams.get("limit"), 20, 100),
-    });
-    sendJson(input.response, 200, {
-      generatedAt: new Date().toISOString(),
-      requesterUserId,
-      items,
-      counts: {
-        total: items.length,
-        awaitingValidation: items.filter((item) => item.validationStatus === "marked" || item.validationStatus === "pending" || item.validationStatus === "queued" || item.validationStatus === "running").length,
-        awaitingDeployment: items.filter((item) => item.disposition === "confirmed_fixed" && !item.deployedRevision).length,
-        retryFailed: items.filter((item) => item.retryStatus === "failed").length,
-      },
-    });
-    return;
-  }
+  if (await handleInternalOperatorRoute(input, method, url)) return;
 
   const agentMessagesMatch = url.pathname.match(
     /^\/api\/agent\/sessions\/([^/]+)\/messages$/,

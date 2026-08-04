@@ -1,8 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { verifyUiAuthorization } from "../../src/control/internalApiAuth.js";
+import { authorized, verifyUiAuthorization } from "../../src/control/internalApiAuth.js";
 import { renderMetrics } from "../../src/control/internalApiMetrics.js";
 import { parseRunFeedbackBody } from "../../src/control/internalApiParsers.js";
 import { automatedBugRegression } from "../../src/control/bugRegression.js";
+import { callbackBodySignature, taskBearerToken, taskCallbackSecret } from "../../src/execution/token.js";
 
 describe("run feedback parsing", () => {
   it("normalizes executable regression assertions", () => {
@@ -42,7 +43,7 @@ describe("run feedback parsing", () => {
 });
 
 describe("internal API UI authorization", () => {
-  it("allows UI access when no password is configured", () => {
+  it("allows passwordless access only when deployment validation intentionally permits it", () => {
     expect(verifyUiAuthorization({ password: "" })).toBe(true);
   });
 
@@ -66,6 +67,36 @@ describe("internal API UI authorization", () => {
         authorization: `Basic ${Buffer.from("not-admin:secret-password").toString("base64")}`
       })
     ).toBe(false);
+  });
+});
+
+describe("internal API task callback authorization", () => {
+  it("accepts task-scoped signatures and callbacks from in-flight legacy jobs", () => {
+    const secret = "master-secret";
+    const taskId = "task-a";
+    const sandboxRunId = "run-a";
+    const rawBody = Buffer.from('{"type":"progress"}');
+    const timestamp = String(Date.now());
+    const authorization = `Bearer ${taskBearerToken({ taskId, sandboxRunId, secret })}`;
+    const config = { execution: { taskSigningSecret: secret } } as never;
+    const request = (signature: string) => ({
+      headers: {
+        authorization,
+        "x-agent-task-timestamp": timestamp,
+        "x-agent-task-signature": signature,
+      },
+    }) as never;
+
+    const scopedSignature = callbackBodySignature({
+      secret: taskCallbackSecret({ taskId, sandboxRunId, secret }),
+      timestamp,
+      rawBody,
+    });
+    const legacySignature = callbackBodySignature({ secret, timestamp, rawBody });
+
+    expect(authorized(config, request(scopedSignature), taskId, sandboxRunId, rawBody)).toBe(true);
+    expect(authorized(config, request(legacySignature), taskId, sandboxRunId, rawBody)).toBe(true);
+    expect(authorized(config, request("invalid"), taskId, sandboxRunId, rawBody)).toBe(false);
   });
 });
 

@@ -2,8 +2,8 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 
-const SOURCE_LINE_LIMIT = 760;
-const TEST_LINE_LIMIT = 3_350;
+const SOURCE_LINE_LIMIT = 752;
+const TEST_LINE_LIMIT = 3_300;
 
 const requiredArchitectureGuides = [
   "docs/README.md",

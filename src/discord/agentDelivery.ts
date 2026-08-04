@@ -24,7 +24,6 @@ import { loadAgentRuntimeInputLines, prepareDiscordAgentTurn, replayPreparedDisc
 import {
   attachPromptTasksToDiscordReply,
   fetchDiscordMessage,
-  isTerminalProcessRunStatus,
   markDiscordDeliveryDelivered,
   parseDateMs,
   recordAgentRuntimeSpan,
@@ -47,11 +46,6 @@ export async function runQueuedAgentRuntimeExecution(
     return;
   }
   await waitForDiscordClientReady(input.client);
-  const existingRun = await input.repo.getProcessRun(job.runId).catch(() => undefined);
-  if (existingRun && isTerminalProcessRunStatus(existingRun.status)) {
-    logger.info({ runId: job.runId, status: existingRun.status }, "Skipping queued agent runtime execution because run is already terminal");
-    return;
-  }
 
   const requestLogger = logger.child({
     traceId: job.traceId ?? job.runId,

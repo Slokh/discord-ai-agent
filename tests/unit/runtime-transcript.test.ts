@@ -15,10 +15,9 @@ function ctx(repo: Record<string, unknown>, requestId?: string): ToolContext {
 }
 
 describe("runtime transcript event recorder", () => {
-  it("fans one logical event out to trace, span, and audit sinks", async () => {
+  it("records trace and audit sinks without creating a process-run span", async () => {
     const repo = {
       recordTraceEvent: vi.fn(async () => undefined),
-      recordProcessRunSpan: vi.fn(async () => undefined),
       auditTool: vi.fn(async () => undefined),
     };
 
@@ -62,16 +61,6 @@ describe("runtime transcript event recorder", () => {
       userId: undefined,
       messageId: undefined,
     });
-    expect(repo.recordProcessRunSpan).toHaveBeenCalledWith(
-      expect.objectContaining({
-        runId: "run-1",
-        spanId: "agent.model.round.1",
-        name: "LLM round 1",
-        status: "succeeded",
-        durationMs: 25,
-        metadata: { model: "test-model" },
-      }),
-    );
     expect(repo.auditTool).toHaveBeenCalledWith({
       guildId: "guild",
       channelId: "channel",
@@ -95,19 +84,13 @@ describe("runtime transcript event recorder", () => {
     ).resolves.toBeUndefined();
   });
 
-  it("requires requestId before writing process-run spans", async () => {
-    const repo = {
-      recordProcessRunSpan: vi.fn(async () => undefined),
-    };
-
-    await recordAgentEvent(ctx(repo), {
+  it("does not require a process-run fallback for span input", async () => {
+    await expect(recordAgentEvent(ctx({}), {
       span: {
         spanId: "agent.model.round.1",
         name: "LLM round 1",
         status: "running",
       },
-    });
-
-    expect(repo.recordProcessRunSpan).not.toHaveBeenCalled();
+    })).resolves.toBeUndefined();
   });
 });

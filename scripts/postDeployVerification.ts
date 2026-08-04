@@ -115,6 +115,15 @@ function message(error: unknown) {
   return error instanceof Error ? error.message : String(error);
 }
 
+/** `eval --safe-summary` emits only aggregate counts, so it is safe in CI logs. */
+export function privateEvalFailureMessage(error: unknown) {
+  const stdout = error && typeof error === "object" && "stdout" in error
+    ? (error as { stdout?: unknown }).stdout
+    : null;
+  const summary = typeof stdout === "string" ? stdout.trim() : Buffer.isBuffer(stdout) ? stdout.toString("utf8").trim() : "";
+  return summary ? `${message(error)}; safe eval summary: ${summary}` : message(error);
+}
+
 function command(command: string, args: string[], timeout = 120_000) {
   return execFileSync(command, args, { encoding: "utf8", timeout, stdio: ["ignore", "pipe", "inherit"] }).trim();
 }
@@ -152,10 +161,14 @@ async function runCli() {
         "--namespace", args.namespace, "exec", `deployment/${args.release}-worker`, "--",
         "node", "dist/scripts/exportRunFeedbackEvals.js",
       ]);
-      command("kubectl", [
-        "--namespace", args.namespace, "exec", `deployment/${args.release}-worker`, "--",
-        "node", "dist/scripts/eval.js", "--private-only", "--safe-summary",
-      ], 8 * 60_000);
+      try {
+        command("kubectl", [
+          "--namespace", args.namespace, "exec", `deployment/${args.release}-worker`, "--",
+          "node", "dist/scripts/eval.js", "--private-only", "--safe-summary",
+        ], 8 * 60_000);
+      } catch (error) {
+        throw new Error(privateEvalFailureMessage(error), { cause: error });
+      }
     },
     promote: async () => {
       command("kubectl", [

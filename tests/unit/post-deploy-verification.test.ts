@@ -1,7 +1,16 @@
 import { describe, expect, it, vi } from "vitest";
-import { verifyReleaseWithRecovery } from "../../scripts/postDeployVerification.js";
+import { privateEvalFailureMessage, verifyReleaseWithRecovery } from "../../scripts/postDeployVerification.js";
 
 describe("post-deploy verification recovery", () => {
+  it("includes only the eval safe summary when a private regression command fails", () => {
+    const failure = Object.assign(new Error("Command failed"), {
+      stdout: '{"totals":{"passed":2,"failed":1,"error":0,"skipped":0,"total":3}}\n',
+    });
+    expect(privateEvalFailureMessage(failure)).toBe(
+      'Command failed; safe eval summary: {"totals":{"passed":2,"failed":1,"error":0,"skipped":0,"total":3}}',
+    );
+  });
+
   it("retries a transient stage and completes without rollback", async () => {
     const verifyCapabilities = vi.fn()
       .mockRejectedValueOnce(new Error("temporary API failure"))

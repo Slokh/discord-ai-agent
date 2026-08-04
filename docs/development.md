@@ -14,7 +14,7 @@ npx frog list
 
 Preserve unrelated work. Read [Product](product.md), [Architecture](architecture.md), and only the domain guide that owns the request. Use `rg` to find the named behavior, contract, event, or lifecycle. For production behavior, inspect the retained run before reasoning from source.
 
-Frog supplies one entry model with separate stores. `npx frog` reads the repository-local file store for development friction. The normal reply agent uses a namespaced Postgres adapter for private, generalized product friction. Discord `🐛` markers remain the requester-scoped product bug inbox. Do not move entries or private Discord evidence between these contexts, and never sync the production namespace to GitHub.
+Frog supplies one entry model with separate stores. `npx frog` reads the repository-local file store for development friction. The normal reply agent uses Frog's namespaced PostgreSQL store for private, generalized product friction. Discord `🐛` markers remain the requester-scoped product bug inbox. Do not move entries or private Discord evidence between these contexts, and never sync the production namespace to GitHub.
 
 Use the application wrapper to operate the normal-reply namespace through Frog's configured CLI:
 
@@ -25,7 +25,7 @@ npm run frog:agent -- log "Tool result omitted freshness" --body "Expected curre
 npm run frog:agent -- resolve <entry-id>
 ```
 
-The wrapper maps the existing application `DATABASE_URL` to Frog's scoped `FROG_DATABASE_URL` and fixes the public namespace to `discord-ai-agent`; it adds no deployment secret or application environment setting. `migrate` is safe to run repeatedly, although normal application migrations already create the table. Run commands in the environment whose database you intend to inspect. `npx frog list` deliberately remains the repository-development view.
+The wrapper maps the existing application `DATABASE_URL` to Frog's scoped `FROG_DATABASE_URL` and fixes the public namespace to `discord-ai-agent`; it adds no deployment secret or application environment setting. `migrate` is safe to run repeatedly and Frog owns preparation of its store. Run commands in the environment whose database you intend to inspect. `npx frog list` deliberately remains the repository-development view.
 
 Production images deliberately omit npm. Inside an application pod, invoke the compiled wrapper directly with `node dist/scripts/frogAgent.js <command>`.
 

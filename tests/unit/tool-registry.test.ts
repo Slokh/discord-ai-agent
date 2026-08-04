@@ -62,6 +62,19 @@ describe("toolRegistry", () => {
       .toContain("canonical real-USD wager ledger");
   });
 
+  it("requires authoritative Discord stats for supported count capability questions", () => {
+    const tool = toolRegistry.find((entry) => entry.name === "getDiscordStats");
+    const properties = tool?.parameters.properties as Record<string, unknown> | undefined;
+
+    expect(tool?.description).toContain("ALWAYS call this");
+    expect(tool?.description).toContain("capability question");
+    expect(tool?.description).toContain("preferring words when words are named");
+    expect(tool?.description).toContain("instead of claiming those totals are unavailable");
+    expect(properties?.metric).toEqual(expect.objectContaining({
+      enum: expect.arrayContaining(["messages", "characters", "words"]),
+    }));
+  });
+
   it("exposes explicit image alpha controls and transparent emoji validation", () => {
     const imageProperties = toolRegistry.find((entry) => entry.name === "generateImage")?.parameters.properties;
     const emojiProperties = toolRegistry.find((entry) => entry.name === "createDiscordEmoji")?.parameters.properties;

@@ -64,9 +64,9 @@ export async function runNanoCodex(input: NanoCodexRunInput): Promise<AgentRunSu
       model: `openai/${model}`,
       thinking: CODEGEN_REASONING,
       reasoningMode: "standard",
-      instructions: input.env.taskType === "diagnosis"
+      instructions: input.instructions ?? (input.env.taskType === "diagnosis"
         ? "Diagnose the request from repository and runtime evidence. Keep the checkout unchanged and return a concise evidence-backed result."
-        : "Implement the requested repository change completely. Work directly in the provided checkout, follow its repository instructions, verify the result, and leave the working tree with the intended diff.",
+        : "Implement the requested repository change completely. Work directly in the provided checkout, follow its repository instructions, verify the result, and leave the working tree with the intended diff."),
       prompt,
       requestId: input.env.taskId,
       sessionId: nanoCodexSessionId(`code-update:${input.env.taskId}`),
@@ -128,11 +128,19 @@ export async function runNanoCodex(input: NanoCodexRunInput): Promise<AgentRunSu
     }
   );
 
-  if (producedDiff || (input.env.taskType === "diagnosis" && exitCode === 0 && finalResponse)) return { attempts };
+  if (producedDiff || acceptsCleanNanoCodexResult(input.env.taskType, exitCode, finalResponse)) return { attempts };
   throw new CodegenNoDiffError(
     `Agent task produced no diff after NanoCodex attempt; no PR will be opened.\nattempt 1: exit=${exitCode}, duration=${formatDuration(durationMs)}`,
     attempts
   );
+}
+
+export function acceptsCleanNanoCodexResult(
+  taskType: SandboxEnv["taskType"],
+  exitCode: number,
+  finalResponse?: string,
+) {
+  return (taskType === "diagnosis" || taskType === "bug_report") && exitCode === 0 && Boolean(finalResponse?.trim());
 }
 
 function createNanoCodexProgressObserver(input: { env: SandboxEnv; attempt: number; totalAttempts: number }) {

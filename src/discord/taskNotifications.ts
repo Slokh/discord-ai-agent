@@ -1,6 +1,7 @@
-import type { Client, Message } from "discord.js";
+import type { Client, Message, MessageCreateOptions } from "discord.js";
 import type { AppConfig } from "../config/env.js";
 import type { AgentTaskRecord, DiscordAiAgentRepository, SandboxCommandEvent, TaskEvent } from "../db/repositories.js";
+import type { DiscordBugReport } from "../db/types.js";
 import { formatAgentTaskResult } from "../tools/agentTaskFormatting.js";
 import { cleanResponse } from "../tools/responseFormatting.js";
 import { durationMs, logger } from "../util/logger.js";
@@ -145,11 +146,32 @@ async function renderSilentBugReportResult(
   const source = await fetchDiscordMessage(input.client, report.channelId, report.sourceMessageId);
   const [taskEvents, commandEvents] = await taskDetails(input.repo, task);
   const rendered = renderAgentTaskMessage(task, taskEvents, commandEvents);
-  const content = cleanResponse(rendered.content, input.config.maxReplyChars);
-  const replied = await discordReply(source, content, { logger });
+  const payload = bugReportResultReplyPayload(report, rendered.content, input.config.maxReplyChars);
+  const replied = await discordReply(source, payload, { logger });
   if (!replied.ok) throw replied.error;
   await input.repo.markAgentTaskRendered({ taskId: task.taskId, signature: rendered.signature, terminal: true });
   logger.info({ taskId: task.taskId, status: task.status, replyMessageId: replied.value.id }, "Rendered terminal silent bug-report result");
+}
+
+export function bugReportResultReplyPayload(
+  report: Pick<DiscordBugReport, "disposition" | "reportedByUserId">,
+  renderedContent: string,
+  maxReplyChars: number,
+): MessageCreateOptions {
+  const needsContext = report.disposition === "insufficient_evidence";
+  const content = needsContext
+    ? [
+        `<@${report.reportedByUserId}> I need more context before I can decide whether this needs a code fix.`,
+        renderedContent,
+        "Please reply to this message with what you expected, what happened instead, and any relevant examples or timing."
+      ].join("\n")
+    : renderedContent;
+  return {
+    content: cleanResponse(content, maxReplyChars),
+    allowedMentions: needsContext
+      ? { parse: [], users: [report.reportedByUserId], repliedUser: false }
+      : { parse: [], repliedUser: false }
+  };
 }
 
 export function renderAgentTaskMessage(

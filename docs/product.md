@@ -79,14 +79,14 @@ Randomness and wagers add two rules: exposure is reserved before entropy is cons
 ## Improvement loop
 
 1. A member uses the bot normally.
-2. A bad result is marked with `🐛` or investigated through its Discord link.
-3. The operator inspects the retained production run, including request, context, tools, typed outcomes, and delivery.
-4. A general fix is covered by the smallest useful test or eval.
-5. Review feedback records an observable failure mode and, where possible, executable expected/forbidden behavior in the private regression suite.
+2. A questionable result is marked with `🐛` or investigated through its Discord link; the marker requests investigation and is not itself a negative verdict.
+3. The retained production run is reconstructed and triaged without changing code, including request, context, tools, typed outcomes, source revision, and delivery.
+4. Only a confirmed defect with a machine-checkable regression contract unlocks repair. If evidence is missing, the bot replies on the marked message and pings the reporter for the specific missing context.
+5. Confirmed review feedback records an observable failure mode and executable expected/forbidden behavior in the private regression suite.
 6. A code-update task or contributor opens a reviewable PR.
 7. CI, the post-deploy capability canary, and a Discord retest confirm the result.
 
-Native bug markers are private, requester-scoped reports of a bad Discord result. Frog records reusable friction through separate storage contexts: repository-development friction stays in its local file store, while normal reply agents can privately record a generalized capability or tool-contract impediment in Postgres. Product reports are silent, deduplicated, operator-only, and never automatically published or synchronized to GitHub. Neither Frog store should contain a member prompt, identity, Discord link, secret, or unrelated server context.
+Native bug markers are private, requester-scoped reports of a bad Discord result. A member may mark a visible reply for their own inbox, but only the original request author can authorize automatic repair and replay of that request. Frog records reusable friction through separate storage contexts: repository-development friction stays in its local file store, while normal reply agents can privately record a generalized capability or tool-contract impediment in Postgres. Product reports are silent, deduplicated, operator-only, and never automatically published or synchronized to GitHub. Neither Frog store should contain a member prompt, identity, Discord link, secret, or unrelated server context.
 
 ## Non-goals
 

@@ -107,11 +107,9 @@ export function createDiscordAiAgentBot(input: {
         logger.warn({ revision: input.config.appRevision }, "Skipping deployment announcements because release verification was not promoted");
         return;
       }
-      let deliveredBugFix = null;
       if (input.agentRuntime) {
         try {
           const retryResult = await retryDeployedDiscordBugReports({ ...input, client: readyClient });
-          deliveredBugFix = retryResult.bugFixAnnouncement;
           if (retryResult.eligible > 0) logger.info({ ...retryResult, revision: input.config.appRevision }, "Processed deployed Discord bug retries");
         } catch (error) {
           logger.warn({ err: error, revision: input.config.appRevision }, "Could not process deployed Discord bug retries before announcing the deployment");
@@ -122,7 +120,6 @@ export function createDiscordAiAgentBot(input: {
         config: input.config,
         repo: input.repo,
         openRouter: input.openRouter,
-        deliveredBugFix,
       });
       if (announcementResult !== "disabled" && announcementResult !== "duplicate") {
         logger.info({ result: announcementResult, revision: input.config.appRevision }, "Deployment announcement lifecycle completed");

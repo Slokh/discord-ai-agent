@@ -34,6 +34,7 @@ export type NanoCodexRunInput = {
   contextPack: CodegenContextPack;
   baseRevision: string;
   prompt?: string;
+  instructions?: string;
   attempt?: number;
   totalAttempts?: number;
 };

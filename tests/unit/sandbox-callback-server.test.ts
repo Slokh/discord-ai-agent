@@ -79,6 +79,33 @@ describe("sandbox callback server", () => {
     expect(repo.upsertRunFeedback).not.toHaveBeenCalled();
   });
 
+  it("does not label the source run bad when triage finds expected behavior", async () => {
+    const repo = {
+      getAgentTask: vi.fn(async () => ({ status: "running", taskType: "bug_report" })),
+      getDiscordBugReportForTask: vi.fn(async () => ({ sourceExecutionId: "source-run" })),
+      markAgentTaskFailed: vi.fn(async () => undefined),
+      completeDiscordBugReportForTask: vi.fn(async () => undefined),
+      upsertRunFeedback: vi.fn(async () => undefined),
+    };
+    runtime = await startSandboxCallbackServer({ config: testConfig(), repo: repo as never, agentRuntime: {} as never });
+
+    const response = await signedPost(runtime.url, "task-1", "sandbox-1", "/internal/tasks/task-1/complete", {
+      status: "no_changes",
+      error: "This matches the intended behavior.",
+      metadata: {
+        sandboxRunId: "sandbox-1",
+        bugReportDisposition: "expected_behavior",
+        bugReportSummary: "This matches the intended behavior.",
+      },
+    });
+
+    expect(response.status).toBe(200);
+    expect(repo.completeDiscordBugReportForTask).toHaveBeenCalledWith(expect.objectContaining({
+      disposition: "expected_behavior",
+    }));
+    expect(repo.upsertRunFeedback).not.toHaveBeenCalled();
+  });
+
   it("stores sandbox artifacts on the task-linked runtime execution", async () => {
     const agentRuntime = {
       getExecution: vi.fn(async () => ({ sessionId: "session-1", executionId: "agent-task-execution-task-1" })),

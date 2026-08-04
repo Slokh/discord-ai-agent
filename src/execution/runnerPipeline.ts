@@ -5,11 +5,11 @@ import type { AppConfig } from "../config/env.js";
 import { OpenRouterClient } from "../models/openrouter.js";
 import { complete, progress, recordArtifact } from "./callbacks.js";
 import { categoryForCodegenPhase, CodegenTaskError, diagnoseCodegenFailure, renderCodegenFailureDiagnosis, type CodegenFailureDiagnosis } from "./codegenFailureDiagnosis.js";
-import { codeUpdateVerificationRepairPrompt, renderCodegenContextPack } from "./codegenPrompts.js";
+import { bugReportRepairPrompt, codeUpdateVerificationRepairPrompt, renderCodegenContextPack } from "./codegenPrompts.js";
 import { runCommand } from "./commands.js";
 import { buildCodegenContextPack } from "./contextPack.js";
 import { changedDependencyManifestFiles, codegenNpmScriptEnv, prepareDependencies, readDependencyManifestState } from "./dependencyCache.js";
-import { readBugReportResult } from "./bugReportResult.js";
+import { readBugReportResult, validatedBugReportTriage, type BugReportResult } from "./bugReportResult.js";
 import { NANOCODEX_RUNTIME_LABEL, nanoCodexModel, runNanoCodex } from "./harness/nanocodex.js";
 import type { AgentRunSummary, NanoCodexRunInput } from "./harness/types.js";
 import { codeUpdateBranchName, codeUpdatePullRequestMetadata, codeUpdatePullRequestTitle } from "./prFormatting.js";
@@ -213,10 +213,54 @@ export async function runCodeUpdate(env: SandboxEnv, timings: TaskTimings, total
     const nanoCodexSummary = await runNanoCodexPhase({
       env,
       timings,
-      input: { ...nanoCodexInput, attempt: 1, totalAttempts: 2 }
+      phase: env.taskType === "bug_report" ? "bug_triage" : undefined,
+      message: env.taskType === "bug_report" ? "Running evidence-only bug triage." : undefined,
+      input: {
+        ...nanoCodexInput,
+        attempt: 1,
+        totalAttempts: 2,
+        ...(env.taskType === "bug_report" ? {
+          instructions: "Investigate whether the bug report is valid. Keep the checkout unchanged and write the required structured triage result. Do not implement a fix in this phase."
+        } : {})
+      }
     });
 
-    const bugReportResult = env.taskType === "bug_report" ? await readBugReportResult(env.bugReportResultPath) : null;
+    let bugReportResult: BugReportResult | null = null;
+    if (env.taskType === "bug_report") {
+      const triageChangeState = await readGitChangeState(checkoutDir, baseRevision);
+      if (triageChangeState.hasChanges) {
+        throw new CodegenTaskError("command_failed", "bug_triage", "Bug triage modified the checkout before a defect was confirmed; refusing to continue.");
+      }
+      const triageResult = validatedBugReportTriage(await readBugReportResult(env.bugReportResultPath));
+      bugReportResult = triageResult;
+      await recordArtifact(env, {
+        kind: "diagnostic",
+        name: "Bug triage result",
+        content: JSON.stringify(triageResult, null, 2),
+        contentType: "application/json"
+      });
+      await progress(env, "bug_triage_verdict", triageResult.summary, { disposition: triageResult.disposition });
+      if (triageResult.disposition !== "confirmed_unfixed") {
+        timings.total = Date.now() - totalStartedAt;
+        return noChangeBugReportResult(triageResult, timings, cacheSummary);
+      }
+
+      await fs.rm(env.bugReportResultPath, { force: true });
+      await runNanoCodexPhase({
+        env,
+        timings,
+        phase: "bug_repair",
+        message: "The defect is confirmed; running the gated repair phase.",
+        input: {
+          ...nanoCodexInput,
+          attempt: 2,
+          totalAttempts: 2,
+          prompt: bugReportRepairPrompt(env, triageResult, contextPack),
+          instructions: "Repair only the confirmed defect and prove it with focused regression coverage. Leave the checkout with the intended tested diff and write the required structured repair result."
+        }
+      });
+      bugReportResult = await readBugReportResult(env.bugReportResultPath);
+    }
 
     await progress(env, "diff", "Checking whether NanoCodex produced real code changes.", {
       harness: NANOCODEX_RUNTIME_LABEL,
@@ -252,23 +296,12 @@ export async function runCodeUpdate(env: SandboxEnv, timings: TaskTimings, total
           contentType: "application/json"
         });
         await progress(env, "bug_not_confirmed", bugReportResult.summary, { disposition: bugReportResult.disposition });
-        return {
-          status: "no_changes" as const,
-          branchName: null,
-          prUrl: null,
-          draft: null,
-          verifyPassed: null,
-          updatedExistingPullRequest: false,
-          autoMergeEnabled: false,
-          bugReportResult,
-          timings,
-          cacheSummary
-        };
+        return noChangeBugReportResult(bugReportResult, timings, cacheSummary);
       }
       throw new CodegenTaskError("no_diff", "diff", "Agent task produced no diff; no PR will be opened.");
     }
-    if (env.taskType === "bug_report" && bugReportResult?.disposition !== "confirmed_fixed") {
-      throw new Error("Bug task produced code changes without a confirmed_fixed validation result; refusing to push.");
+    if (env.taskType === "bug_report" && (bugReportResult?.disposition !== "confirmed_fixed" || !bugReportResult.regression)) {
+      throw new Error("Bug task produced code changes without a confirmed_fixed result and regression contract; refusing to push.");
     }
     await progress(env, "diff_detected", "Detected generated code changes.", gitChangeStateMetadata(changeState));
     const dependencyStateAfterCodegen = await readDependencyManifestState(checkoutDir);
@@ -526,6 +559,25 @@ export async function runCodeUpdate(env: SandboxEnv, timings: TaskTimings, total
   }
 }
 
+function noChangeBugReportResult(
+  bugReportResult: BugReportResult,
+  timings: TaskTimings,
+  cacheSummary: CacheSummary,
+) {
+  return {
+    status: "no_changes" as const,
+    branchName: null,
+    prUrl: null,
+    draft: null,
+    verifyPassed: null,
+    updatedExistingPullRequest: false,
+    autoMergeEnabled: false,
+    bugReportResult,
+    timings,
+    cacheSummary
+  };
+}
+
 async function timedPhase<T>(
   env: SandboxEnv,
   timings: TaskTimings,
@@ -597,7 +649,7 @@ async function runNanoCodexPhase(input: {
     input.message ?? "Running NanoCodex to implement the requested change.",
     async () => {
       const summary = await runNanoCodex(input.input);
-      await recordAgentAttemptSummary(input.env, phase === "nanocodex" ? "NanoCodex attempt summary" : "NanoCodex verification repair summary", summary);
+      await recordAgentAttemptSummary(input.env, `NanoCodex ${phase.replaceAll("_", " ")} summary`, summary);
       return summary;
     },
     { model: `openai/${nanoCodexModel(input.env.openRouterCodegenModel)}`, harness: NANOCODEX_RUNTIME_LABEL }

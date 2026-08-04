@@ -14,7 +14,18 @@ npx frog list
 
 Preserve unrelated work. Read [Product](product.md), [Architecture](architecture.md), and only the domain guide that owns the request. Use `rg` to find the named behavior, contract, event, or lifecycle. For production behavior, inspect the retained run before reasoning from source.
 
-Frog records repository-development friction. Discord `🐛` markers are the private product bug inbox. Do not move private Discord evidence between them.
+Frog supplies one entry model with separate stores. `npx frog` reads the repository-local file store for development friction. The normal reply agent uses a namespaced Postgres adapter for private, generalized product friction. Discord `🐛` markers remain the requester-scoped product bug inbox. Do not move entries or private Discord evidence between these contexts, and never sync the production namespace to GitHub.
+
+Use the application wrapper to operate the normal-reply namespace through Frog's configured CLI:
+
+```bash
+npm run frog:agent -- migrate
+npm run frog:agent -- list
+npm run frog:agent -- log "Tool result omitted freshness" --body "Expected current evidence; the result had no collection time." --severity major
+npm run frog:agent -- resolve <entry-id>
+```
+
+The wrapper maps the existing application `DATABASE_URL` to Frog's scoped `FROG_DATABASE_URL` and fixes the public namespace to `discord-ai-agent`; it adds no deployment secret or application environment setting. `migrate` is safe to run repeatedly, although normal application migrations already create the table. Run commands in the environment whose database you intend to inspect. `npx frog list` deliberately remains the repository-development view.
 
 ## Find the owner
 
@@ -42,7 +53,7 @@ Follow the full lifecycle for cross-domain work: ingress, authority, durable sta
 - Read deployment configuration through `AppConfig`. Direct `process.env` access belongs only in the configuration loader and the isolated sandbox process boundary.
 - Record important transitions once in the canonical runtime ledger and derive views from it.
 - After a mutation commits, return its durable result even if a secondary step fails.
-- Keep private community content out of tracked source, tests, evals, docs, Frog, and GitHub metadata.
+- Keep private community content out of tracked source, tests, public evals, repository Frog files, and GitHub metadata. Production Frog entries remain private and must describe generalized friction without copying prompts, identities, Discord links, or secrets.
 
 ## Model-facing tools
 

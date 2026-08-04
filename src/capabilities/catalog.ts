@@ -5,6 +5,7 @@ export { installedToolContracts } from "./toolContracts.js";
 import { coreToolHandlers } from "../tools/handlers/core.js";
 import { discordRetrievalToolHandlers } from "../tools/handlers/discord-retrieval.js";
 import { opsToolHandlers } from "../tools/handlers/ops.js";
+import { frictionToolHandlers } from "../tools/handlers/friction.js";
 import { discordActionToolHandlers } from "../tools/handlers/discord-action.js";
 import { codegenToolHandlers } from "../tools/handlers/codegen.js";
 import { imageToolHandlers } from "../tools/handlers/image.js";
@@ -87,6 +88,11 @@ const declarations: readonly CapabilityDeclaration[] = ([
     },
   },
   {
+    id: "friction",
+    summary: "Private model-reported friction intake and operator review.",
+    toolNames: TOOL_NAMES_BY_CAPABILITY.friction,
+  },
+  {
     id: "codeUpdates",
     summary: "Durable repository diagnosis and isolated code-update tasks.",
     toolNames: TOOL_NAMES_BY_CAPABILITY.codeUpdates,
@@ -131,6 +137,7 @@ const handlerFamilies = [
   coreToolHandlers,
   discordRetrievalToolHandlers,
   opsToolHandlers,
+  frictionToolHandlers,
   discordActionToolHandlers,
   codegenToolHandlers,
   imageToolHandlers,

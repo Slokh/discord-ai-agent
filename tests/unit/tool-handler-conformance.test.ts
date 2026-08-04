@@ -3,6 +3,7 @@ import { installedToolHandlers } from "../../src/capabilities/catalog.js";
 import { coreToolHandlers } from "../../src/tools/handlers/core.js";
 import { discordRetrievalToolHandlers } from "../../src/tools/handlers/discord-retrieval.js";
 import { opsToolHandlers } from "../../src/tools/handlers/ops.js";
+import { frictionToolHandlers } from "../../src/tools/handlers/friction.js";
 import { discordActionToolHandlers } from "../../src/tools/handlers/discord-action.js";
 import { codegenToolHandlers } from "../../src/tools/handlers/codegen.js";
 import { imageToolHandlers } from "../../src/tools/handlers/image.js";
@@ -17,6 +18,7 @@ const handlerFamilies = {
   core: coreToolHandlers,
   discordRetrieval: discordRetrievalToolHandlers,
   ops: opsToolHandlers,
+  friction: frictionToolHandlers,
   discordAction: discordActionToolHandlers,
   codegen: codegenToolHandlers,
   image: imageToolHandlers,
@@ -38,6 +40,7 @@ const expectedFamilyTools = {
     "reportStatus", "setAgentModel", "inspectAgentLogs",
     "getDeploymentStatus", "getSpendSummary",
   ],
+  friction: ["reportAgentFriction"],
   discordAction: [
     "composeDiscordResponse", "addDiscordReaction", "createDiscordPoll", "updateBotAvatar", "createDiscordEmoji",
     "undoConversationTurns", "drawRandom", "revealRandomness", "settleRandomWager",

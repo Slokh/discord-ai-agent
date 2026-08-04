@@ -83,6 +83,16 @@ npm run console:dev:live
 npm run release:status -- --pr <number>
 ```
 
+Normal-reply friction is the deliberate direct-database exception because Frog owns its configured store interface. The application wrapper resolves the existing database configuration and selects only the private `discord-ai-agent` namespace:
+
+```bash
+npm run frog:agent -- migrate
+npm run frog:agent -- list
+npm run frog:agent -- resolve <entry-id>
+```
+
+The wrapper maps the application's existing database URL to Frog's scoped database setting, which selects the Postgres store, and supplies the fixed private namespace. `migrate` is idempotent and normally needed only when preparing a database outside the application migration flow. For production, run commands inside a configured application pod or explicitly supply the production environment; do not let a local default masquerade as production evidence. `npx frog list` is different: it shows repository-development friction from the default file store.
+
 List filters for kind, status, channel, revision, and start time are applied by the control plane before the result limit. This keeps older matching failures visible even when unrelated recent executions are numerous.
 
 The API role serves authenticated run-console routes and Prometheus metrics. Keep the service private when possible. If public, require HTTPS and `CONTROL_UI_AUTH_PASSWORD`.

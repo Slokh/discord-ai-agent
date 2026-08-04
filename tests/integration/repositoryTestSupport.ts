@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import type { DbPool } from "../../src/db/pool.js";
 
 export async function cleanupRepositoryTestRows(pool: DbPool) {
+  await pool.query("DELETE FROM frog_entries WHERE namespace = 'discord-ai-agent'");
   await pool.query("DELETE FROM deployment_verifications WHERE revision LIKE 'test-%'");
   await pool.query("DELETE FROM guild_agent_settings WHERE guild_id LIKE 'guild-%'");
   await pool.query("DELETE FROM discord_component_actions WHERE guild_id LIKE 'guild-%' OR channel_id LIKE 'channel-%'");

@@ -62,4 +62,55 @@ describe.skipIf(!runDbTests)("Agent runtime recovery database behavior", () => {
     await expect(repo.isDeploymentVerified({ revision, deploymentId })).resolves.toBe(true);
     await expect(repo.isDeploymentVerified({ revision, deploymentId: `deployment-${randomUUID()}` })).resolves.toBe(false);
   });
+
+  it("records, deduplicates, resolves, and privacy-cleans normal-reply friction through Frog", async () => {
+    const userId = `user-${randomUUID()}`;
+    const sessionId = `agent-session-${randomUUID()}`;
+    const executionId = `agent-execution-${randomUUID()}`;
+    await agentRuntime.upsertSession({
+      sessionId,
+      threadKey: `friction-${randomUUID()}`,
+      request: "private request that must not enter friction",
+      userId,
+      status: "running",
+    });
+    await agentRuntime.createExecution({ executionId, sessionId, status: "running" });
+
+    const first = await repo.recordAgentFriction({
+      title: "Tool result omitted a required field",
+      body: "The result contract should expose the durable identifier needed by the next tool.",
+      severity: "major",
+      category: "tool_result",
+      affectedCapability: "example",
+      executionId,
+      sessionId,
+    });
+    const repeated = await repo.recordAgentFriction({
+      title: "tool result omitted a required field",
+      body: "A second occurrence should increment the same private entry.",
+      severity: "major",
+      category: "tool_result",
+      executionId,
+      sessionId,
+    });
+    expect(repeated).toEqual({ id: first.id, created: false, occurrences: 2 });
+    await expect(repo.listAgentFriction()).resolves.toEqual([
+      expect.objectContaining({ id: first.id, occurrences: 2, executionId, sessionId }),
+    ]);
+    await expect(repo.resolveAgentFriction(first.id)).resolves.toBe(true);
+    await expect(repo.resolveAgentFriction(first.id)).resolves.toBe(false);
+
+    const privacyLinked = await repo.recordAgentFriction({
+      title: "Private cleanup test",
+      body: "Generic diagnostic detail.",
+      severity: "minor",
+      category: "other",
+      executionId,
+      sessionId,
+    });
+    await repo.requestUserDeletion(userId);
+    await expect(repo.listAgentFriction()).resolves.not.toEqual(
+      expect.arrayContaining([expect.objectContaining({ id: privacyLinked.id })]),
+    );
+  });
 });

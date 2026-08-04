@@ -70,6 +70,7 @@ describe("toolRegistry", () => {
     expect(tool?.description).toContain("capability question");
     expect(tool?.description).toContain("preferring words when words are named");
     expect(tool?.description).toContain("instead of claiming those totals are unavailable");
+    expect(tool?.description).toContain("exact `Metric: <label>` line verbatim");
     expect(properties?.metric).toEqual(expect.objectContaining({
       enum: expect.arrayContaining(["messages", "characters", "words"]),
     }));

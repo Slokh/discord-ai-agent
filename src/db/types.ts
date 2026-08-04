@@ -95,9 +95,23 @@ export type DiscordBugReport = {
   prUrl: string | null;
   mergeCommitSha: string | null;
   deployedRevision: string | null;
+  retryStatus: "running" | "succeeded" | "failed" | null;
+  retryExecutionId: string | null;
+  announcementMessageId: string | null;
+  retriedAt: Date | null;
   createdAt: Date;
   updatedAt: Date;
   completedAt: Date | null;
+};
+
+export type DiscordBugInboxStatus = {
+  markedAt: Date;
+  validationStatus: DiscordBugReportStatus | "marked";
+  disposition: DiscordBugReportDisposition | null;
+  prUrl: string | null;
+  deployedRevision: string | null;
+  retryStatus: DiscordBugReport["retryStatus"];
+  updatedAt: Date;
 };
 
 export type DiscordUserLookupResult = {

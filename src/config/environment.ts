@@ -37,6 +37,7 @@ export const environmentVariables = [
 
   { name: "NODE_ENV", group: "deployment", description: "Node runtime mode.", requiredFor: "runtime platform", example: "production" },
   { name: "APP_REVISION", group: "deployment", description: "Immutable deployed git revision.", requiredFor: "release workflow" },
+  { name: "RELEASE_VERIFICATION_ID", group: "deployment", description: "Unique public identifier for this rollout's post-deploy promotion.", requiredFor: "release workflow" },
   { name: "PREVIOUS_APP_REVISION", group: "deployment", description: "Previously deployed git revision.", requiredFor: "release announcements" },
   { name: "RELEASE_NOTES_CHANNEL_ID", group: "deployment", description: "Discord channel receiving deployment announcements.", requiredFor: "release announcements" },
   { name: "POD_NAMESPACE", group: "deployment", description: "Namespace where isolated code-update Jobs are created.", requiredFor: "Kubernetes worker" },

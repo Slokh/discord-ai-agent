@@ -54,6 +54,11 @@ jobs:
         run: |
           aws eks update-kubeconfig --region "$AWS_REGION" --name "$EKS_CLUSTER_NAME"
           previous_app_revision=""
+          previous_helm_revision=""
+          if helm status "$HELM_RELEASE" --namespace "$K8S_NAMESPACE" --output json > previous-release.json 2>/dev/null; then
+            previous_helm_revision="$(jq -r '.version // empty' previous-release.json)"
+          fi
+          echo "PREVIOUS_HELM_REVISION=$previous_helm_revision" >> "$GITHUB_ENV"
           if kubectl --namespace "$K8S_NAMESPACE" get deployment "$HELM_RELEASE-bot" >/dev/null 2>&1; then
             previous_app_revision="$(kubectl --namespace "$K8S_NAMESPACE" get deployment "$HELM_RELEASE-bot" -o jsonpath='{.spec.template.spec.containers[?(@.name=="bot")].env[?(@.name=="APP_REVISION")].value}')"
           fi
@@ -64,6 +69,7 @@ jobs:
             --set "image.tag=$IMAGE_TAG"
             --set "sandbox.image=$REGISTRY/$ECR_REPOSITORY-sandbox:$IMAGE_TAG"
             --set-string "config.appRevision=$IMAGE_TAG"
+            --set-string "config.releaseVerificationId=${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           )
           if [ -n "$previous_app_revision" ]; then
             helm_args+=(--set-string "config.previousAppRevision=$previous_app_revision")
@@ -91,30 +97,16 @@ jobs:
             --wait \
             --timeout 10m \
             "${helm_args[@]}"
-      - name: Verify deployed revision and capabilities
+      - name: Verify release and recover on failure
         run: |
-          for component in api bot worker; do
-            deployment="$HELM_RELEASE-$component"
-            kubectl --namespace "$K8S_NAMESPACE" rollout status "deployment/$deployment" --timeout=2m
-          done
-          npx tsx scripts/deploymentHealth.ts \
-            --namespace "$K8S_NAMESPACE" \
-            --release "$HELM_RELEASE" \
-            --revision "$IMAGE_TAG" \
-            --stability-seconds 0
-          kubectl auth can-i create jobs.batch \
-            --namespace "$K8S_NAMESPACE" \
-            --as="system:serviceaccount:$K8S_NAMESPACE:$HELM_RELEASE-worker" | grep -qx yes
-          timeout 8m kubectl --namespace "$K8S_NAMESPACE" exec "deployment/$HELM_RELEASE-worker" -- \
-            node dist/scripts/postDeployCanary.js
-      - name: Run private production regressions
-        run: |
-          kubectl --namespace "$K8S_NAMESPACE" exec "deployment/$HELM_RELEASE-worker" -- \
-            node dist/scripts/exportRunFeedbackEvals.js
-          kubectl --namespace "$K8S_NAMESPACE" exec "deployment/$HELM_RELEASE-worker" -- \
-            node dist/scripts/eval.js --private-only --safe-summary
-          npx tsx scripts/deploymentHealth.ts \
-            --namespace "$K8S_NAMESPACE" \
-            --release "$HELM_RELEASE" \
-            --revision "$IMAGE_TAG" \
-            --stability-seconds 30
+          args=(
+            --namespace "$K8S_NAMESPACE"
+            --release "$HELM_RELEASE"
+            --revision "$IMAGE_TAG"
+            --deployment-id "${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+            --attempts 2
+          )
+          if [ -n "${PREVIOUS_HELM_REVISION:-}" ]; then
+            args+=(--previous-helm-revision "$PREVIOUS_HELM_REVISION")
+          fi
+          npx tsx scripts/postDeployVerification.ts "${args[@]}"

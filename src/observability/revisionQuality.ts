@@ -28,8 +28,14 @@ export type RevisionHealthPolicy = {
 };
 
 export type RevisionHealthAssessment = {
-  status: "pass" | "insufficient_data" | "fail";
+  status: "pass" | "awaiting_traffic" | "insufficient_data" | "fail";
   recommendation: "rollout_healthy" | "observe" | "investigate" | "rollback_candidate";
+  sample: {
+    minimumAnswers: number;
+    minimumToolCalls: number;
+    answersRemaining: number;
+    toolCallsRemaining: number;
+  };
   metrics: {
     answers: number;
     answerFailures: number;
@@ -194,6 +200,12 @@ export function assessRevisionQuality(
   const baselineMetrics = baseline ? qualityMetrics(baseline) : null;
   const violations: string[] = [];
   const comparisons: string[] = [];
+  const sample = {
+    minimumAnswers: policy.minimumAnswers,
+    minimumToolCalls: policy.minimumToolCalls,
+    answersRemaining: Math.max(0, policy.minimumAnswers - metrics.answers),
+    toolCallsRemaining: Math.max(0, policy.minimumToolCalls - metrics.toolCalls),
+  };
 
   if (metrics.answers >= policy.minimumAnswers && metrics.answerFailureRate > policy.maxAnswerFailureRate) {
     violations.push(`answer failure rate ${percent(metrics.answerFailureRate)} exceeds ${percent(policy.maxAnswerFailureRate)}`);
@@ -231,12 +243,15 @@ export function assessRevisionQuality(
   if (violations.length > 0) {
     const baselineHealthy = baseline && baselineMetrics && baselineMetrics.answers >= policy.minimumAnswers &&
       assessRevisionQuality(baseline, null, policy).status === "pass";
-    return { status: "fail", recommendation: baselineHealthy ? "rollback_candidate" : "investigate", metrics, violations, comparisons };
+    return { status: "fail", recommendation: baselineHealthy ? "rollback_candidate" : "investigate", sample, metrics, violations, comparisons };
+  }
+  if (metrics.answers === 0) {
+    return { status: "awaiting_traffic", recommendation: "observe", sample, metrics, violations, comparisons };
   }
   if (metrics.answers < policy.minimumAnswers) {
-    return { status: "insufficient_data", recommendation: "observe", metrics, violations, comparisons };
+    return { status: "insufficient_data", recommendation: "observe", sample, metrics, violations, comparisons };
   }
-  return { status: "pass", recommendation: "rollout_healthy", metrics, violations, comparisons };
+  return { status: "pass", recommendation: "rollout_healthy", sample, metrics, violations, comparisons };
 }
 
 function qualityMetrics(quality: RevisionQuality): RevisionHealthAssessment["metrics"] {

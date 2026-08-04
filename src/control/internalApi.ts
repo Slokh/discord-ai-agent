@@ -126,6 +126,32 @@ export async function handleInternalApiRequest(input: {
     return;
   }
 
+  if (method === "GET" && url.pathname === "/api/bugs/status") {
+    if (!authorizedUi(input.config, input.request, input.response, url)) return;
+    const requesterUserId = url.searchParams.get("requesterUserId")?.trim();
+    if (!requesterUserId || !/^\d{10,}$/.test(requesterUserId)) {
+      sendJson(input.response, 400, { error: "invalid_requester_user_id" });
+      return;
+    }
+    const items = await input.repo.listDiscordBugInboxStatus({
+      guildId: input.config.discord.guildId,
+      requesterUserId,
+      limit: parseLimit(url.searchParams.get("limit"), 20, 100),
+    });
+    sendJson(input.response, 200, {
+      generatedAt: new Date().toISOString(),
+      requesterUserId,
+      items,
+      counts: {
+        total: items.length,
+        awaitingValidation: items.filter((item) => item.validationStatus === "marked" || item.validationStatus === "pending" || item.validationStatus === "queued" || item.validationStatus === "running").length,
+        awaitingDeployment: items.filter((item) => item.disposition === "confirmed_fixed" && !item.deployedRevision).length,
+        retryFailed: items.filter((item) => item.retryStatus === "failed").length,
+      },
+    });
+    return;
+  }
+
   const agentMessagesMatch = url.pathname.match(
     /^\/api\/agent\/sessions\/([^/]+)\/messages$/,
   );

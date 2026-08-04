@@ -58,7 +58,7 @@ function reviveSnapshot(value: AgentTaskStatusSnapshot): AgentTaskStatusSnapshot
   return {
     ...value,
     generatedAt: new Date(value.generatedAt),
-    activeAgentSessions: value.activeAgentSessions.map(reviveAgentSession),
+    activeAgentExecutions: value.activeAgentExecutions.map(reviveAgentExecution),
     activeTasks: value.activeTasks.map(reviveTask),
     recentTerminalTasks: value.recentTerminalTasks.map(reviveTask),
     activeSandboxRuns: value.activeSandboxRuns.map(reviveSandboxRun),
@@ -66,14 +66,13 @@ function reviveSnapshot(value: AgentTaskStatusSnapshot): AgentTaskStatusSnapshot
   };
 }
 
-function reviveAgentSession(session: AgentTaskStatusSnapshot["activeAgentSessions"][number]) {
+function reviveAgentExecution(session: AgentTaskStatusSnapshot["activeAgentExecutions"][number]) {
   return {
     ...session,
     createdAt: new Date(session.createdAt),
     startedAt: reviveNullableDate(session.startedAt),
     completedAt: reviveNullableDate(session.completedAt),
-    updatedAt: new Date(session.updatedAt),
-    executionUpdatedAt: reviveNullableDate(session.executionUpdatedAt)
+    updatedAt: new Date(session.updatedAt)
   };
 }
 

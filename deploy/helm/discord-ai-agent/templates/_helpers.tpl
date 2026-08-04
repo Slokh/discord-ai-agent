@@ -22,6 +22,10 @@ helm.sh/chart: {{ .Chart.Name }}-{{ .Chart.Version | replace "+" "_" }}
   value: production
 - name: APP_REVISION
   value: {{ .Values.config.appRevision | quote }}
+{{- if .Values.config.releaseVerificationId }}
+- name: RELEASE_VERIFICATION_ID
+  value: {{ .Values.config.releaseVerificationId | quote }}
+{{- end }}
 {{- if .Values.config.previousAppRevision }}
 - name: PREVIOUS_APP_REVISION
   value: {{ .Values.config.previousAppRevision | quote }}

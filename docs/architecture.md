@@ -45,6 +45,7 @@ Large entry points remain coordinators. Focused mechanics live beside them: keye
 - The current requester and current-turn intent are immutable authority.
 - Postgres owns durable state. In-memory values may cache or coordinate but cannot become an alternate source of truth.
 - Migrations are forward-only. Fresh installs apply `migrations/001_initial.sql` and every later numbered migration.
+- Member-visible release actions require the deployed SHA and unique rollout ID's durable verification marker; pod readiness alone does not promote a release.
 - Private community content belongs in Postgres or `.discord-ai-agent/`, never tracked source.
 
 ## Chat lifecycle
@@ -57,7 +58,9 @@ Large entry points remain coordinators. Focused mechanics live beside them: keye
 6. `toolDispatcher.ts` validates and gates the selected local tool, then dispatches through focused adapters in `src/tools/handlers/`.
 7. Tools write files, tables, footers, or semantic Discord presentation to one turn output. Successful mutations are retained so a later model failure or timeout can still return the committed result.
 8. Runtime messages, events, artifacts, usage, and the next NanoCodex snapshot are stored in the canonical ledger.
-9. `src/discord/agentDelivery.ts` records a versioned delivery intent. `presentationDelivery.ts` and `responseSink.ts` render the final content, files, Components V2 payload, and cleanup. Startup sweeps replay incomplete obligations idempotently.
+9. `src/discord/agentDelivery.ts` records a versioned delivery intent. `presentationDelivery.ts` and `responseSink.ts` render the final content, files, Components V2 payload, and cleanup. Startup sweeps replay incomplete obligations idempotently. The worker also terminalizes non-task executions that remain queued/running beyond the bounded execution window, recording a typed stale-reconciliation failure instead of leaving phantom work active.
+
+On release startup, the bot waits for the deployment workflow's Postgres promotion marker before retrying repaired bug prompts or announcing the revision. Failed verification and rollback candidates never cross that member-visible boundary.
 
 Prompts sharing a Discord thread key are serialized; different keys may execute concurrently. A loading reaction is delivery state, not a provisional textual answer.
 
@@ -92,6 +95,7 @@ See [Code updates](code-updates.md) for publication and sandbox details.
 | Retrieval and aggregates | `retrievalRepository.ts`, `retrievalAttachmentRepository.ts`, and `retrievalStatsRepository.ts` |
 | Conversation continuity | `conversationMemoryRepository.ts` and `conversationCompaction.ts` |
 | Pending final rendering | `deliveryObligationsRepository.ts` |
+| Verified release promotion and deployment announcements | `deploymentAnnouncementRepository.ts` |
 | Code-update task projection and reads | `agentTaskRepository.ts` and focused task read repositories |
 | Wallets, transfers, wagers, receipts | `paymentRepository.ts`, `paymentOperationsRepository.ts`, and focused payment/service modules |
 | Random sessions and draws | `rngRepository.ts` |

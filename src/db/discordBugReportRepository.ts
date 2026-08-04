@@ -1,5 +1,5 @@
 import type { DbPool } from "./pool.js";
-import type { DiscordBugReport, DiscordBugReportDisposition, DiscordBugReportStatus } from "./types.js";
+import type { DiscordBugInboxStatus, DiscordBugReport, DiscordBugReportDisposition, DiscordBugReportStatus } from "./types.js";
 
 export async function createDiscordBugReport(pool: DbPool, input: {
   reportId: string;
@@ -74,13 +74,66 @@ export async function claimDiscordBugReportDeployment(pool: DbPool, input: {
 }): Promise<boolean> {
   const result = await pool.query(
     `UPDATE discord_bug_reports
-     SET merge_commit_sha = $2, deployed_revision = $3, updated_at = now()
+     SET merge_commit_sha = $2, deployed_revision = $3, retry_status = 'running', updated_at = now()
      WHERE report_id = $1
        AND deployed_revision IS NULL
      RETURNING report_id`,
     [input.reportId, input.mergeCommitSha, input.deployedRevision],
   );
   return (result.rowCount ?? 0) > 0;
+}
+
+export async function recordDiscordBugReportRetry(pool: DbPool, input: {
+  reportId: string;
+  status: "succeeded" | "failed";
+  retryExecutionId: string;
+  announcementMessageId?: string | null;
+}) {
+  await pool.query(
+    `UPDATE discord_bug_reports
+     SET retry_status = $2, retry_execution_id = $3,
+         announcement_message_id = coalesce($4, announcement_message_id),
+         retried_at = now(), updated_at = now()
+     WHERE report_id = $1`,
+    [input.reportId, input.status, input.retryExecutionId, input.announcementMessageId ?? null],
+  );
+}
+
+/** Content-free lifecycle projection for one requester's active marker inbox. */
+export async function listDiscordBugInboxStatus(pool: DbPool, input: {
+  guildId: string;
+  requesterUserId: string;
+  limit: number;
+}): Promise<DiscordBugInboxStatus[]> {
+  const result = await pool.query(
+    `SELECT marker.created_at AS marked_at,
+            report.status AS validation_status, report.disposition, report.pr_url,
+            report.deployed_revision, report.retry_status,
+            coalesce(report.updated_at, marker.updated_at) AS updated_at
+     FROM discord_bug_markers marker
+     LEFT JOIN LATERAL (
+       SELECT candidate.*
+       FROM discord_bug_reports candidate
+       WHERE candidate.guild_id = marker.guild_id
+         AND candidate.source_message_id = marker.message_id
+         AND candidate.reported_by_user_id = marker.user_id
+       ORDER BY candidate.created_at DESC
+       LIMIT 1
+     ) report ON true
+     WHERE marker.guild_id = $1 AND marker.user_id = $2
+     ORDER BY marker.created_at DESC, marker.message_id DESC
+     LIMIT $3`,
+    [input.guildId, input.requesterUserId, Math.max(1, Math.min(100, Math.trunc(input.limit)))],
+  );
+  return result.rows.map((row) => ({
+    markedAt: new Date(row.marked_at),
+    validationStatus: row.validation_status == null ? "marked" : String(row.validation_status) as DiscordBugReportStatus,
+    disposition: row.disposition == null ? null : String(row.disposition) as DiscordBugReportDisposition,
+    prUrl: row.pr_url == null ? null : String(row.pr_url),
+    deployedRevision: row.deployed_revision == null ? null : String(row.deployed_revision),
+    retryStatus: row.retry_status == null ? null : String(row.retry_status) as DiscordBugReport["retryStatus"],
+    updatedAt: new Date(row.updated_at),
+  }));
 }
 
 export async function markDiscordBugReportFailed(pool: DbPool, input: { reportId: string; summary: string }) {
@@ -127,6 +180,10 @@ function rowToDiscordBugReport(row: Record<string, unknown>): DiscordBugReport {
     prUrl: row.pr_url == null ? null : String(row.pr_url),
     mergeCommitSha: row.merge_commit_sha == null ? null : String(row.merge_commit_sha),
     deployedRevision: row.deployed_revision == null ? null : String(row.deployed_revision),
+    retryStatus: row.retry_status == null ? null : String(row.retry_status) as DiscordBugReport["retryStatus"],
+    retryExecutionId: row.retry_execution_id == null ? null : String(row.retry_execution_id),
+    announcementMessageId: row.announcement_message_id == null ? null : String(row.announcement_message_id),
+    retriedAt: row.retried_at == null ? null : new Date(String(row.retried_at)),
     createdAt: new Date(String(row.created_at)),
     updatedAt: new Date(String(row.updated_at)),
     completedAt: row.completed_at == null ? null : new Date(String(row.completed_at)),

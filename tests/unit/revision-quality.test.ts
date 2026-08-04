@@ -48,6 +48,14 @@ describe("assessRevisionQuality", () => {
     expect(assessRevisionQuality(quality({ succeeded: 2 })).status).toBe("insufficient_data");
   });
 
+  it("distinguishes a new revision that has not received member traffic", () => {
+    expect(assessRevisionQuality(quality({ succeeded: 0 }, { tools: [] }))).toMatchObject({
+      status: "awaiting_traffic",
+      recommendation: "observe",
+      sample: { minimumAnswers: 10, minimumToolCalls: 5, answersRemaining: 10, toolCallsRemaining: 5 },
+    });
+  });
+
   it("fails on durable delivery and error evidence even with a small sample", () => {
     const assessment = assessRevisionQuality(quality({ succeeded: 2 }, {
       signals: [{ level: "error", count: 1 }],
@@ -84,14 +92,14 @@ describe("assessRevisionQuality", () => {
 
 function quality(
   statuses: Record<string, number>,
-  overrides: { p95Ms?: number; signals?: Record<string, unknown>[]; deliveries?: Record<string, unknown>[]; feedback?: Record<string, unknown>[] } = {},
+  overrides: { p95Ms?: number; tools?: Record<string, unknown>[]; signals?: Record<string, unknown>[]; deliveries?: Record<string, unknown>[]; feedback?: Record<string, unknown>[] } = {},
 ): RevisionQuality {
   return {
     revision: "test-revision",
     windowHours: 48,
     generatedAt: new Date(0).toISOString(),
     answers: Object.entries(statuses).map(([status, count]) => ({ model: "test/model", status, count, p95_ms: overrides.p95Ms ?? 100 })),
-    tools: [{ tool: "web__run", status: "ok", count: 10 }],
+    tools: overrides.tools ?? [{ tool: "web__run", status: "ok", count: 10 }],
     signals: overrides.signals ?? [],
     deliveries: overrides.deliveries ?? [{ state: "delivered", count: 1 }],
     feedback: overrides.feedback ?? [{ rating: "good", failure_mode: "unclassified", count: 5 }],

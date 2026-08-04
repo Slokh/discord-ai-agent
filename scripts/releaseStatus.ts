@@ -42,11 +42,13 @@ export function collectReleaseStatus(input: {
   const release = input.release ?? "discord-ai-agent";
   const warnings: string[] = [];
   const branch = textResult(runner("git", ["branch", "--show-current"]), warnings, "git branch");
-  const prResult = runner("gh", [
-    "pr", "view", input.pr ?? branch ?? "", "--json",
-    "number,url,title,state,isDraft,headRefName,headRefOid,baseRefName,mergeStateStatus,statusCheckRollup",
-  ]);
-  const pullRequestRaw = jsonResult(prResult, warnings, "pull request");
+  const prTarget = input.pr ?? (branch && branch !== "main" && branch !== "master" ? branch : null);
+  const pullRequestRaw = prTarget
+    ? jsonResult(runner("gh", [
+        "pr", "view", prTarget, "--json",
+        "number,url,title,state,isDraft,headRefName,headRefOid,baseRefName,mergeStateStatus,statusCheckRollup",
+      ]), warnings, "pull request")
+    : null;
   const checks = Array.isArray(pullRequestRaw?.statusCheckRollup)
     ? pullRequestRaw.statusCheckRollup as Array<Record<string, unknown>>
     : [];
@@ -190,18 +192,31 @@ function helmSummary(value: Record<string, any> | null): Record<string, unknown>
 
 function taskSummary(value: Record<string, any> | null): Record<string, unknown> | null {
   if (!value) return null;
-  const activeSessions = array(value.activeAgentSessions);
+  const activeExecutions = array(value.activeAgentExecutions);
   const activeTasks = array(value.activeTasks);
   const activeSandboxes = array(value.activeSandboxRuns);
   const pendingCleanup = array(value.pendingSandboxCleanup);
+  const staleAfterMs = Number(value.staleAfterMs ?? 15 * 60 * 1000);
+  const generatedAt = new Date(String(value.generatedAt ?? Date.now())).getTime();
+  const staleExecutions = activeExecutions.filter((item) => staleAt(item?.updatedAt, generatedAt, staleAfterMs));
   return {
-    activeSessions: activeSessions.length,
+    activeExecutions: activeExecutions.length,
+    memberExecutions: activeExecutions.filter((item) => item?.qualityCohort === "member").length,
+    syntheticExecutions: activeExecutions.filter((item) => item?.qualityCohort === "synthetic").length,
     activeTasks: activeTasks.length,
     activeSandboxes: activeSandboxes.length,
     pendingCleanup: pendingCleanup.length,
-    staleActive: [...activeSessions, ...activeTasks, ...activeSandboxes]
-      .filter((item) => item && typeof item === "object" && item.stale === true).length,
+    staleActive: staleExecutions.length + activeTasks.filter((item) => staleAt(
+      item?.progressUpdatedAt ?? item?.updatedAt ?? item?.startedAt ?? item?.createdAt,
+      generatedAt,
+      staleAfterMs,
+    )).length,
   };
+}
+
+function staleAt(value: unknown, generatedAt: number, staleAfterMs: number) {
+  const timestamp = new Date(String(value ?? "")).getTime();
+  return Number.isFinite(timestamp) && generatedAt - timestamp >= staleAfterMs;
 }
 
 function array(value: unknown): any[] {

@@ -47,6 +47,8 @@ export async function retryDeployedDiscordBugReports(input: DiscordAgentRequestI
   let skipped = 0;
   let bugFixAnnouncement: BugFixAnnouncement | null = null;
   for (const report of reports) {
+    let deploymentClaimed = false;
+    let retryOutcome: Parameters<typeof input.repo.recordDiscordBugReportRetry>[0] | null = null;
     try {
       const deployment = await deployedPullRequest({
         config: input.config,
@@ -68,9 +70,17 @@ export async function retryDeployedDiscordBugReports(input: DiscordAgentRequestI
         skipped += 1;
         continue;
       }
+      deploymentClaimed = true;
       const result = await (input.processReport
         ? input.processReport(report, revision, deployment.pullRequest)
         : postBugFixUpdateAndRetry(input, report, revision, deployment.pullRequest));
+      retryOutcome = {
+        reportId: report.reportId,
+        status: result.retried ? "succeeded" : "failed",
+        retryExecutionId: `bug-retry-${report.reportId}`,
+        announcementMessageId: result.announcement.messageId,
+      };
+      await persistRetryOutcome(input.repo, retryOutcome, revision);
       bugFixAnnouncement ??= result.announcement;
       if (result.retried) {
         retried += 1;
@@ -79,11 +89,33 @@ export async function retryDeployedDiscordBugReports(input: DiscordAgentRequestI
         logger.warn({ err: result.error, reportId: report.reportId, revision }, "Posted a bug-fix update but failed to retry the original Discord prompt");
       }
     } catch (error) {
+      if (deploymentClaimed) {
+        await input.repo.recordDiscordBugReportRetry(retryOutcome ?? {
+          reportId: report.reportId,
+          status: "failed",
+          retryExecutionId: `bug-retry-${report.reportId}`,
+        }).catch(() => undefined);
+      }
       skipped += 1;
       logger.warn({ err: error, reportId: report.reportId, revision }, "Failed to retry a deployed Discord bug report");
     }
   }
   return { eligible: reports.length, retried, skipped, bugFixAnnouncement };
+}
+
+async function persistRetryOutcome(
+  repo: DiscordAgentRequestInput["repo"],
+  outcome: Parameters<DiscordAgentRequestInput["repo"]["recordDiscordBugReportRetry"]>[0],
+  revision: string,
+) {
+  try {
+    await repo.recordDiscordBugReportRetry(outcome);
+  } catch (error) {
+    logger.warn({ err: error, reportId: outcome.reportId, revision }, "Failed to persist a Discord bug retry outcome; retrying once");
+    await repo.recordDiscordBugReportRetry(outcome).catch((retryError) => {
+      logger.warn({ err: retryError, reportId: outcome.reportId, revision }, "Could not persist the Discord bug retry outcome");
+    });
+  }
 }
 
 async function deployedPullRequest(input: {

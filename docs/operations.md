@@ -91,7 +91,7 @@ npm run frog:agent -- list
 npm run frog:agent -- resolve <entry-id>
 ```
 
-The wrapper supplies the application's existing database URL, which automatically selects Frog's Postgres store, plus the fixed private namespace. `migrate` is idempotent and normally needed only when preparing a database outside the application migration flow. For production, run commands inside a configured application pod or explicitly supply the production environment; do not let a local default masquerade as production evidence. `npx frog list` is different: it shows repository-development friction from the default file store.
+The wrapper maps the application's existing database URL to Frog's scoped database setting, which selects the Postgres store, and supplies the fixed private namespace. `migrate` is idempotent and normally needed only when preparing a database outside the application migration flow. For production, run commands inside a configured application pod or explicitly supply the production environment; do not let a local default masquerade as production evidence. `npx frog list` is different: it shows repository-development friction from the default file store.
 
 List filters for kind, status, channel, revision, and start time are applied by the control plane before the result limit. This keeps older matching failures visible even when unrelated recent executions are numerous.
 

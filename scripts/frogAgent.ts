@@ -9,7 +9,7 @@ const result = spawnSync(
   {
     env: {
       ...process.env,
-      DATABASE_URL: config.databaseUrl,
+      FROG_DATABASE_URL: config.databaseUrl,
       FROG_NAMESPACE: "discord-ai-agent",
     },
     stdio: "inherit",

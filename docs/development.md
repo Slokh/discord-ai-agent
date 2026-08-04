@@ -25,7 +25,7 @@ npm run frog:agent -- log "Tool result omitted freshness" --body "Expected curre
 npm run frog:agent -- resolve <entry-id>
 ```
 
-The wrapper passes the existing `DATABASE_URL`, which is enough for Frog to select Postgres, and fixes the public namespace to `discord-ai-agent`; it adds no deployment secret or application environment setting. `migrate` is safe to run repeatedly, although normal application migrations already create the table. Run commands in the environment whose database you intend to inspect. `npx frog list` deliberately remains the repository-development view.
+The wrapper maps the existing application `DATABASE_URL` to Frog's scoped `FROG_DATABASE_URL` and fixes the public namespace to `discord-ai-agent`; it adds no deployment secret or application environment setting. `migrate` is safe to run repeatedly, although normal application migrations already create the table. Run commands in the environment whose database you intend to inspect. `npx frog list` deliberately remains the repository-development view.
 
 ## Find the owner
 

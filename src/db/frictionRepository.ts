@@ -100,10 +100,9 @@ export async function clearAgentFrictionForUser(pool: DbPool, userId: string) {
 }
 
 function frictionLog(pool: DbPool) {
-  const client: PostgresStore.Client = {
-    query: async (text, values) => pool.query(text, values ? [...values] : []),
-  };
-  return new FrictionLog({ store: PostgresStore.adapter({ client, namespace: FROG_NAMESPACE }) });
+  return new FrictionLog({
+    store: PostgresStore.adapter({ client: pool, namespace: FROG_NAMESPACE }),
+  });
 }
 
 function bounded(value: string, limit: number) {

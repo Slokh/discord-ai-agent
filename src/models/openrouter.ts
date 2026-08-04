@@ -4,7 +4,6 @@ import { openRouterReasoning, openRouterTemperature, type OpenRouterReasoningEff
 import { fetchOpenRouterModels, type OpenRouterModel } from "./openrouterModels.js";
 import { transcribeAudioViaOpenRouter, type TranscriptionInput, type TranscriptionResult } from "./openrouterTranscription.js";
 import { extractEstimatedCostUsd, extractTokenUsage, type OpenRouterTokenUsage } from "./openrouterUsage.js";
-import { parseDsmlToolCalls, stripDsmlToolCalls } from "./openrouterDsml.js";
 import {
   OpenRouterContentFilterError,
   OpenRouterHttpError,
@@ -212,9 +211,8 @@ export class OpenRouterClient {
         name: String(call.function?.name ?? ""),
         argumentsText: String(call.function?.arguments ?? "{}")
       })) ?? [];
-    const dsmlToolCalls = structuredToolCalls.length === 0 && input.tools?.length ? parseDsmlToolCalls(rawContent) : [];
-    const toolCalls = structuredToolCalls.length > 0 ? structuredToolCalls : dsmlToolCalls;
-    const content = rawContent.includes("DSML") ? stripDsmlToolCalls(rawContent).trim() : rawContent;
+    const toolCalls = structuredToolCalls;
+    const content = rawContent;
 
     const result: ChatResult = {
       content,

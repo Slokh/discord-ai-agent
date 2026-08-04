@@ -22,7 +22,7 @@ After apply:
 
 1. Store `github_actions_deploy_role_arn` as GitHub secret `AWS_DEPLOY_ROLE_ARN`.
 2. Store `github_actions_candidate_role_arn` as GitHub secret `AWS_CANDIDATE_ROLE_ARN`.
-   CI calls the candidate workflow pinned to `main`; its role can publish only to tree-addressed candidate repositories and has no EKS or production-repository access.
+   Its role can publish only to tree-addressed candidate repositories and has no EKS or production-repository access.
 3. Store these GitHub repository variables:
    - `AWS_REGION`: use the `aws_region` output.
    - `EKS_CLUSTER_NAME`: use the `cluster_name` output.

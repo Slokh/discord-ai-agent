@@ -51,7 +51,7 @@ resource "aws_ecr_repository" "candidate_app" {
   image_tag_mutability = "MUTABLE"
 
   image_scanning_configuration {
-    scan_on_push = true
+    scan_on_push = false
   }
 }
 
@@ -60,7 +60,7 @@ resource "aws_ecr_repository" "candidate_sandbox" {
   image_tag_mutability = "MUTABLE"
 
   image_scanning_configuration {
-    scan_on_push = true
+    scan_on_push = false
   }
 }
 
@@ -68,13 +68,13 @@ locals {
   candidate_image_lifecycle_policy = jsonencode({
     rules = [{
       rulePriority = 1
-      description  = "Remove disposable candidate images after 14 days"
+      description  = "Remove disposable candidate images after one day"
       selection = {
         tagStatus     = "tagged"
         tagPrefixList = ["tree-"]
         countType     = "sinceImagePushed"
         countUnit     = "days"
-        countNumber   = 14
+        countNumber   = 1
       }
       action = { type = "expire" }
     }]

@@ -202,11 +202,16 @@ jobs:
       - run: terraform -chdir=deploy/terraform/aws validate
 
   candidate-images:
-    needs: changes
+    needs: [changes, quality, repository-policy, verify-db, infrastructure]
     if: >-
+      always() &&
       github.event_name == 'pull_request' &&
       github.event.pull_request.head.repo.full_name == github.repository &&
       needs.changes.outputs.deployable == 'true' &&
+      (needs.quality.result == 'success' || needs.quality.result == 'skipped') &&
+      (needs.repository-policy.result == 'success' || needs.repository-policy.result == 'skipped') &&
+      (needs.verify-db.result == 'success' || needs.verify-db.result == 'skipped') &&
+      (needs.infrastructure.result == 'success' || needs.infrastructure.result == 'skipped') &&
       vars.CANDIDATE_IMAGE_PUBLISHING_ENABLED == 'true' &&
       vars.AWS_REGION != '' && vars.ECR_REPOSITORY != ''
     permissions:
@@ -222,11 +227,7 @@ jobs:
   candidate-security:
     needs: [changes, candidate-images]
     if: needs.changes.outputs.container == 'true' && needs.candidate-images.result == 'success'
-    strategy:
-      fail-fast: false
-      matrix:
-        image: [runtime, codegen]
-    name: candidate security (${{ matrix.image }})
+    name: candidate security
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -242,42 +243,59 @@ jobs:
           aws-region: ${{ env.AWS_REGION }}
       - id: ecr
         uses: aws-actions/amazon-ecr-login@v2
-      - id: image
-        name: Resolve image reference
-        env:
-          REGISTRY: ${{ needs.candidate-images.outputs.registry }}
-          TREE_TAG: ${{ needs.candidate-images.outputs.tree_tag }}
-          IMAGE_KIND: ${{ matrix.image }}
-        run: |
-          suffix="-candidate"
-          if [ "$IMAGE_KIND" = codegen ]; then suffix="-sandbox-candidate"; fi
-          echo "reference=$REGISTRY/$ECR_REPOSITORY$suffix:$TREE_TAG" >>"$GITHUB_OUTPUT"
-      - uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
+      - name: Generate runtime SBOM
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
         with:
-          image: ${{ steps.image.outputs.reference }}
+          image: ${{ needs.candidate-images.outputs.registry }}/${{ env.ECR_REPOSITORY }}-candidate:${{ needs.candidate-images.outputs.tree_tag }}
           format: cyclonedx-json
-          output-file: sbom-${{ matrix.image }}.cdx.json
+          output-file: sbom-runtime.cdx.json
           upload-artifact: false
-      - uses: anchore/scan-action@e1165082ffb1fe366ebaf02d8526e7c4989ea9d2 # v7.4.0
+      - name: Generate codegen SBOM
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
         with:
-          image: ${{ steps.image.outputs.reference }}
+          image: ${{ needs.candidate-images.outputs.registry }}/${{ env.ECR_REPOSITORY }}-sandbox-candidate:${{ needs.candidate-images.outputs.tree_tag }}
+          format: cyclonedx-json
+          output-file: sbom-codegen.cdx.json
+          upload-artifact: false
+      - name: Scan runtime image
+        uses: anchore/scan-action@e1165082ffb1fe366ebaf02d8526e7c4989ea9d2 # v7.4.0
+        with:
+          image: ${{ needs.candidate-images.outputs.registry }}/${{ env.ECR_REPOSITORY }}-candidate:${{ needs.candidate-images.outputs.tree_tag }}
           config: .grype.yaml
           fail-build: true
           severity-cutoff: critical
           only-fixed: true
-          output-file: grype-${{ matrix.image }}.sarif
-      - uses: actions/upload-artifact@v7
+          output-file: grype-runtime.sarif
+      - name: Scan codegen image
+        uses: anchore/scan-action@e1165082ffb1fe366ebaf02d8526e7c4989ea9d2 # v7.4.0
+        with:
+          image: ${{ needs.candidate-images.outputs.registry }}/${{ env.ECR_REPOSITORY }}-sandbox-candidate:${{ needs.candidate-images.outputs.tree_tag }}
+          config: .grype.yaml
+          fail-build: true
+          severity-cutoff: critical
+          only-fixed: true
+          output-file: grype-codegen.sarif
+      - name: Upload candidate security evidence
+        uses: actions/upload-artifact@v7
         if: always()
         with:
-          name: candidate-security-${{ matrix.image }}
+          name: candidate-security
           path: |
-            sbom-${{ matrix.image }}.cdx.json
-            grype-${{ matrix.image }}.sarif
+            sbom-*.cdx.json
+            grype-*.sarif
           if-no-files-found: warn
 
   container-security:
-    needs: [changes, candidate-images]
-    if: always() && github.event_name == 'pull_request' && needs.changes.outputs.container == 'true' && needs.candidate-images.result != 'success'
+    needs: [changes, quality, repository-policy, verify-db, infrastructure, candidate-images]
+    if: >-
+      always() &&
+      github.event_name == 'pull_request' &&
+      needs.changes.outputs.container == 'true' &&
+      needs.candidate-images.result != 'success' &&
+      (needs.quality.result == 'success' || needs.quality.result == 'skipped') &&
+      (needs.repository-policy.result == 'success' || needs.repository-policy.result == 'skipped') &&
+      (needs.verify-db.result == 'success' || needs.verify-db.result == 'skipped') &&
+      (needs.infrastructure.result == 'success' || needs.infrastructure.result == 'skipped')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -397,6 +415,12 @@ jobs:
           docker buildx imagetools create \
             --tag "$REGISTRY/$ECR_REPOSITORY-sandbox:$IMAGE_TAG" \
             "$REGISTRY/$ECR_REPOSITORY-sandbox-candidate:$TREE_TAG"
+          aws ecr batch-delete-image \
+            --repository-name "$ECR_REPOSITORY-candidate" \
+            --image-ids "imageTag=$TREE_TAG" >/dev/null || true
+          aws ecr batch-delete-image \
+            --repository-name "$ECR_REPOSITORY-sandbox-candidate" \
+            --image-ids "imageTag=$TREE_TAG" >/dev/null || true
       - name: Require the exact verified candidate
         if: vars.CANDIDATE_IMAGE_PUBLISHING_ENABLED == 'true' && steps.promote.outcome != 'success'
         run: |

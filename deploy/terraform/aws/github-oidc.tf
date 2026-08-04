@@ -87,12 +87,6 @@ data "aws_iam_policy_document" "github_actions_candidate_assume_role" {
       variable = "token.actions.githubusercontent.com:sub"
       values   = ["repo:${var.github_repository}:pull_request"]
     }
-
-    condition {
-      test     = "StringEquals"
-      variable = "token.actions.githubusercontent.com:job_workflow_ref"
-      values   = ["${var.github_repository}/.github/workflows/candidate-images.yml@refs/heads/main"]
-    }
   }
 }
 
@@ -122,6 +116,22 @@ data "aws_iam_policy_document" "github_actions_candidate" {
       aws_ecr_repository.candidate_sandbox.arn
     ]
   }
+}
+
+data "aws_iam_policy_document" "github_actions_candidate_cleanup" {
+  statement {
+    actions = ["ecr:BatchDeleteImage"]
+    resources = [
+      aws_ecr_repository.candidate_app.arn,
+      aws_ecr_repository.candidate_sandbox.arn
+    ]
+  }
+}
+
+resource "aws_iam_role_policy" "github_actions_candidate_cleanup" {
+  name   = "${var.name}-github-actions-candidate-cleanup"
+  role   = aws_iam_role.github_actions_deploy.id
+  policy = data.aws_iam_policy_document.github_actions_candidate_cleanup.json
 }
 
 resource "aws_iam_role_policy" "github_actions_candidate" {

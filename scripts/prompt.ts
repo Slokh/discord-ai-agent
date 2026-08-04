@@ -4,6 +4,7 @@ import path from "node:path";
 import type { DbPool } from "../src/db/pool.js";
 import type { DiscordAiAgentRepository } from "../src/db/repositories.js";
 import type { AgentFile } from "../src/tools/types.js";
+import { persistLocalPromptTurn } from "./promptMemory.js";
 
 const SESSION_CONTEXT_MESSAGE_LIMIT = 24;
 
@@ -97,21 +98,6 @@ async function main() {
           threadKey: memoryThreadKey,
         })
       : [];
-
-    if (args.memory) {
-      await repo.appendConversationMessage({
-        threadKey: runtimeThreadKey,
-        role: "user",
-        authorId: args.userId,
-        authorDisplayName: args.userName,
-        content: args.prompt,
-        metadata: {
-          source: "local_prompt",
-          channelId: currentChannel.id,
-          channelName: currentChannel.name
-        }
-      });
-    }
 
     const requestId = `local-${randomUUID().slice(0, 8)}`;
     const runtimeRef = await ensureAgentRuntimePromptExecution({
@@ -207,30 +193,19 @@ async function main() {
     });
     const savedFiles = await saveAgentFiles(response.files ?? [], args.saveFilesDir);
     if (args.memory) {
-      for (const memoryEvent of response.memoryEvents ?? []) {
-        await repo.appendConversationMessage({
-          threadKey: runtimeThreadKey,
-          role: memoryEvent.role,
-          authorId: config.discord.clientId,
-          authorDisplayName: config.discord.botName,
-          content: memoryEvent.content,
-          metadata: {
-            ...memoryEvent.metadata,
-            source: "local_prompt"
-          }
-        });
-      }
-
-      await repo.appendConversationMessage({
+      await persistLocalPromptTurn({
+        repo,
         threadKey: runtimeThreadKey,
-        role: "assistant",
-        authorId: config.discord.clientId,
-        authorDisplayName: config.discord.botName,
-        content: response.content,
-        metadata: {
-          source: "local_prompt",
-          files: savedFiles
-        }
+        requestId,
+        userId: args.userId,
+        userDisplayName: args.userName,
+        botId: config.discord.clientId,
+        botDisplayName: config.discord.botName,
+        prompt: args.prompt,
+        response,
+        savedFiles,
+        channelId: currentChannel.id,
+        channelName: currentChannel.name,
       });
     }
 

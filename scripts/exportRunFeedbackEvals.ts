@@ -2,6 +2,7 @@ import { chmod, mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { loadConfig } from "../src/config/env.js";
 import { createPool } from "../src/db/pool.js";
+import { privateFeedbackReplaySkipReason } from "../src/observability/privateFeedbackReplay.js";
 
 const outputPath = path.resolve(process.argv[2] ?? ".discord-ai-agent/evals/production-feedback.json");
 const pool = createPool(loadConfig());
@@ -43,6 +44,7 @@ try {
     const hasAssertion = expectedTools.length + forbiddenTools.length + mustContain.length + mustNotContain.length > 0;
     const visibleChannelIds = jsonStringList(row.visible_channel_ids);
     const hasReplayScope = Boolean(row.guild_id && row.channel_id && row.user_id && visibleChannelIds.length > 0);
+    const skipReason = privateFeedbackReplaySkipReason({ hasAssertion, hasReplayScope, expectedTools });
     const promptArgs = compactArgs([
       ["--guild-id", row.guild_id],
       ["--channel-id", row.channel_id],
@@ -62,12 +64,8 @@ try {
       promptArgs,
       noMemory: true,
       useDiscordMemory: hasReplayScope,
-      skip: !hasAssertion || !hasReplayScope,
-      ...(!hasAssertion
-        ? { skipReason: "Reviewer must add an expected/forbidden tool or answer phrase before this case can grade behavior." }
-        : !hasReplayScope
-          ? { skipReason: "The original requester's visible-channel scope is unavailable, so this case cannot be replayed faithfully." }
-          : {}),
+      skip: Boolean(skipReason),
+      ...(skipReason ? { skipReason } : {}),
     }];
   });
   const suite = { version: 1, name: "private-production-feedback", prompts };

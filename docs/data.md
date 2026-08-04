@@ -114,6 +114,8 @@ Frog's production namespace stores unresolved normal-reply friction as serialize
 
 Confirmed automated bug validation may attach the same bounded regression contract: one supported failure class, an observable expected behavior, and at least one expected/forbidden tool or required/forbidden answer fragment. The signed sandbox callback receiver revalidates tool names and bounds before updating the original private feedback row. Cases without a machine-checkable assertion remain human-review candidates instead of becoming misleading automated tests. Revision-quality reports count good/bad classifications by revision without exporting the underlying prompt or note.
 
+Private regression replay also requires the original input to be reconstructable. The evaluator restores requester and channel scope, but it does not reproduce Discord attachments; feedback that asserts file inspection therefore remains a review case until attachment replay is explicitly supported.
+
 Bug-report deployment processing durably records the deployed revision, contextual update message, and whether retrying the original prompt succeeded or failed. The authenticated operator projection is deliberately content-free and requester-keyed; current message content remains available only through the normal Discord permission-filtered tool path. A separate content-free deployment verification row keys promotion by revision and unique rollout ID only after post-deploy gates pass, preventing startup-time bug retries and announcements from racing verification, rollback, or a repeated rollout of the same commit.
 
 ## Migrations and consistency

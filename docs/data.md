@@ -31,7 +31,7 @@ Focused repositories under `src/db/` own persistence:
 | Audits, costs, and process projections | `auditRepository.ts`, `processRunRepository.ts` |
 | Payments and randomness | focused payment repositories and `rngRepository.ts` |
 | Server overlays and model settings | `serverOverlayRepository.ts`, `agentSettingsRepository.ts` |
-| Private normal-reply friction | `frictionRepository.ts` through Frog's namespaced PostgreSQL adapter |
+| Private normal-reply friction | `frictionRepository.ts` through Frog's namespaced PostgreSQL store |
 
 `src/db/repositories.ts` delegates to these modules for existing callers. New durable behavior belongs in the focused owner.
 

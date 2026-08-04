@@ -32,6 +32,6 @@ jobs:
       - name: Export and run private regressions
         run: |
           kubectl --namespace "$K8S_NAMESPACE" exec "deployment/$HELM_RELEASE-worker" -- \
-            node dist/scripts/exportRunFeedbackEvals.js
+            node dist/scripts/exportImprovementEvals.js
           kubectl --namespace "$K8S_NAMESPACE" exec "deployment/$HELM_RELEASE-worker" -- \
             node dist/scripts/eval.js --private-only --safe-summary

@@ -62,9 +62,13 @@ describe("architecture guardrails", () => {
     );
     expect(scheduled).toContain("--safe-summary");
     expect(scheduled).toContain("--private-only");
+    expect(scheduled).toContain("dist/scripts/exportImprovementEvals.js");
+    expect(scheduled).not.toContain("exportRunFeedbackEvals");
     expect(deployment).toContain("scripts/postDeployVerification.ts");
     expect(verification).toContain("--safe-summary");
     expect(verification).toContain("--private-only");
+    expect(verification).toContain("dist/scripts/exportImprovementEvals.js");
+    expect(verification).not.toContain("exportRunFeedbackEvals");
     expect(verification).toContain("verifyDeploymentStability");
     expect(verification).toContain("stabilitySeconds: 30");
     expect(deployment).toContain("--force-conflicts");

@@ -159,7 +159,7 @@ async function runCli() {
     verifyPrivateRegressions: async () => {
       command("kubectl", [
         "--namespace", args.namespace, "exec", `deployment/${args.release}-worker`, "--",
-        "node", "dist/scripts/exportRunFeedbackEvals.js",
+        "node", "dist/scripts/exportImprovementEvals.js",
       ]);
       try {
         command("kubectl", [

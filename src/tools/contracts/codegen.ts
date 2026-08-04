@@ -8,7 +8,7 @@ export const codegenToolContracts = installToolsWhen(codeUpdatesAvailable, [
     toolClass: "coding",
     examples: ["@ai debug the failing CI on that PR"],
     description:
-      "Start an isolated repository sandbox for an explicitly requested code change or repository/GitHub diagnosis, including failing CI, checks, or tests. Generic requests about my bugs, bug reports, or the bug inbox refer to the native Discord inbox: call listDiscordBugMarkers first instead of treating them as GitHub work. Never use this for public-web research. Use mode=code_change when a repository diff is requested and mode=diagnosis only for explicitly read-only repository work. Any guild member may start a task.",
+      "Start an isolated repository sandbox for an explicitly requested code change or repository/GitHub diagnosis, including failing CI, checks, or tests. Generic requests about my reports or improvement inbox should call listMyImprovementSignals first; opening a coding task still requires explicit current-turn intent. Never use this for public-web research. Use mode=code_change when a repository diff is requested and mode=diagnosis only for explicitly read-only repository work. Any guild member may start a task.",
     mutates: true,
     group: "codegen",
     parameters: {
@@ -32,6 +32,10 @@ export const codegenToolContracts = installToolsWhen(codeUpdatesAvailable, [
           pattern: "\\S",
           description:
             "Concise human task title in plain English, 3-8 words, without prefixes like Agent Codegen. Name the intended change, not just the investigation. Example: Increase model output token limit."
+        },
+        improvementCaseId: {
+          type: "string",
+          description: "Optional actionable improvement case ID returned by listMyImprovementSignals. Linking requires the current requester to own a signal in the case and preserves its verification lifecycle."
         },
         targetBranch: {
           type: "string",

@@ -134,197 +134,77 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
       .toEqual(Array.from({ length: 24 }, (_, index) => index + 1));
   });
 
-  it("stores a permission-filtered, requester-scoped Discord bug inbox", async () => {
+  it("stores, coalesces, contracts, transitions, and privacy-cleans improvement cases", async () => {
     const guildId = `guild-${randomUUID()}`;
-    const visibleChannelId = `channel-${randomUUID()}`;
-    const hiddenChannelId = `channel-${randomUUID()}`;
-    const requesterId = `user-${randomUUID()}`;
-    const otherUserId = `user-${randomUUID()}`;
-    const promptMessageId = `message-${randomUUID()}`;
-    const markedMessageId = `message-${randomUUID()}`;
-    const hiddenMessageId = `message-${randomUUID()}`;
-
-    await repo.upsertGuild({ id: guildId, name: "test" });
-    await repo.upsertChannel({ id: visibleChannelId, guildId, name: "visible", type: 0 });
-    await repo.upsertChannel({ id: hiddenChannelId, guildId, name: "hidden", type: 0 });
-    await repo.upsertMessage({
-      id: promptMessageId,
-      guildId,
-      channelId: visibleChannelId,
-      authorId: requesterId,
-      authorUsername: "requester",
-      content: "show the verified value",
-      normalizedContent: "show the verified value",
-      createdAt: new Date("2026-01-01T00:00:00Z")
+    const userId = `user-${randomUUID()}`;
+    await repo.upsertGuild({ id: guildId, name: "improvements" });
+    const fingerprint = `fingerprint-${randomUUID()}`;
+    const first = await repo.recordImprovementSignal({
+      source: "member_report", sourceKey: `source-${randomUUID()}`, reporterKind: "member", reporterId: userId,
+      guildId, scope: "guild", summary: "Assistant reply needs investigation", fingerprint,
     });
-    await repo.upsertMessage({
-      id: markedMessageId,
-      guildId,
-      channelId: visibleChannelId,
-      authorId: "user-bot",
-      authorUsername: "ai",
-      authorIsBot: true,
-      content: "unverified answer",
-      normalizedContent: "unverified answer",
-      referencedMessageId: promptMessageId,
-      referencedChannelId: visibleChannelId,
-      referencedGuildId: guildId,
-      createdAt: new Date("2026-01-01T00:01:00Z")
+    const second = await repo.recordImprovementSignal({
+      source: "agent_report", sourceKey: `source-${randomUUID()}`, reporterKind: "agent", reporterId: userId,
+      guildId, scope: "guild", summary: "Assistant reply needs investigation", fingerprint,
     });
-    await repo.upsertMessage({
-      id: hiddenMessageId,
-      guildId,
-      channelId: hiddenChannelId,
-      authorId: "user-bot",
-      authorUsername: "ai",
-      authorIsBot: true,
-      content: "hidden answer",
-      normalizedContent: "hidden answer",
-      createdAt: new Date("2026-01-01T00:02:00Z")
+    expect(second.case.caseId).toBe(first.case.caseId);
+    expect(second.caseCreated).toBe(false);
+    await repo.addImprovementEvidence({
+      caseId: first.case.caseId, kind: "runtime_trace", disposition: "supports",
+      summary: "Retained execution establishes the mismatch.",
     });
-    await repo.setDiscordBugMarker({ guildId, channelId: visibleChannelId, messageId: markedMessageId, userId: requesterId, present: true });
-    await repo.setDiscordBugMarker({ guildId, channelId: hiddenChannelId, messageId: hiddenMessageId, userId: requesterId, present: true });
-    await repo.setDiscordBugMarker({ guildId, channelId: visibleChannelId, messageId: markedMessageId, userId: otherUserId, present: true });
-
-    await expect(repo.listDiscordBugMarkers({
-      guildId,
-      userId: requesterId,
-      visibleChannelIds: [visibleChannelId],
-      limit: 20
-    })).resolves.toEqual([
-      expect.objectContaining({
-        userId: requesterId,
-        messageId: markedMessageId,
-        messageContent: "unverified answer",
-        promptMessageId,
-        promptContent: "show the verified value",
-        promptLink: `https://discord.com/channels/${guildId}/${visibleChannelId}/${promptMessageId}`
-      })
-    ]);
-
-    await repo.requestUserDeletion(requesterId);
-    await expect(repo.listDiscordBugMarkers({
-      guildId,
-      userId: requesterId,
-      visibleChannelIds: [visibleChannelId],
-      limit: 20
-    })).resolves.toEqual([]);
+    await repo.acceptImprovementContract({
+      caseId: first.case.caseId,
+      expectedBehavior: "Return the verified value.",
+      checks: [{ kind: "test", reference: "verified-value-unit-test" }],
+      createdBy: "test",
+    });
+    await expect(repo.transitionImprovementCase({
+      caseId: first.case.caseId, to: "actionable", actorKind: "operator",
+    })).resolves.toMatchObject({ status: "actionable" });
+    await expect(repo.listImprovementSignalsForReporter({ guildId, reporterId: userId })).resolves.toHaveLength(2);
+    await repo.requestUserDeletion(userId);
+    await expect(repo.listImprovementSignalsForReporter({ guildId, reporterId: userId })).resolves.toEqual([]);
   });
 
-  it("claims deployed bug fixes once and renders only terminal silent failures", async () => {
-    const guildId = `guild-${randomUUID()}`;
-    const channelId = `channel-${randomUUID()}`;
-    const userId = `user-${randomUUID()}`;
-    const sourceMessageId = `message-${randomUUID()}`;
-    const sessionId = `session-${randomUUID()}`;
-    const executionId = `execution-${randomUUID()}`;
+  it("links explicit work and requires deployed evidence before resolving", async () => {
+    const caseRecord = await repo.recordImprovementSignal({
+      source: "developer_report", sourceKey: `source-${randomUUID()}`, reporterKind: "developer",
+      summary: "Repository invariant needs repair", classification: "defect", scope: "repository",
+    });
+    await repo.addImprovementEvidence({ caseId: caseRecord.case.caseId, kind: "test_failure", disposition: "supports", summary: "The focused test reproduces the invariant violation." });
+    await repo.acceptImprovementContract({
+      caseId: caseRecord.case.caseId, expectedBehavior: "The focused invariant test passes.",
+      checks: [{ kind: "test", reference: "focused-invariant" }], createdBy: "operator",
+    });
+    await repo.transitionImprovementCase({ caseId: caseRecord.case.caseId, to: "actionable", actorKind: "operator" });
     const taskId = `task-${randomUUID()}`;
-    const reportId = `report-${randomUUID()}`;
-    await repo.upsertGuild({ id: guildId, name: "bug retry" });
-    await repo.upsertMessage({
-      id: sourceMessageId,
-      guildId,
-      channelId,
-      authorId: "user-bot",
-      authorUsername: "ai",
-      authorIsBot: true,
-      content: "incorrect answer",
-      normalizedContent: "incorrect answer",
-      createdAt: new Date(),
-    });
-    await agentRuntimeRepo.upsertSession({
-      sessionId,
-      traceId: sourceMessageId,
-      threadKey: `discord:${guildId}:${channelId}`,
-      guildId,
-      channelId,
-      userId,
-      request: "original prompt",
-      requestedBy: "test",
-      status: "succeeded",
-      metadata: { kind: "discord_channel" },
-    });
-    await agentRuntimeRepo.createExecution({
-      executionId,
-      sessionId,
-      traceId: sourceMessageId,
-      status: "succeeded",
-      harness: "nanocodex",
-    });
-    await repo.upsertAgentTaskQueued({
-      taskId,
-      traceId: sourceMessageId,
-      guildId,
-      channelId,
-      userId,
-      taskType: "bug_report",
-      title: "repair generated output delivery",
-      request: "bounded evidence",
-      requestedBy: userId,
-      backend: "kubernetes-sandbox",
-    });
-    await repo.createDiscordBugReport({
-      reportId,
-      guildId,
-      channelId,
-      sourceMessageId,
-      sourceSessionId: sessionId,
-      sourceExecutionId: executionId,
-      sourceRevision: "old-revision",
-      reportedByUserId: userId,
-    });
-    await repo.attachDiscordBugReportTask({ reportId, taskId, statusMessageId: null });
-    await repo.completeDiscordBugReportForTask({
-      taskId,
-      status: "completed",
-      disposition: "confirmed_fixed",
-      summary: "fixed",
-      prUrl: "https://github.com/example/repo/pull/12",
-    });
-    await repo.setDiscordBugMarker({ guildId, channelId, messageId: sourceMessageId, userId, present: true });
+    await repo.upsertAgentTaskQueued({ taskId, taskType: "code_update", title: "Repair invariant", request: "Repair the focused invariant.", requestedBy: "operator" });
+    await expect(repo.linkImprovementCaseTask({ caseId: caseRecord.case.caseId, taskId, actorId: "operator" })).resolves.toMatchObject({ status: "in_progress" });
+    await repo.markAgentTaskSucceeded({ taskId, branchName: "operator/repair", prUrl: "https://github.com/example/repo/pull/1", draft: false, verifyPassed: true });
+    await expect(repo.getImprovementCase(caseRecord.case.caseId)).resolves.toMatchObject({ case: { status: "verifying" } });
+    await expect(repo.transitionImprovementCase({ caseId: caseRecord.case.caseId, to: "resolved", actorKind: "operator" })).rejects.toThrow(/deployment evidence/);
+    await expect(repo.verifyImprovementCase({ caseId: caseRecord.case.caseId, revision: "abc123", summary: "Focused contract passed on the deployed revision.", actorId: "operator" })).resolves.toMatchObject({ status: "resolved" });
+  });
 
-    await expect(repo.getDiscordBugReportForTask(taskId)).resolves.toMatchObject({ reportId, statusMessageId: null });
-    await expect(repo.listDiscordBugReportsAwaitingDeployment()).resolves.toEqual(
-      expect.arrayContaining([expect.objectContaining({ reportId })]),
-    );
-    await expect(repo.claimDiscordBugReportDeployment({
-      reportId,
-      mergeCommitSha: "merge-revision",
-      deployedRevision: "deployed-revision",
-    })).resolves.toBe(true);
-    await repo.recordDiscordBugReportRetry({ reportId, status: "succeeded", retryExecutionId: `bug-retry-${reportId}`, announcementMessageId: "announcement-message" });
-    await expect(repo.listDiscordBugInboxStatus({ guildId, requesterUserId: userId, limit: 20 })).resolves.toEqual([
-      expect.objectContaining({
-        validationStatus: "completed", disposition: "confirmed_fixed", deployedRevision: "deployed-revision",
-        retryStatus: "succeeded",
-      }),
-    ]);
-    await expect(repo.claimDiscordBugReportDeployment({
-      reportId,
-      mergeCommitSha: "merge-revision",
-      deployedRevision: "deployed-revision",
-    })).resolves.toBe(false);
-    await expect(repo.listDiscordBugReportsAwaitingDeployment()).resolves.not.toEqual(
-      expect.arrayContaining([expect.objectContaining({ reportId })]),
-    );
-
-    const failedTaskId = `task-${randomUUID()}`;
-    await repo.upsertAgentTaskQueued({
-      taskId: failedTaskId,
-      traceId: sourceMessageId,
-      guildId,
-      channelId,
-      userId,
-      taskType: "bug_report",
-      title: "validate bug",
-      request: "bounded evidence",
-      requestedBy: userId,
-      backend: "kubernetes-sandbox",
+  it("withdraws and reactivates an idempotent member signal", async () => {
+    const guildId = `guild-${randomUUID()}`;
+    const userId = `user-${randomUUID()}`;
+    const sourceKey = `reaction-${randomUUID()}`;
+    await repo.upsertGuild({ id: guildId, name: "reactivation" });
+    const first = await repo.recordImprovementSignal({
+      source: "member_report", sourceKey, reporterKind: "member", reporterId: userId, guildId,
+      summary: "A member reported an assistant reply.",
     });
-    await repo.markAgentTaskFailed({ taskId: failedTaskId, status: "no_changes", error: "not reproduced" });
-    await expect(repo.listRenderableAgentTasks()).resolves.toEqual(
-      expect.arrayContaining([expect.objectContaining({ taskId: failedTaskId, discordResponseMessageId: null })]),
-    );
+    await expect(repo.withdrawImprovementSignal({ sourceKey, actorId: userId })).resolves.toBe(true);
+    await expect(repo.getImprovementCase(first.case.caseId)).resolves.toMatchObject({ case: { status: "dismissed" } });
+    const reactivated = await repo.recordImprovementSignal({
+      source: "member_report", sourceKey, reporterKind: "member", reporterId: userId, guildId,
+      summary: "A member reported an assistant reply.",
+    });
+    expect(reactivated.signal.signalId).toBe(first.signal.signalId);
+    expect(reactivated.signal.active).toBe(true);
+    expect(reactivated.case.status).toBe("open");
   });
 
   it("maintains compact custom emoji profiles from visible, privacy-safe indexed usage", async () => {
@@ -465,51 +345,6 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
 
     const result = await pool.query("SELECT user_id FROM privacy_deletions WHERE user_id = $1", [userId]);
     expect(result.rows[0]?.user_id).toBe(userId);
-  });
-
-  it("removes private runtime, feedback, bug, and derived conversation state for a deleted user", async () => {
-    const userId = `user-${randomUUID()}`;
-    const botUserId = `bot-${randomUUID()}`;
-    const guildId = `guild-${randomUUID()}`;
-    const channelId = `channel-${randomUUID()}`;
-    const messageId = `message-${randomUUID()}`;
-    const threadKey = `discord:${guildId}:${channelId}`;
-    const sessionId = `agent-session-${randomUUID()}`;
-    const executionId = `agent-execution-${randomUUID()}`;
-
-    await repo.upsertGuild({ id: guildId, name: "privacy-test" });
-    await repo.upsertChannel({ id: channelId, guildId, name: "privacy", type: 0 });
-    await repo.upsertUser({ id: userId, username: "private-user" });
-    await repo.upsertUser({ id: botUserId, username: "bot", isBot: true });
-    await repo.upsertMessage({
-      id: messageId, guildId, channelId, authorId: botUserId, content: "private-derived-reply",
-      normalizedContent: "private-derived-reply", createdAt: new Date(),
-    });
-    await pool.query("INSERT INTO conversation_sessions(thread_key, guild_id, channel_id) VALUES ($1, $2, $3)", [threadKey, guildId, channelId]);
-    await pool.query(
-      "INSERT INTO conversation_messages(thread_key, role, author_id, author_display_name, content) VALUES ($1, 'user', $2, 'private-user', 'private request')",
-      [threadKey, userId],
-    );
-    await agentRuntimeRepo.upsertSession({
-      sessionId, threadKey, guildId, channelId, userId, requestedBy: userId,
-      request: "private runtime request", status: "succeeded",
-    });
-    await agentRuntimeRepo.createExecution({ executionId, sessionId, status: "succeeded" });
-    await repo.upsertRunFeedback({ runId: executionId, rating: "bad", note: "private feedback", captureEval: true });
-    await repo.createDiscordBugReport({
-      reportId: `bug-${randomUUID()}`, guildId, channelId, sourceMessageId: messageId,
-      sourceSessionId: sessionId, sourceExecutionId: executionId, sourceRevision: "test-revision", reportedByUserId: userId,
-    });
-
-    await repo.requestUserDeletion(userId);
-
-    const [sessions, feedback, conversations, reports] = await Promise.all([
-      pool.query("SELECT count(*)::int AS count FROM agent_runtime_sessions WHERE session_id = $1", [sessionId]),
-      pool.query("SELECT count(*)::int AS count FROM agent_run_feedback WHERE run_id = $1", [executionId]),
-      pool.query("SELECT count(*)::int AS count FROM conversation_sessions WHERE thread_key = $1", [threadKey]),
-      pool.query("SELECT count(*)::int AS count FROM discord_bug_reports WHERE reported_by_user_id = $1", [userId]),
-    ]);
-    expect([sessions, feedback, conversations, reports].map((result) => result.rows[0]?.count)).toEqual([0, 0, 0, 0]);
   });
 
   it("creates and updates Discord delivery obligations", async () => {
@@ -2966,38 +2801,6 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
     await expect(repo.clearGuildChatModelOverride(guildId)).resolves.toBe(true);
     await expect(repo.clearGuildChatModelOverride(guildId)).resolves.toBe(false);
     await expect(repo.getGuildAgentSettings(guildId)).resolves.toBeUndefined();
-  });
-
-  it("stores review feedback and marks private eval captures", async () => {
-    const runId = `run-${randomUUID()}`;
-    await expect(repo.upsertRunFeedback({
-      runId,
-      rating: "bad",
-      note: "Missed the source",
-      expectedBehavior: "Search first",
-      failureMode: "missing_evidence",
-      expectedTools: ["searchDiscordHistory"],
-      forbiddenTools: ["transferWalletFunds"],
-      mustContain: ["source"],
-      mustNotContain: ["I cannot"],
-      captureEval: true,
-    })).resolves.toEqual(
-      expect.objectContaining({ runId, rating: "bad", failureMode: "missing_evidence", expectedTools: ["searchDiscordHistory"], captureEval: true })
-    );
-    await expect(repo.getRunFeedback(runId)).resolves.toEqual(expect.objectContaining({
-      note: "Missed the source",
-      expectedBehavior: "Search first",
-      forbiddenTools: ["transferWalletFunds"],
-      mustContain: ["source"],
-      mustNotContain: ["I cannot"],
-    }));
-    await expect(repo.captureRunFeedbackForEval({ runId, note: "Automatic marker" })).resolves.toEqual(expect.objectContaining({
-      rating: "bad",
-      failureMode: "missing_evidence",
-      expectedTools: ["searchDiscordHistory"],
-      forbiddenTools: ["transferWalletFunds"],
-      captureEval: true,
-    }));
   });
 
 });

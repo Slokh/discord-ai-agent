@@ -1,12 +1,11 @@
-import type { Client, Message, MessageCreateOptions } from "discord.js";
+import type { Client, Message } from "discord.js";
 import type { AppConfig } from "../config/env.js";
 import type { AgentTaskRecord, DiscordAiAgentRepository, SandboxCommandEvent, TaskEvent } from "../db/repositories.js";
-import type { DiscordBugReport } from "../db/types.js";
 import { formatAgentTaskResult } from "../tools/agentTaskFormatting.js";
 import { cleanResponse } from "../tools/responseFormatting.js";
 import { durationMs, logger } from "../util/logger.js";
 import { runWithTrace } from "../util/trace.js";
-import { discordEdit, discordReply } from "./api.js";
+import { discordEdit } from "./api.js";
 
 const DEFAULT_POLL_MS = 2_000;
 const RENDER_LIMIT = 20;
@@ -70,10 +69,6 @@ async function renderTask(input: { client: Client; repo: DiscordAiAgentRepositor
       messageId: task.taskId
     },
     async () => {
-      if (task.taskType === "bug_report" && isTerminalAgentTaskStatus(task.status) && !task.discordResponseMessageId) {
-        await renderSilentBugReportResult(input, task);
-        return;
-      }
       const terminal = isTerminalAgentTaskStatus(task.status);
       const progressEvents = terminal ? undefined : await recentTaskEvents(input.repo, task);
       const rendered = renderAgentTaskMessage(task, progressEvents);
@@ -135,43 +130,6 @@ async function renderTask(input: { client: Client; repo: DiscordAiAgentRepositor
       }
     }
   );
-}
-
-async function renderSilentBugReportResult(
-  input: { client: Client; repo: DiscordAiAgentRepository; config: AppConfig },
-  task: AgentTaskRecord,
-) {
-  const report = await input.repo.getDiscordBugReportForTask(task.taskId);
-  if (!report) throw new Error(`Bug-report task ${task.taskId} has no durable report.`);
-  const source = await fetchDiscordMessage(input.client, report.channelId, report.sourceMessageId);
-  const [taskEvents, commandEvents] = await taskDetails(input.repo, task);
-  const rendered = renderAgentTaskMessage(task, taskEvents, commandEvents);
-  const payload = bugReportResultReplyPayload(report, rendered.content, input.config.maxReplyChars);
-  const replied = await discordReply(source, payload, { logger });
-  if (!replied.ok) throw replied.error;
-  await input.repo.markAgentTaskRendered({ taskId: task.taskId, signature: rendered.signature, terminal: true });
-  logger.info({ taskId: task.taskId, status: task.status, replyMessageId: replied.value.id }, "Rendered terminal silent bug-report result");
-}
-
-export function bugReportResultReplyPayload(
-  report: Pick<DiscordBugReport, "disposition" | "reportedByUserId">,
-  renderedContent: string,
-  maxReplyChars: number,
-): MessageCreateOptions {
-  const needsContext = report.disposition === "insufficient_evidence";
-  const content = needsContext
-    ? [
-        `<@${report.reportedByUserId}> I need more context before I can decide whether this needs a code fix.`,
-        renderedContent,
-        "Please reply to this message with what you expected, what happened instead, and any relevant examples or timing."
-      ].join("\n")
-    : renderedContent;
-  return {
-    content: cleanResponse(content, maxReplyChars),
-    allowedMentions: needsContext
-      ? { parse: [], users: [report.reportedByUserId], repliedUser: false }
-      : { parse: [], repliedUser: false }
-  };
 }
 
 export function renderAgentTaskMessage(
@@ -337,11 +295,4 @@ async function fetchTaskReply(client: Client, task: AgentTaskRecord): Promise<Me
     throw new Error(`Discord channel ${task.discordResponseChannelId} does not support message fetch.`);
   }
   return (await messages.fetch(task.discordResponseMessageId)) as Message;
-}
-
-async function fetchDiscordMessage(client: Client, channelId: string, messageId: string): Promise<Message> {
-  const channel = await client.channels.fetch(channelId);
-  const messages = (channel as any)?.messages;
-  if (!messages?.fetch) throw new Error(`Discord channel ${channelId} does not support message fetch.`);
-  return (await messages.fetch(messageId)) as Message;
 }

@@ -49,7 +49,7 @@ export async function upsertServerOverlay(pool: DbPool, input: {
   }
 
 export async function health(pool: DbPool) {
-  const [messages, embeddings, tools, estimatedCost, sessions, runtimeTelemetry, answerQuality, toolQuality, feedbackQuality, deliveryRecoveries] = await Promise.all([
+  const [messages, embeddings, tools, estimatedCost, sessions, runtimeTelemetry, answerQuality, toolQuality, improvementQuality, deliveryRecoveries] = await Promise.all([
     pool.query("SELECT count(*)::int AS count FROM messages WHERE deleted_at IS NULL"),
     pool.query("SELECT count(*)::int AS count FROM message_embeddings"),
     pool.query("SELECT count(*)::int AS count FROM tool_audit_logs"),
@@ -110,11 +110,11 @@ export async function health(pool: DbPool) {
       ORDER BY tool_name, status
     `),
     pool.query(`
-      SELECT rating, coalesce(failure_mode, 'unclassified') AS failure_mode, count(*)::int AS count
-      FROM agent_run_feedback
-      WHERE updated_at >= now() - interval '30 days'
-      GROUP BY rating, failure_mode
-      ORDER BY rating, failure_mode
+      SELECT case_row.status, case_row.classification, count(*)::int AS count
+      FROM improvement_cases case_row
+      WHERE case_row.updated_at >= now() - interval '30 days'
+      GROUP BY case_row.status, case_row.classification
+      ORDER BY case_row.status, case_row.classification
     `),
     pool.query(`
       SELECT count(*)::int AS count
@@ -146,7 +146,7 @@ export async function health(pool: DbPool) {
       durationSumMs: Number(row.duration_sum_ms), durationCount: Number(row.duration_count), estimatedCostUsd: Number(row.cost),
     })),
     toolQuality: toolQuality.rows.map((row) => ({ toolName: String(row.tool_name), status: String(row.status), count: Number(row.count) })),
-    feedbackQuality: feedbackQuality.rows.map((row) => ({ rating: String(row.rating), failureMode: String(row.failure_mode), count: Number(row.count) })),
+    improvementQuality: improvementQuality.rows.map((row) => ({ status: String(row.status), classification: String(row.classification), count: Number(row.count) })),
     deliveryRecoveries: Number(deliveryRecoveries.rows[0]?.count ?? 0),
   };
 }

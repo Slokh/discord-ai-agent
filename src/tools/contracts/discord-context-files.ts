@@ -64,15 +64,15 @@ export const discordContextFileToolContracts = [
   }),
 
   defineTool({
-    name: "listDiscordBugMarkers",
+    name: "listMyImprovementSignals",
     description:
-      "List the current requester's native Discord bug inbox: messages they personally reacted to with 🐛. This is the default for requests about my bugs, bug reports, reported bugs, marked issues, or the bug inbox when the user does not explicitly name GitHub or a repository. Call it before diagnosing or fixing those reports. Results are requester-scoped and permission-filtered; never substitute GitHub issues, aggregate reaction counts, or another user's markers.",
+      "List the current requester's active improvement reports, including reports created by their 🐛 reactions. Use for requests about my bugs, friction, reports, marked issues, or improvement inbox. Results are requester-scoped and permission-filtered.",
     mutates: false,
     group: "discord-retrieval",
     category: "discord",
     toolClass: "retrieval",
-    outputContract: ["requester-scoped active marker count", "marked message excerpt and link", "original/replied-to prompt excerpt and link when available", "permission and removal guidance"],
-    examples: ["@ai show my bug reports", "@ai fix everything in my bug inbox"],
+    outputContract: ["requester-scoped active signal count", "case status and severity", "source message link when available"],
+    examples: ["@ai show my reports", "@ai what improvement issues have I reported?"],
     parameters: {
       type: "object",
       properties: {

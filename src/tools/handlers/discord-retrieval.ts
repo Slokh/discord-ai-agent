@@ -1,4 +1,4 @@
-import { listDiscordBugMarkers } from "../discordBugTools.js";
+import { listMyImprovementSignals } from "../improvementTools.js";
 import { inspectDiscordFile } from "../discordFileTools.js";
 import { findDiscordChannels, findDiscordUsers } from "../discordResolverTools.js";
 import { answerFromHistory, getDiscordMessageContext, getDiscordStats, getRecentDiscordMessages, searchDiscordAttachments } from "../discordRetrievalTools.js";
@@ -34,9 +34,9 @@ export const discordRetrievalToolHandlers = {
           ),
         };
   },
-  "listDiscordBugMarkers": async (ctx, route, _originalText) => {
+  "listMyImprovementSignals": async (ctx, route, _originalText) => {
     return {
-          content: cleanToolResponse(await listDiscordBugMarkers(ctx, {
+          content: cleanToolResponse(await listMyImprovementSignals(ctx, {
             limit: numberArgument(route.arguments, "limit"),
           }), Math.max(ctx.config.maxReplyChars, 6_000)),
         };

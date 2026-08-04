@@ -101,7 +101,7 @@ See [Code updates](code-updates.md) for publication and sandbox details.
 | Random sessions and draws | `rngRepository.ts` |
 | Server prompt overlays | `serverOverlayRepository.ts` |
 | Per-guild agent model selection | `agentSettingsRepository.ts` |
-| Private normal-reply friction | `frictionRepository.ts` using Frog's `discord-ai-agent` Postgres namespace |
+| Unified improvement lifecycle | `improvementRepository.ts` and `src/improvements/` |
 
 `src/db/repositories.ts` composes the focused repository functions with one pool. It contains only cross-repository lifecycle coordination; SQL stays in the focused owner.
 
@@ -112,7 +112,7 @@ See [Code updates](code-updates.md) for publication and sandbox details.
 | Generic prompt and NanoCodex execution | `src/agent/capabilityRuntime.ts`, `nanocodexAgentRuntime.ts`, `promptBuilder.ts` | architecture, NanoCodex runtime, prompt, and agent integration tests |
 | Installed capability lifecycle and feature orchestration | `src/capabilities/` | focused capability tests plus architecture boundary tests |
 | Tool contract and dispatch | `src/capabilities/catalog.ts`, `toolContracts.ts`, `src/tools/contracts/`, `src/tools/handlers/` | capability-catalog, registry, contract-validation, handler-conformance tests |
-| Private friction intake and lifecycle | `src/tools/contracts/friction.ts`, `src/tools/handlers/friction.ts`, `src/db/frictionRepository.ts` | handler-conformance plus runtime-recovery DB tests |
+| Improvement signal intake and lifecycle | `src/tools/contracts/improvements.ts`, `src/tools/handlers/improvements.ts`, `src/discord/improvementReaction.ts`, `src/db/improvementRepository.ts` | domain, handler-conformance, reaction, and DB integration tests |
 | Discord ingress and delivery | `src/discord/client.ts`, `messageIngress.ts`, `agentDelivery.ts`, `responseSink.ts` | Discord client/delivery/response-sink tests |
 | Discord data and retrieval | `src/discord/crawler.ts`, `src/db/*Repository.ts`, `src/memory/`, retrieval tools | crawler/search/tool tests and DB integration tests |
 | Sandbox callback receiver | `src/execution/callbackServer.ts`, `src/execution/callbacks.ts` | sandbox callback tests |
@@ -128,12 +128,12 @@ Entrypoints must not reconstruct application-owned services independently. Add a
 
 NanoCodex provider-call tokens are normalized into the canonical usage fields, while its terminal turn event owns the aggregate cost estimate used by spend projections so costs are not double-counted. Tool completion events retain stable error codes and retryability. Revision health uses the final result for each capability within a member execution while separately reporting total attempts and recovered argument-validation retries.
 
-Important model, tool, provider, queue, sandbox, mutation, and delivery transitions are typed events. `runtimeEventSchema.ts` maps registered event namespaces and terminal segments to controlled category/phase dimensions; exceptional events may provide an explicit phase, while unknown names stay `system/progress` rather than being guessed from words embedded in a name. Large or sensitive details are retained as redacted artifacts rather than event metadata. The canonical ledger remains in Postgres for trusted operational investigation. Quality metrics group answer latency/cost/status by model and deployed revision, tool outcomes by typed status, reviewed feedback by failure mode, and recovered deliveries.
+Important model, tool, provider, queue, sandbox, mutation, and delivery transitions are typed events. `runtimeEventSchema.ts` maps registered event namespaces and terminal segments to controlled category/phase dimensions; exceptional events may provide an explicit phase, while unknown names stay `system/progress` rather than being guessed from words embedded in a name. Large or sensitive details are retained as redacted artifacts rather than event metadata. The canonical ledger remains in Postgres for trusted operational investigation. Quality metrics group answer latency/cost/status by model and deployed revision, tool outcomes by typed status, improvement-signal rates, and recovered deliveries.
 
-Every prompt execution declares a quality cohort. Member-originated Discord turns are `member`; CLI, evaluation, and deployment probes are `synthetic`. Revision health, baselines, tool outcomes, feedback, and delivery alerts use only the member cohort, so automated checks cannot manufacture a healthy production sample.
+Every prompt execution declares a quality cohort. Member-originated Discord turns are `member`; CLI, evaluation, and deployment probes are `synthetic`. Revision health, baselines, tool outcomes, and delivery alerts use only the member cohort; improvement rates separately use signals attributed to the deployed revision.
 
 Observability may expose model inputs/outputs and deterministic decisions after permission checks and redaction. It never claims to expose private chain of thought.
 
 ## Overlay boundary
 
-Tracked source ships neutral defaults. Deployment-specific persona and instructions live in `.discord-ai-agent/prompt-overlay.md` or a Postgres server overlay. Private eval prompts live in `.discord-ai-agent/evals/`. Indexed messages, aliases, member data, bug markers, and canonical runtime records live in Postgres. `npm run scan:release` enforces the public/private boundary.
+Tracked source ships neutral defaults. Deployment-specific persona and instructions live in `.discord-ai-agent/prompt-overlay.md` or a Postgres server overlay. Private eval prompts live in `.discord-ai-agent/evals/`. Indexed messages, aliases, member data, improvement cases, and canonical runtime records live in Postgres. `npm run scan:release` enforces the public/private boundary.

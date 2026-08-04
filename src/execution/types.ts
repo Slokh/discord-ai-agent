@@ -3,7 +3,7 @@ export type AgentTaskStatus = "queued" | "running" | "succeeded" | "failed" | "n
 export type AgentTaskJob = {
   taskId: string;
   traceId?: string;
-  taskType: "code_update" | "bug_report" | "diagnosis";
+  taskType: "code_update" | "diagnosis";
   request: string;
   title: string;
   requestedBy: string;
@@ -17,6 +17,7 @@ export type AgentTaskJob = {
   discordResponseChannelId?: string;
   discordResponseMessageId?: string;
   retriedFromTaskId?: string;
+  improvementCaseId?: string;
   parentAgentSessionId?: string;
   parentAgentExecutionId?: string;
   parentAgentThreadKey?: string;
@@ -52,7 +53,6 @@ export type SandboxEnv = {
   sandboxRunId: string;
   taskTitle: string;
   taskRequest: string;
-  bugReportResultPath: string;
   requestedBy: string;
   targetBranch: string | null;
   targetPullRequestNumber: number | null;

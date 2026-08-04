@@ -7,7 +7,7 @@ export async function getAgentTask(pool: DbPool, taskId: string): Promise<AgentT
       `
         SELECT
           task_id, pgboss_job_id, trace_id, guild_id, channel_id, user_id,
-          thread_key, discord_response_channel_id, discord_response_message_id, retried_from_task_id,
+          thread_key, discord_response_channel_id, discord_response_message_id, retried_from_task_id, improvement_case_id,
           task_type, title, request, requested_by, status, backend, current_step,
           status_message, branch_name, pr_url, draft, verify_passed, error,
           created_at, started_at, cancelled_at, completed_at, notified_at, notification_error,
@@ -33,7 +33,7 @@ export async function listRecentAgentTasks(pool: DbPool, input: number | {
       `
         SELECT
           task_id, pgboss_job_id, trace_id, guild_id, channel_id, user_id,
-          thread_key, discord_response_channel_id, discord_response_message_id, retried_from_task_id,
+          thread_key, discord_response_channel_id, discord_response_message_id, retried_from_task_id, improvement_case_id,
           task_type, title, request, requested_by, status, backend, current_step,
           status_message, branch_name, pr_url, draft, verify_passed, error,
           created_at, started_at, cancelled_at, completed_at, notified_at, notification_error,
@@ -57,7 +57,7 @@ export async function listAgentTasksForTrace(pool: DbPool, input: { traceId: str
       `
         SELECT
           task_id, pgboss_job_id, trace_id, guild_id, channel_id, user_id,
-          thread_key, discord_response_channel_id, discord_response_message_id, retried_from_task_id,
+          thread_key, discord_response_channel_id, discord_response_message_id, retried_from_task_id, improvement_case_id,
           task_type, title, request, requested_by, status, backend, current_step,
           status_message, branch_name, pr_url, draft, verify_passed, error,
           created_at, started_at, cancelled_at, completed_at, notified_at, notification_error,
@@ -85,7 +85,7 @@ export async function listAgentTasks(pool: DbPool, input: {
       `
         SELECT
           task_id, pgboss_job_id, trace_id, guild_id, channel_id, user_id,
-          thread_key, discord_response_channel_id, discord_response_message_id, retried_from_task_id,
+          thread_key, discord_response_channel_id, discord_response_message_id, retried_from_task_id, improvement_case_id,
           task_type, title, request, requested_by, status, backend, current_step,
           status_message, branch_name, pr_url, draft, verify_passed, error,
           created_at, started_at, cancelled_at, completed_at, notified_at, notification_error,
@@ -110,7 +110,7 @@ export async function listStaleRunningAgentTasksWithoutActiveSandbox(pool: DbPoo
       `
         SELECT
           task_id, pgboss_job_id, trace_id, guild_id, channel_id, user_id,
-          thread_key, discord_response_channel_id, discord_response_message_id, retried_from_task_id,
+          thread_key, discord_response_channel_id, discord_response_message_id, retried_from_task_id, improvement_case_id,
           task_type, title, request, requested_by, status, backend, current_step,
           status_message, branch_name, pr_url, draft, verify_passed, error,
           created_at, started_at, cancelled_at, completed_at, notified_at, notification_error,
@@ -139,7 +139,7 @@ export async function listTerminalAgentTasksNeedingNotification(pool: DbPool, li
       `
         SELECT
           task_id, pgboss_job_id, trace_id, guild_id, channel_id, user_id,
-          thread_key, discord_response_channel_id, discord_response_message_id, retried_from_task_id,
+          thread_key, discord_response_channel_id, discord_response_message_id, retried_from_task_id, improvement_case_id,
           task_type, title, request, requested_by, status, backend, current_step,
           status_message, branch_name, pr_url, draft, verify_passed, error,
           created_at, started_at, cancelled_at, completed_at, notified_at, notification_error,
@@ -178,7 +178,7 @@ export async function listRenderableAgentTasks(pool: DbPool, limit = 20): Promis
       `
         SELECT
           task_id, pgboss_job_id, trace_id, guild_id, channel_id, user_id,
-          thread_key, discord_response_channel_id, discord_response_message_id, retried_from_task_id,
+          thread_key, discord_response_channel_id, discord_response_message_id, retried_from_task_id, improvement_case_id,
           task_type, title, request, requested_by, status, backend, current_step,
           status_message, branch_name, pr_url, draft, verify_passed, error,
           created_at, started_at, cancelled_at, completed_at, notified_at, notification_error,
@@ -186,12 +186,6 @@ export async function listRenderableAgentTasks(pool: DbPool, limit = 20): Promis
         FROM agent_tasks
         WHERE notification_error IS NULL
           AND (
-            (
-              task_type = 'bug_report'
-              AND status IN ('failed', 'no_changes', 'cancelled')
-              AND terminal_rendered_at IS NULL
-            )
-            OR
             (
               discord_response_channel_id IS NOT NULL
               AND discord_response_message_id IS NOT NULL
@@ -464,7 +458,7 @@ export async function findAgentTaskByDiscordMessageId(pool: DbPool, messageId: s
       `
         SELECT
           at.task_id, at.pgboss_job_id, at.trace_id, at.guild_id, at.channel_id, at.user_id,
-          at.thread_key, at.discord_response_channel_id, at.discord_response_message_id, at.retried_from_task_id,
+          at.thread_key, at.discord_response_channel_id, at.discord_response_message_id, at.retried_from_task_id, at.improvement_case_id,
           at.task_type, at.title, at.request, at.requested_by, at.status, at.backend, at.current_step,
           at.status_message, at.branch_name, at.pr_url, at.draft, at.verify_passed, at.error,
           at.created_at, at.started_at, at.cancelled_at, at.completed_at, at.notified_at, at.notification_error,

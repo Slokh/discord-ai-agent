@@ -25,7 +25,7 @@ describe.skipIf(!runDbTests)("revision quality database contract", () => {
       tools: [],
       signals: [],
       deliveries: [],
-      feedback: [],
+      improvements: [],
     });
     await expect(findBaselineRevision(database.pool, "test-revision", 48)).resolves.toBeNull();
   });
@@ -64,7 +64,7 @@ describe.skipIf(!runDbTests)("revision quality database contract", () => {
       tools: [],
       signals: [],
       deliveries: [],
-      feedback: [],
+      improvements: [],
     });
   });
 
@@ -106,7 +106,7 @@ describe.skipIf(!runDbTests)("revision quality database contract", () => {
       tools: [{ tool: "web__run", status: "ok", count: 1 }],
       signals: [],
       deliveries: [],
-      feedback: [],
+      improvements: [],
     });
     await database.pool.query(`
       UPDATE discord_delivery_obligations

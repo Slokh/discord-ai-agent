@@ -9,25 +9,20 @@ At the beginning of a task:
 ```bash
 git status --short
 git branch --show-current
-npx frog list
+npm run improve -- --target local inbox
 ```
 
 Preserve unrelated work. Read [Product](product.md), [Architecture](architecture.md), and only the domain guide that owns the request. Use `rg` to find the named behavior, contract, event, or lifecycle. For production behavior, inspect the retained run before reasoning from source.
 
-Frog supplies one entry model with separate stores. `npx frog` reads the repository-local file store for development friction. The normal reply agent uses Frog's namespaced PostgreSQL store for private, generalized product friction. Discord `🐛` markers remain the requester-scoped product bug inbox. Do not move entries or private Discord evidence between these contexts, and never sync the production namespace to GitHub.
-
-Use the application wrapper to operate the normal-reply namespace through Frog's configured CLI:
+Development friction and product reports use the same improvement-case stream as member, model, runtime, deployment, CI, and eval signals. Operate the local database explicitly:
 
 ```bash
-npm run frog:agent -- migrate
-npm run frog:agent -- list
-npm run frog:agent -- log "Tool result omitted freshness" --body "Expected current evidence; the result had no collection time." --severity major
-npm run frog:agent -- resolve <entry-id>
+npm run improve -- --target local inbox
+npm run improve -- --target local report --summary "Tool result omitted freshness" --details "Expected current evidence; the result had no collection time." --classification developer_friction --severity medium
+npm run improve -- --target local show <case-id>
 ```
 
-The wrapper maps the existing application `DATABASE_URL` to Frog's scoped `FROG_DATABASE_URL` and fixes the public namespace to `discord-ai-agent`; it adds no deployment secret or application environment setting. `migrate` is safe to run repeatedly and Frog owns preparation of its store. Run commands in the environment whose database you intend to inspect. `npx frog list` deliberately remains the repository-development view.
-
-Production images deliberately omit npm. Inside an application pod, invoke the compiled wrapper directly with `node dist/scripts/frogAgent.js <command>`.
+The CLI requires `--target local|production`; production additionally requires `--confirm-production`. Run it only in the environment whose configured database you intend to inspect. Production images omit npm, so invoke `node dist/scripts/improve.js --target production --confirm-production <command>` inside a configured application pod.
 
 ## Find the owner
 
@@ -55,7 +50,7 @@ Follow the full lifecycle for cross-domain work: ingress, authority, durable sta
 - Read deployment configuration through `AppConfig`. Direct `process.env` access belongs only in the configuration loader and the isolated sandbox process boundary.
 - Record important transitions once in the canonical runtime ledger and derive views from it.
 - After a mutation commits, return its durable result even if a secondary step fails.
-- Keep private community content out of tracked source, tests, public evals, repository Frog files, and GitHub metadata. Production Frog entries remain private and must describe generalized friction without copying prompts, identities, Discord links, or secrets.
+- Keep private community content out of tracked source, tests, public evals, case summaries, and GitHub metadata. Improvement signals remain private and generalized; retained source evidence owns prompts, identities, Discord links, and secrets.
 
 ## Model-facing tools
 
@@ -137,7 +132,7 @@ npm run eval -- --include-private
 npm run eval:regressions
 ```
 
-Dry-run validates every registered eval definition without provider calls. Live evals use configured model/database capabilities and may incur cost. `eval:regressions` exports reviewed, capture-enabled run feedback into the private eval directory and runs the complete private suite. A captured case without a machine-grade assertion is skipped until a reviewer adds expected/forbidden tools or required/forbidden answer text in the private eval definition. Keep assertions about observable behavior; do not encode one server member, channel, message link, or private prompt in committed evals.
+Dry-run validates every registered eval definition without provider calls. Live evals use configured model/database capabilities and may incur cost. `eval:regressions` exports active executable improvement contracts into the private eval directory and runs the complete private suite. Contracts whose checks cannot be represented by the prompt runner are skipped there but remain executable through their owning test, database, delivery, or deployment harness. Keep assertions observable; do not encode one server member, channel, message link, or private prompt in committed evals.
 
 Use an eval failure to choose the correct owner: tool selection, schema, result quality, retrieval, prompt context, code-update context, or lifecycle. Do not make the eval pass with an exact-phrase branch.
 

@@ -40,6 +40,7 @@ export async function enqueueAgentRuntimeCodeUpdateTask(input: {
   discordResponseChannelId?: string | null;
   discordResponseMessageId?: string | null;
   retriedFromTaskId?: string | null;
+  improvementCaseId?: string | null;
   targetBranch?: string | null;
   targetPullRequestNumber?: number | null;
   targetPullRequestUrl?: string | null;
@@ -67,6 +68,7 @@ export async function enqueueAgentRuntimeCodeUpdateTask(input: {
     discordResponseChannelId: input.discordResponseChannelId ?? undefined,
     discordResponseMessageId: input.discordResponseMessageId ?? undefined,
     retriedFromTaskId: input.retriedFromTaskId ?? undefined,
+    improvementCaseId: input.improvementCaseId ?? undefined,
     targetBranch: input.targetBranch ?? undefined,
     targetPullRequestNumber: input.targetPullRequestNumber ?? undefined,
     targetPullRequestUrl: input.targetPullRequestUrl ?? undefined,
@@ -84,6 +86,7 @@ export async function enqueueAgentRuntimeCodeUpdateTask(input: {
     discordResponseChannelId: job.discordResponseChannelId,
     discordResponseMessageId: job.discordResponseMessageId,
     retriedFromTaskId: job.retriedFromTaskId,
+    improvementCaseId: job.improvementCaseId,
     taskType,
     title: input.title,
     request: input.request,

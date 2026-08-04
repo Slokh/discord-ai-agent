@@ -6,7 +6,7 @@ import { discordStatsSummaryToolContracts } from "../tools/contracts/discord-sta
 import { imageToolContracts } from "../tools/contracts/image.js";
 import { generatedDataToolContracts } from "../tools/contracts/generated-data.js";
 import { skillDiagnosticToolContracts } from "../tools/contracts/skills-diagnostics.js";
-import { frictionToolContracts } from "../tools/contracts/friction.js";
+import { improvementToolContracts } from "../tools/contracts/improvements.js";
 import { runtimeAdminToolContracts } from "../tools/contracts/runtime-admin.js";
 import { codegenToolContracts } from "../tools/contracts/codegen.js";
 import { discordActionToolContracts } from "../tools/contracts/discord-actions.js";
@@ -27,7 +27,7 @@ const definitions = [
   ...imageToolContracts,
   ...generatedDataToolContracts,
   ...skillDiagnosticToolContracts,
-  ...frictionToolContracts,
+  ...improvementToolContracts,
   ...runtimeAdminToolContracts,
   ...codegenToolContracts,
   ...discordActionToolContracts,

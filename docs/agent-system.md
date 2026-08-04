@@ -80,11 +80,11 @@ Adding a capability should not require editing `nanocodexAgentRuntime.ts`, `prom
 
 The architecture test rejects known feature/tool names in the generic runtime and rejects reintroducing `src/agent/toolHandlers/`. This makes the boundary executable rather than relying on convention.
 
-### Private friction reporting
+### Private improvement reporting
 
-The installed `friction` capability lets the normal reply model record a concrete, reusable impediment only when it materially harms the current answer. Typical entries describe a missing capability, contradictory instruction, unclear tool contract, unusable result, data-quality limitation, or delivery problem. The report must generalize the system issue rather than copy the member's prompt, identity, Discord link, secrets, or unrelated server content. Reporting is silent and never replaces the best answer the model can still provide.
+The installed `improvements` capability lets the normal reply model record a concrete, reusable impediment only when it materially harms the current answer. Typical signals describe a missing capability, contradictory instruction, unclear tool contract, unusable result, data-quality limitation, or delivery problem. The signal must generalize the system issue rather than copy the member's prompt, identity, Discord link, secrets, or unrelated server content. Reporting is silent and never replaces the best answer the model can still provide.
 
-The application and CLI use Frog's namespaced PostgreSQL store with the existing database configuration. Frog owns the entry format, migration, normalized-title deduplication, occurrence counts, storage interface, and `list`/`log`/`resolve` commands; `src/db/frictionRepository.ts` owns only the namespace, runtime references, and privacy cleanup. The generic agent loop has no Frog-specific branch. `npm run frog:agent -- <command>` selects that private namespace using the existing database configuration. Production entries stay private, and there is no automatic GitHub synchronization.
+`reportImprovementSignal`, member `🐛` reactions, operator/developer reports, and automated detections all write through `improvementRepository.ts`. Exact source keys make intake idempotent; deterministic fingerprints coalesce high-confidence repetitions inside one privacy boundary. The generic agent loop has no source-specific lifecycle branch, and no signal automatically creates GitHub work.
 
 ## Tool execution
 
@@ -101,7 +101,7 @@ The generic boundary may unwrap a JSON-encoded object or array only when the sch
 
 Mutating tools require explicit current-user intent and must be idempotent or durably deduplicated where repetition would be harmful. A successful mutation is retained immediately. If the model, audit write, balance refresh, or final synthesis later fails, the runtime delivers the committed result with a partial limitation instead of inviting a duplicate retry.
 
-Private friction reporting is internal telemetry rather than a user-requested product mutation, so the model may record it without asking permission. Frog deduplicates concurrent reports with the same normalized title and increments their occurrence count; trusted operator workflows own explicit resolution.
+Private improvement reporting is internal telemetry rather than a user-requested product mutation, so the model may record it without asking permission. Trusted operator workflows own evidence, contracts, merges, work authorization, deployment verification, and resolution.
 
 Paid generation contracts may declare identical-success reuse. Within one turn, the generic runtime executes the first exact call, retains its successful output, and returns that evidence for an identical repeat without charging the provider or attaching the file again. Distinct arguments still execute normally. This is a contract-owned cost and delivery invariant, not semantic prompt routing.
 
@@ -161,7 +161,7 @@ Discord-visible output flows through `src/discord/responseSink.ts`:
 - restart sweeps replay incomplete delivery obligations;
 - missing-message and permission failures are classified and handled without duplicating successful output;
 - oversized body text and deterministic footers are chunked independently, so a large proof footer cannot collapse the answer into one-character messages;
-- delivery events record the first reply ID, continuation IDs, message count, content size, and footer-line count for debugging and bug-report evidence;
+- delivery events record the first reply ID, continuation IDs, message count, content size, and footer-line count for debugging and improvement evidence;
 - the loading reaction is removed at terminal delivery.
 
 Timeout recovery distinguishes unfinished work from already committed work. Completed mutations and generated files can still be delivered after the model runtime times out. An unresolved wager cannot be converted into a generic timeout answer because funds or game state may still require deterministic resolution.

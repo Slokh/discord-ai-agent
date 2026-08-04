@@ -26,12 +26,12 @@ The design is model-led and code-governed: the model owns language, relevance, t
 - Current web search and external provider tools
 - Bounded document, archive, image, audio, video, and generated-data inspection
 - Image generation and Discord Components V2 presentation
-- Native private bug markers and production run debugging
+- Unified private improvement cases from member, agent, operator, and runtime signals
 - Optional Spotify catalog tools
 - Optional Privy/Tempo managed wallets, transfers, wagers, and provable RNG
 - Sandboxed repository changes with verification, release scanning, and PR publication
 - Typed runtime ledger, signed sandbox callbacks, and recovery sweeps
-- Reviewed production feedback exported into a private executable regression suite
+- Accepted improvement contracts exported into a private executable regression suite
 
 ## Documentation
 

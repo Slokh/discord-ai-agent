@@ -20,6 +20,7 @@ const GITHUB_API_BASE_URL = "https://api.github.com";
 
 export type AgentUpdateTarget = {
   taskType?: "code_update" | "diagnosis";
+  improvementCaseId?: string | null;
   targetBranch?: string | null;
   targetPullRequestNumber?: number | null;
   targetPullRequestUrl?: string | null;
@@ -36,7 +37,17 @@ export async function createAgentUpdateFromRequest(
   const updateName = agentUpdateTitleFromRequest(request, title);
 
   const requestedBy = `${ctx.userDisplayName} (${ctx.userId})`;
-  const result = await enqueueAgentCodeUpdateTask(ctx, { request, updateName, requestedBy, ...target });
+  if (target.improvementCaseId && target.taskType === "diagnosis") throw new Error("Linked improvement work must produce a code change; evidence collection is a separate lifecycle step.");
+  if (target.improvementCaseId) await assertImprovementCaseWorkAllowed(ctx, target.improvementCaseId);
+  let result;
+  try {
+    result = await enqueueAgentCodeUpdateTask(ctx, { request, updateName, requestedBy, ...target });
+  } catch (error) {
+    if (target.improvementCaseId) {
+      await ctx.repo.transitionImprovementCase({ caseId: target.improvementCaseId, to: "actionable", actorKind: "system", resolution: "Task enqueue failed." }).catch(() => undefined);
+    }
+    throw error;
+  }
   const response = formatAgentTaskResult(result);
   await ctx.updateStatus?.(response).catch(() => undefined);
 
@@ -58,7 +69,8 @@ async function enqueueAgentCodeUpdateTask(
     request: string;
     updateName: string;
     requestedBy: string;
-    taskType?: "code_update" | "bug_report" | "diagnosis";
+    taskType?: "code_update" | "diagnosis";
+    improvementCaseId?: string | null;
     retriedFromTaskId?: string | null;
     targetBranch?: string | null;
     targetPullRequestNumber?: number | null;
@@ -91,10 +103,20 @@ async function enqueueAgentCodeUpdateTask(
     discordResponseChannelId: ctx.statusChannelId ?? ctx.channelId,
     discordResponseMessageId: ctx.statusMessageId,
     retriedFromTaskId: input.retriedFromTaskId ?? undefined,
+    improvementCaseId: input.improvementCaseId ?? undefined,
     targetBranch: nonEmptyString(input.targetBranch),
     targetPullRequestNumber: finitePositiveInteger(input.targetPullRequestNumber),
     targetPullRequestUrl: nonEmptyString(input.targetPullRequestUrl)
   });
+}
+
+async function assertImprovementCaseWorkAllowed(ctx: ToolContext, caseId: string) {
+  const record = await ctx.repo.getImprovementCase(caseId);
+  if (!record || record.case.guildId !== ctx.guildId || !record.signals.some((signal) => signal.reporterId === ctx.userId)) {
+    throw new Error("That improvement case is not visible to the current requester.");
+  }
+  if (record.case.status !== "actionable") throw new Error("An improvement case must have accepted executable checks before work can start.");
+  await ctx.repo.transitionImprovementCase({ caseId, to: "in_progress", actorKind: "operator", actorId: ctx.userId });
 }
 
 export async function getAgentTaskStatus(ctx: ToolContext, input: { taskId?: string; limit?: number } = {}): Promise<string> {
@@ -393,13 +415,21 @@ export async function retryAgentTask(ctx: ToolContext, input: { taskId?: string 
   if (!task) return agentTaskMutationResponse(input.taskId ? `No retryable visible agent task matched \`${input.taskId}\`.` : "No recent failed, no-change, or cancelled agent task matched.", false, "task_not_found");
 
   const requestedBy = `${ctx.userDisplayName} (${ctx.userId}) retrying ${task.taskId}`;
-  const result = await enqueueAgentCodeUpdateTask(ctx, {
-    request: task.request,
-    updateName: task.title,
-    requestedBy,
-    taskType: task.taskType === "bug_report" || task.taskType === "diagnosis" ? task.taskType : "code_update",
-    retriedFromTaskId: task.taskId
-  });
+  if (task.improvementCaseId) await assertImprovementCaseWorkAllowed(ctx, task.improvementCaseId);
+  let result;
+  try {
+    result = await enqueueAgentCodeUpdateTask(ctx, {
+      request: task.request,
+      updateName: task.title,
+      requestedBy,
+      taskType: task.taskType === "diagnosis" ? "diagnosis" : "code_update",
+      improvementCaseId: task.improvementCaseId,
+      retriedFromTaskId: task.taskId
+    });
+  } catch (error) {
+    if (task.improvementCaseId) await ctx.repo.transitionImprovementCase({ caseId: task.improvementCaseId, to: "actionable", actorKind: "system", resolution: "Task retry enqueue failed." }).catch(() => undefined);
+    throw error;
+  }
 
   await ctx.repo.auditTool({
     guildId: ctx.guildId,
@@ -435,6 +465,7 @@ export async function cancelAgentTask(ctx: ToolContext, input: { taskId?: string
   }).catch(() => undefined);
 
   if (!cancelled) return agentTaskMutationResponse(`Task \`${task.taskId}\` was not cancelled, likely because it already finished.`, false, "task_not_cancelled");
+  if (task.improvementCaseId) await ctx.repo.completeImprovementWorkForTask({ taskId: task.taskId, succeeded: false, summary: "Linked work was cancelled." });
   return agentTaskMutationResponse(`Cancelled agent task \`${task.taskId}\`. The sandbox cleanup reconciler will remove any remaining Kubernetes resources.`, true);
 }
 

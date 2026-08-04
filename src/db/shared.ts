@@ -27,7 +27,7 @@ export function orTsQuery(query: string): string {
 }
 
 import type { SearchResult, DiscordUserLookupResult, DiscordUserAlias, DiscordUserReferenceTerms, DiscordChannelLookupResult, DiscordAttachmentSearchResult, DiscordStats, DiscordStatsMetric, DiscordStatsGroupBy, DiscordStatsSort, DiscordStatsRow, DiscordChannelTopicCandidate, ConversationRole, ConversationMessage, AgentMemoryAnchorMessage, MessageForEmbedding, InteractionBlock, AgentTaskStatus, AgentTaskRecord, SandboxCommandEvent, ServerOverlay } from "./types.js";
-export type { PersistedAttachment, PersistedMessage, SearchResult, DiscordBugMarker, DiscordUserLookupResult, DiscordUserAlias, DiscordUserReferenceTerms, DiscordChannelLookupResult, DiscordAttachmentSearchResult, DiscordStats, DiscordStatsMetric, DiscordStatsGroupBy, DiscordStatsSort, DiscordStatsRow, DiscordChannelTopicCandidate, ConversationRole, ConversationMessage, AgentMemoryAnchorMessage, AgentMemoryTurnStats, MessageForEmbedding, DeletedConversationTurn, DeletedConversationTurns, InteractionBlock, EventLevel, ToolAuditLog, AgentTaskStatus, AgentTaskRecord, TaskEvent, AgentRuntimeEvent, AgentRuntimeMessage, AgentRuntimeChatExecution, AgentRuntimeArtifactRecord, AgentRuntimeArtifactContent, SandboxRunRecord, SandboxCommandEvent, ServerOverlay } from "./types.js";
+export type { PersistedAttachment, PersistedMessage, SearchResult, DiscordUserLookupResult, DiscordUserAlias, DiscordUserReferenceTerms, DiscordChannelLookupResult, DiscordAttachmentSearchResult, DiscordStats, DiscordStatsMetric, DiscordStatsGroupBy, DiscordStatsSort, DiscordStatsRow, DiscordChannelTopicCandidate, ConversationRole, ConversationMessage, AgentMemoryAnchorMessage, AgentMemoryTurnStats, MessageForEmbedding, DeletedConversationTurn, DeletedConversationTurns, InteractionBlock, EventLevel, ToolAuditLog, AgentTaskStatus, AgentTaskRecord, TaskEvent, AgentRuntimeEvent, AgentRuntimeMessage, AgentRuntimeChatExecution, AgentRuntimeArtifactRecord, AgentRuntimeArtifactContent, SandboxRunRecord, SandboxCommandEvent, ServerOverlay } from "./types.js";
 export { rowToToolAuditLog, rowToAgentRuntimeEvent, rowToAgentRuntimeChatExecution, rowToAgentRuntimeArtifact, rowToAgentRuntimeMessage, jsonObject, rowToTaskEvent, rowToSandboxRun } from "./runtimeMappers.js";
 export function rowToSearchResult(row: any): SearchResult {
   return {
@@ -606,6 +606,7 @@ export function rowToAgentTask(row: any): AgentTaskRecord {
     discordResponseChannelId: row.discord_response_channel_id == null ? null : String(row.discord_response_channel_id),
     discordResponseMessageId: row.discord_response_message_id == null ? null : String(row.discord_response_message_id),
     retriedFromTaskId: row.retried_from_task_id == null ? null : String(row.retried_from_task_id),
+    improvementCaseId: row.improvement_case_id == null ? null : String(row.improvement_case_id),
     taskType: String(row.task_type),
     title: String(row.title),
     request: String(row.request ?? ""),

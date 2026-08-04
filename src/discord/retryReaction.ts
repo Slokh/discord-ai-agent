@@ -51,29 +51,39 @@ export async function releaseDiscordRetryReaction(
   return true;
 }
 
-async function retryAgentTaskFromReaction(input: DiscordAgentRequestInput, message: Message, user: User | PartialUser, task: { taskId: string; status: string; request: string; title: string; taskType: string }) {
+async function retryAgentTaskFromReaction(input: DiscordAgentRequestInput, message: Message, user: User | PartialUser, task: { taskId: string; status: string; request: string; title: string; taskType: string; improvementCaseId?: string | null }) {
   if (!["failed", "no_changes", "cancelled"].includes(task.status)) return;
   if (!input.agentRuntime || !input.jobs) throw new Error("Retrying code updates requires the agent runtime and task queue.");
   const status = await discordReply(message, { content: "🔄 Retrying this code update…", allowedMentions: { parse: [], repliedUser: false } }, { logger });
   if (!status.ok) throw status.error;
   const retryId = `reaction-retry-${randomUUID()}`;
   const requestedBy = `${user.username ?? user.id} (${user.id}) retrying ${task.taskId}`;
+  if (task.improvementCaseId) {
+    const improvement = await input.repo.getImprovementCase(task.improvementCaseId);
+    if (!improvement || improvement.case.status !== "actionable" || !improvement.signals.some((signal) => signal.reporterId === user.id)) {
+      throw new Error("Only a reporter may retry actionable work linked to an improvement case.");
+    }
+    await input.repo.transitionImprovementCase({ caseId: task.improvementCaseId, to: "in_progress", actorKind: "operator", actorId: user.id });
+  }
   const session = await input.agentRuntime.upsertSession({
     threadKey: discordChannelThreadKey(message.guildId!, message.channelId), traceId: retryId,
     guildId: message.guildId, channelId: message.channelId, userId: user.id,
     request: task.request, requestedBy, status: "queued", harness: "reaction_retry",
     metadata: { kind: "discord_reaction_retry", sourceTaskId: task.taskId, reactionMessageId: message.id },
   });
-  const result = await enqueueAgentRuntimeCodeUpdateTask({
-    config: input.config, repo: input.repo, agentRuntime: input.agentRuntime, jobs: input.jobs, session,
-    request: task.request, title: task.title, requestedBy, traceId: retryId,
-    guildId: message.guildId, channelId: message.channelId, userId: user.id, threadKey: session.threadKey,
-    taskType: task.taskType === "bug_report" || task.taskType === "diagnosis" ? task.taskType : "code_update",
-    retriedFromTaskId: task.taskId, discordResponseChannelId: status.value.channelId, discordResponseMessageId: status.value.id,
-  });
-  if (task.taskType === "bug_report") {
-    const report = await input.repo.getDiscordBugReportForTask(task.taskId);
-    if (report) await input.repo.attachDiscordBugReportTask({ reportId: report.reportId, taskId: result.taskId, statusMessageId: status.value.id });
+  let result;
+  try {
+    result = await enqueueAgentRuntimeCodeUpdateTask({
+      config: input.config, repo: input.repo, agentRuntime: input.agentRuntime, jobs: input.jobs, session,
+      request: task.request, title: task.title, requestedBy, traceId: retryId,
+      guildId: message.guildId, channelId: message.channelId, userId: user.id, threadKey: session.threadKey,
+      taskType: task.taskType === "diagnosis" ? "diagnosis" : "code_update",
+      improvementCaseId: task.improvementCaseId ?? undefined,
+      retriedFromTaskId: task.taskId, discordResponseChannelId: status.value.channelId, discordResponseMessageId: status.value.id,
+    });
+  } catch (error) {
+    if (task.improvementCaseId) await input.repo.transitionImprovementCase({ caseId: task.improvementCaseId, to: "actionable", actorKind: "system", resolution: "Task retry enqueue failed." }).catch(() => undefined);
+    throw error;
   }
   logger.info({ sourceTaskId: task.taskId, retryTaskId: result.taskId, userId: user.id, messageId: message.id }, "Retried terminal code-update task from Discord reaction");
 }

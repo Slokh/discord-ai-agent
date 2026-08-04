@@ -14,7 +14,7 @@ describe("collectRevisionQuality", () => {
       .mockResolvedValueOnce({ rows: [{ tool: "web__run", status: "ok", count: 1, attempt_count: 4, retry_count: 3, recovered_validation_retry_count: 3 }] })
       .mockResolvedValueOnce({ rows: [{ level: "warn", count: 1 }] })
       .mockResolvedValueOnce({ rows: [{ state: "delivered", count: 2 }] })
-      .mockResolvedValueOnce({ rows: [{ rating: "good", failure_mode: "unclassified", count: 1 }] });
+      .mockResolvedValueOnce({ rows: [] });
     const pool = { query } as unknown as DbPool;
 
     const result = await collectRevisionQuality(pool, "revision-1", 48);
@@ -26,13 +26,13 @@ describe("collectRevisionQuality", () => {
       tools: [{ tool: "web__run", status: "ok", count: 1, attempt_count: 4, retry_count: 3, recovered_validation_retry_count: 3 }],
       signals: [{ level: "warn", count: 1 }],
       deliveries: [{ state: "delivered", count: 2 }],
-      feedback: [{ rating: "good", failure_mode: "unclassified", count: 1 }],
+      improvements: [],
     });
     expect(result.generatedAt).toEqual(expect.any(String));
     expect(query).toHaveBeenCalledTimes(5);
     expect(query.mock.calls[3]?.[0]).toContain("obligation.state");
     expect(query.mock.calls[3]?.[0]).toContain("interval '5 minutes'");
-    expect(query.mock.calls.every((call) => call[0].includes("qualityCohort"))).toBe(true);
+    expect(query.mock.calls.slice(0, 4).every((call) => call[0].includes("qualityCohort"))).toBe(true);
     expect(query.mock.calls.every((call) => call[1]?.[0] === 48 && call[1]?.[1] === "revision-1")).toBe(true);
   });
 
@@ -81,12 +81,12 @@ describe("assessRevisionQuality", () => {
     ]));
   });
 
-  it("treats classified bad feedback as an answer incident rate, not a self-selected feedback ratio", () => {
+  it("treats improvement signals as an answer incident rate", () => {
     const assessment = assessRevisionQuality(quality({ succeeded: 10 }, {
-      feedback: [{ rating: "bad", failure_mode: "wrong_answer", count: 3 }],
+      improvements: [{ source: "member_report", classification: "defect", count: 3 }],
     }));
     expect(assessment.status).toBe("fail");
-    expect(assessment.violations).toContain("bad feedback per answer 30.0% exceeds 20.0%");
+    expect(assessment.violations).toContain("improvement signals per answer 30.0% exceeds 20.0%");
   });
 
   it("separates recovered validation retries from terminal capability failures", () => {
@@ -100,7 +100,7 @@ describe("assessRevisionQuality", () => {
 
 function quality(
   statuses: Record<string, number>,
-  overrides: { p95Ms?: number; tools?: Record<string, unknown>[]; signals?: Record<string, unknown>[]; deliveries?: Record<string, unknown>[]; feedback?: Record<string, unknown>[] } = {},
+  overrides: { p95Ms?: number; tools?: Record<string, unknown>[]; signals?: Record<string, unknown>[]; deliveries?: Record<string, unknown>[]; improvements?: Record<string, unknown>[] } = {},
 ): RevisionQuality {
   return {
     revision: "test-revision",
@@ -110,6 +110,6 @@ function quality(
     tools: overrides.tools ?? [{ tool: "web__run", status: "ok", count: 10 }],
     signals: overrides.signals ?? [],
     deliveries: overrides.deliveries ?? [{ state: "delivered", count: 1 }],
-    feedback: overrides.feedback ?? [{ rating: "good", failure_mode: "unclassified", count: 5 }],
+    improvements: overrides.improvements ?? [],
   };
 }

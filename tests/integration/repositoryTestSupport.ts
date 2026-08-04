@@ -2,12 +2,11 @@ import { createHash } from "node:crypto";
 import type { DbPool } from "../../src/db/pool.js";
 
 export async function cleanupRepositoryTestRows(pool: DbPool) {
-  await pool.query("DELETE FROM frog_entries WHERE namespace = 'discord-ai-agent'");
+  await pool.query("DELETE FROM improvement_cases WHERE case_id LIKE 'imp-%'");
   await pool.query("DELETE FROM deployment_verifications WHERE revision LIKE 'test-%'");
   await pool.query("DELETE FROM guild_agent_settings WHERE guild_id LIKE 'guild-%'");
   await pool.query("DELETE FROM discord_component_actions WHERE guild_id LIKE 'guild-%' OR channel_id LIKE 'channel-%'");
   await pool.query("DELETE FROM deployment_announcements WHERE guild_id LIKE 'guild-%'");
-  await pool.query("DELETE FROM agent_run_feedback WHERE run_id LIKE 'run-%'");
   await pool.query(`DELETE FROM tool_audit_logs WHERE user_id LIKE 'user-%' OR guild_id LIKE 'guild-%' OR channel_id LIKE 'channel-%' OR trace_id LIKE 'trace-%'`);
   await pool.query("DELETE FROM discord_delivery_obligations WHERE execution_id LIKE 'agent-execution-%' OR guild_id LIKE 'guild-%' OR channel_id LIKE 'channel-%'");
   await pool.query("DELETE FROM agent_runtime_artifact_chunks WHERE artifact_id IN (SELECT artifact_id FROM agent_runtime_artifacts WHERE session_id LIKE 'codegen-session-%' OR session_id LIKE 'agent-session-%' OR execution_id LIKE 'codegen-execution-%' OR execution_id LIKE 'agent-task-execution-%')");

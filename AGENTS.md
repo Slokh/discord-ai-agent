@@ -8,7 +8,7 @@ enforces authority, live facts, money, randomness, durable state, and delivery.
 
 1. Run `git status --short` and `git branch --show-current`. Preserve unrelated
    work; use an isolated worktree/branch when the current one is mixed.
-2. Run `npx frog list`. Read any relevant unresolved development friction.
+2. Run `npm run improve -- --target local inbox`. Read relevant unresolved improvement cases.
 3. Read [`docs/product.md`](docs/product.md), then use the request routing below
    to read only the owning guide needed.
 4. Use `rg` to find the named behavior, tool, event, or lifecycle. Inspect the
@@ -24,7 +24,7 @@ contains the implementation and verification workflow.
 | --- | --- | --- |
 | A Discord reply is wrong, slow, missing, or confusing | Canonical production ledger evidence and [`docs/operations.md`](docs/operations.md) | Compare ingress, reply chain, operative request, tool calls/results, guards, model I/O, and delivery. Do not blame a model or use browser scraping first. |
 | Many replies regressed after a deploy | Canonical production ledger evidence | Audit the whole channel, including role-triggered requests and chains; cluster failures by deployed revision before editing. |
-| A member marked a message with `🐛` | `listDiscordBugMarkers`, [`docs/operations.md`](docs/operations.md), and the linked run | This is the native, private bug inbox. Retrieve the requester's permission-filtered markers and evidence, reproduce, add a regression test, then open a focused repair PR when asked. Never make it a public GitHub issue by default. |
+| A member marked a message with `🐛` or any bug/friction/report stream changes | `listMyImprovementSignals`, [`docs/improvements.md`](docs/improvements.md), and the linked run | This creates a private improvement signal, not a defect verdict or repair authorization. Gather evidence, accept an executable contract, and start linked work only when explicitly asked. Never make it a public GitHub issue by default. |
 | Model conversation, prompt, or tool use is poor | [`docs/agent-system.md`](docs/agent-system.md), `src/agent/`, and the run's prompt/debug artifacts | Improve general prompt/tool/result contracts and traceability. Do not add regex routes or canned replies for one wording; preserve the current request as authoritative. |
 | Model, reasoning level, fallback, or token-cost change | live config/deployment evidence, [`src/models/`](src/models/), and observed run cost | Verify the actually deployed primary/fallback configuration before changing it. Compare provider pricing and observed usage, preserve a fallback, and validate conversational/tool behavior with focused traces or evals. |
 | A new or changed model-facing tool | [`docs/agent-system.md`](docs/agent-system.md) | Define the contract, schema, examples, audit, output promise, handler, and focused coverage in the owning tool family. Prefer a generic capability to a prompt-specific branch. |
@@ -53,26 +53,24 @@ contains the implementation and verification workflow.
   a stale snippet, or a previous reply into a live balance, price, availability,
   Discord fact, or transaction result.
 - Private Discord content belongs in Postgres or `.discord-ai-agent/`, never
-  committed source, fixtures, documentation, public evals, Frog entries,
+  committed source, fixtures, documentation, public evals, improvement summaries,
   GitHub issues, or PR bodies.
 
-## Native Bugs vs. Frog
+## Improvement cases
 
-`🐛` reactions are the product's private, requester-scoped Discord bug reports.
-They are stored as markers and resolved through run evidence and focused repair
-work. Removing the reaction clears the marker.
+All member reports, model-detected impediments, operator/developer reports, and
+runtime/deployment/CI/eval detections enter one Postgres-backed improvement case
+stream. `🐛` is only one signal source; removing it withdraws that member signal.
+Exact source keys are idempotent and deterministic fingerprints may coalesce
+high-confidence matches. Semantic similarity may suggest a merge but never
+performs one automatically.
 
-Frog is the shared friction record format with deliberately separate stores.
-`npx frog` uses the repository-local file store for development friction such as
-a confusing API or broken test setup. Normal reply agents use the private
-Postgres store for reusable product friction and never sync it to GitHub. Neither
-store replaces the Discord bug inbox. Never copy marker excerpts, Discord links,
-member identities, prompts, or private-server context into repository Frog files
-or GitHub.
-
-Use `npm run frog:agent -- migrate`, `npm run frog:agent -- list`, and
-`npm run frog:agent -- resolve <id>` in the intended database environment for
-the private normal-reply namespace. Migration is idempotent.
+A report is not a verdict. Cases become `actionable` only after supporting
+evidence and an accepted contract with at least one machine-executable check.
+Linked work moves through `in_progress` and `verifying`; only successful deployed
+evidence can resolve it. Use `npm run improve -- --target local ...` locally and
+add `--target production --confirm-production` only in the configured production
+environment. Never copy private signal content into GitHub or tracked fixtures.
 
 ## Implementation Standards
 

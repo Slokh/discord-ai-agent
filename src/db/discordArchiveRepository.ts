@@ -1,7 +1,6 @@
 import type { DbPool } from "./pool.js";
 import { rowToDiscordUserAlias, normalizeLookupQuery, rowToInteractionBlock } from "./shared.js";
 import type { PersistedMessage, InteractionBlock } from "./shared.js";
-import { clearDiscordBugMarkersForUser } from "./discordBugMarkerRepository.js";
 
 export async function upsertGuild(pool: DbPool, input: { id: string; name?: string | null; raw?: unknown }) {
     await pool.query(
@@ -269,24 +268,6 @@ export async function isUserPrivacyDeleted(pool: DbPool, userId: string) {
   }
 
 export async function requestUserDeletion(pool: DbPool, userId: string) {
-    await clearDiscordBugMarkersForUser(pool, userId);
-    await pool.query("DELETE FROM discord_bug_reports WHERE reported_by_user_id = $1", [userId]);
-    await pool.query(
-      `UPDATE discord_bug_reports report
-       SET summary = NULL, updated_at = now()
-       WHERE report.source_session_id IN (
-         SELECT session_id FROM agent_runtime_sessions WHERE user_id = $1 OR requested_by = $1
-       )`,
-      [userId],
-    );
-    await pool.query(
-      `DELETE FROM agent_run_feedback feedback
-       USING agent_runtime_executions execution, agent_runtime_sessions session
-       WHERE feedback.run_id = execution.execution_id
-         AND execution.session_id = session.session_id
-         AND (session.user_id = $1 OR session.requested_by = $1)`,
-      [userId],
-    );
     await pool.query("DELETE FROM agent_runtime_sessions WHERE user_id = $1 OR requested_by = $1", [userId]);
     await pool.query("DELETE FROM agent_tasks WHERE user_id = $1 OR requested_by = $1", [userId]);
     await pool.query(

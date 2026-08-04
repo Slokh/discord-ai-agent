@@ -26,7 +26,7 @@ type GitHubCompare = {
 
 type AnnouncementRepository = Pick<DiscordAiAgentRepository,
   "claimDeploymentAnnouncement" | "recordDeploymentBaseline" | "latestDeploymentRevision" |
-  "markDeploymentAnnouncementPosted" | "markDeploymentAnnouncementFailed" | "recordTraceEvent" | "auditTool"
+  "markDeploymentAnnouncementPosted" | "markDeploymentAnnouncementFailed" | "auditTool"
 >;
 
 export async function announceDeployment(input: {
@@ -70,14 +70,6 @@ export async function announceDeployment(input: {
         comparisonUrl,
         discordMessageId: input.deliveredBugFix.messageId,
       });
-      await recordEvent(repo, {
-        traceId,
-        guildId,
-        channelId,
-        eventName: "deployment.bug_fix_announcement.posted",
-        summary: "Recorded the deployed bug-fix update posted beside the original request.",
-        metadata: { previousRevision, revision, messageId: input.deliveredBugFix.messageId, comparisonUrl }
-      });
       return "bug_fix";
     }
 
@@ -99,15 +91,6 @@ export async function announceDeployment(input: {
     }
 
     const comparison = await fetchGitHubComparison(config, previousRevision, revision, input.fetchImpl ?? fetch);
-    await recordEvent(repo, {
-      traceId,
-      guildId,
-      channelId,
-      eventName: "deployment.compare.loaded",
-      summary: `Loaded ${comparison.commits?.length ?? 0} commits and ${comparison.files?.length ?? 0} changed files.`,
-      metadata: { previousRevision, revision, status: comparison.status, aheadBy: comparison.ahead_by }
-    });
-
     const generated = await generatePatchNotes(input.openRouter, config, comparison).catch((error) => {
       logger.warn({ err: error, revision }, "Patch-note model call failed; using commit-summary fallback");
       return { body: fallbackPatchNotes(comparison), model: null, estimatedCostUsd: null };
@@ -136,28 +119,11 @@ export async function announceDeployment(input: {
       model: generated.model,
       estimatedCostUsd: generated.estimatedCostUsd
     }).catch((error) => logger.warn({ err: error, revision }, "Failed to record deployment announcement audit"));
-    await recordEvent(repo, {
-      traceId,
-      guildId,
-      channelId,
-      eventName: "deployment.announcement.posted",
-      summary: "Posted deployment patch notes.",
-      metadata: { previousRevision, revision, messageId: sent.value.id, comparisonUrl }
-    });
     return "posted";
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     await repo.markDeploymentAnnouncementFailed({ guildId, revision, error: message })
       .catch((recordError) => logger.warn({ err: recordError, revision }, "Failed to persist deployment announcement failure"));
-    await recordEvent(repo, {
-      traceId,
-      guildId,
-      channelId,
-      eventName: "deployment.announcement.failed",
-      level: "error",
-      summary: message,
-      metadata: { previousRevision, revision }
-    });
     throw error;
   }
 }
@@ -247,10 +213,6 @@ async function findExistingAnnouncement(channel: any, revision: string): Promise
 
 function isDeployRevision(value: string) {
   return value !== "unknown" && /^[a-f0-9]{7,64}$/i.test(value);
-}
-
-async function recordEvent(repo: AnnouncementRepository, input: Parameters<AnnouncementRepository["recordTraceEvent"]>[0]) {
-  await repo.recordTraceEvent(input).catch((error) => logger.warn({ err: error }, "Failed to record deployment announcement trace event"));
 }
 
 export const __test = {

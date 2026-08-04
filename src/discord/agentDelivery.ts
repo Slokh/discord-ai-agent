@@ -27,7 +27,6 @@ import {
   markDiscordDeliveryDelivered,
   parseDateMs,
   recordAgentRuntimeSpan,
-  recordTraceEvent,
   storeAgentRuntimeResponseArtifact,
   waitForDiscordClientReady,
   type DiscordAgentExecutionRequest,
@@ -312,17 +311,6 @@ export async function executeDiscordAgentRequest(
       },
       "Agent response ready"
     );
-    await recordTraceEvent(input.repo, {
-      eventName: "agent.response.ready",
-      summary: `Agent returned ${response.content.length} chars`,
-      metadata: {
-        executor: agentExecutor.name,
-        inputLinesArtifactId: request.inputLinesArtifactId ?? null,
-        responseChars: response.content.length,
-        fileCount: response.files?.length ?? 0,
-        memoryEventCount: response.memoryEvents?.length ?? 0
-      }
-    }).catch((error) => requestLogger.warn({ err: error }, "Failed to record agent response ready trace"));
     const formattedFooter = response.footerLines?.length ? { extraLines: response.footerLines } : null;
     const storedResponseContent = response.storedContent ?? response.content;
     const responseRedacted = Boolean(response.storedContent);
@@ -398,22 +386,7 @@ export async function executeDiscordAgentRequest(
       presentation: response.discordPresentation,
       premiumSkuIds: input.config.discord.premiumSkuIds,
     });
-    const { reply: finalReply, richPresentationDelivered, actionGenerationId, preparedPresentation, messageCount, continuationMessageIds } = delivery;
-    await recordTraceEvent(input.repo, {
-      eventName: richPresentationDelivered ? "discord.presentation.delivered" : response.discordPresentation ? "discord.presentation.fallback" : "discord.response.delivered",
-      level: response.discordPresentation && !richPresentationDelivered ? "warn" : "info",
-      summary: richPresentationDelivered ? "Delivered Discord Components V2 presentation" : response.discordPresentation ? "Delivered safe fallback after rich presentation failure" : "Delivered Discord response",
-      metadata: {
-        replyMessageId: finalReply.id,
-        continuationMessageIds,
-        messageCount,
-        deliveredContentChars: response.content.length,
-        footerLineCount: formattedFooter?.extraLines?.length ?? 0,
-        requestedRichPresentation: Boolean(response.discordPresentation),
-        actionCount: preparedPresentation?.registrations.length ?? 0,
-        actionGenerationId,
-      },
-    }).catch((error) => requestLogger.warn({ err: error, replyMessageId: finalReply.id }, "Failed to record Discord delivery trace"));
+    const { reply: finalReply, richPresentationDelivered, actionGenerationId, messageCount, continuationMessageIds } = delivery;
     await markDiscordDeliveryDelivered(input, agentRuntimeExecution.executionId, finalReply, requestLogger);
     await attachPromptTasksToDiscordReply(input, request.requestId, finalReply, requestLogger)
       .catch((error) => requestLogger.warn({ err: error, replyMessageId: finalReply.id }, "Failed to reconcile prompt tasks after Discord delivery"));
@@ -432,17 +405,10 @@ export async function executeDiscordAgentRequest(
     }).catch((error) => requestLogger.warn({ err: error }, "Failed to mark agent runtime execution succeeded"));
 
     if (response.memoryEvents?.length) {
-      requestLogger.debug({ memoryEventCount: response.memoryEvents.length }, "Kept tool results in trace memory only");
+      requestLogger.debug({ memoryEventCount: response.memoryEvents.length }, "Kept tool results in turn memory only");
     }
 
-    if (isInternalControlText(storedResponseContent)) {
-      await recordTraceEvent(input.repo, {
-        eventName: "agent.memory.internal_control_rejected",
-        level: "warn",
-        summary: "Skipped internal control text instead of persisting it as assistant conversation memory.",
-        metadata: { replyMessageId: finalReply.id },
-      }).catch((error) => requestLogger.warn({ err: error }, "Failed to record rejected assistant-memory content"));
-    } else await input.repo.appendConversationTurn({
+    if (!isInternalControlText(storedResponseContent)) await input.repo.appendConversationTurn({
       threadKey,
       turnId: request.requestId,
       user: {
@@ -473,12 +439,6 @@ export async function executeDiscordAgentRequest(
       }
     }).catch((error) => requestLogger.warn({ err: error, replyMessageId: finalReply.id }, "Failed to append delivered Discord turn to conversation memory"));
     requestLogger.info({ durationMs: durationMs(request.messageStartedAt) }, "Discord mention handled");
-    await recordTraceEvent(input.repo, {
-      eventName: "discord.mention.handled",
-      summary: "Discord mention handled",
-      metadata: { replyMessageId: finalReply.id },
-      durationMs: durationMs(request.messageStartedAt)
-    }).catch((error) => requestLogger.warn({ err: error, replyMessageId: finalReply.id }, "Failed to record Discord mention completion trace"));
     const presentationArtifactId = response.discordPresentation
       ? await storeAgentRuntimeResponseArtifact({
           agentRuntime: input.agentRuntime,
@@ -543,17 +503,6 @@ export async function executeDiscordAgentRequest(
         { replyMessageId: finalReply.id, deletedMemoryRows, durationMs: durationMs(request.messageStartedAt) },
         "Content-filtered Discord mention handled without storing assistant memory"
       );
-      await recordTraceEvent(input.repo, {
-        eventName: "discord.mention.content_filtered",
-        level: "warn",
-        summary: "Provider content filter blocked the request",
-        metadata: {
-          replyMessageId: finalReply.id,
-          deletedMemoryRows,
-          error: error.message
-        },
-        durationMs: durationMs(request.messageStartedAt)
-      });
       await finishAgentRuntimePromptExecution({
         agentRuntime: input.agentRuntime,
         session: agentRuntimeExecution?.session,
@@ -588,13 +537,6 @@ export async function executeDiscordAgentRequest(
     await markDiscordDeliveryDelivered(input, agentRuntimeExecution.executionId, finalReply, requestLogger);
     await attachPromptTasksToDiscordReply(input, request.requestId, finalReply, requestLogger);
     requestLogger.info({ replyMessageId: finalReply.id }, "Sent Discord error response");
-    await recordTraceEvent(input.repo, {
-      eventName: "discord.mention.failed",
-      level: "error",
-      summary: error instanceof Error ? error.message : String(error),
-      metadata: { replyMessageId: finalReply.id },
-      durationMs: durationMs(request.messageStartedAt)
-    });
     await recordAgentRuntimeSpan({
       agentRuntime: input.agentRuntime,
       session: agentRuntimeExecution.session,

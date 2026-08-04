@@ -12,7 +12,7 @@ export const frictionToolContracts = [
     category: "ops",
     outputContract: ["private entry id", "deduplication", "occurrences"],
     permissionRequirements: ["private_internal_telemetry", "tool_audit_log"],
-    auditEvents: ["tool_audit_logs", "trace_events"],
+    auditEvents: ["tool_audit_logs", "agent_runtime_events"],
     parameters: {
       type: "object",
       properties: {

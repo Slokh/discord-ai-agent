@@ -2,12 +2,12 @@ import { type Client, type Interaction, type Message } from "discord.js";
 import { enqueueAgentRuntimeSessionExecution } from "../../agent/runtimeLifecycle.js";
 import type { AgentRuntimeTurnEnvelope } from "../../agent/runtimeEnvelope.js";
 import { ensureAgentRuntimePromptExecution } from "../../agent/runtimeLedger.js";
-import { durationMs, logger } from "../../util/logger.js";
+import { logger } from "../../util/logger.js";
 import { runWithTrace } from "../../util/trace.js";
 import { executeDiscordAgentRequest } from "../agentDelivery.js";
 import { discordChannelThreadKey } from "../mentionParsing.js";
 import { DiscordResponseSink } from "../responseSink.js";
-import { fetchDiscordMessage, recordTraceEvent, type DiscordAgentRequestInput } from "../requestContext.js";
+import { fetchDiscordMessage, type DiscordAgentRequestInput } from "../requestContext.js";
 import { prepareDiscordAgentTurn } from "../turnPreparation.js";
 import { buildDiscordModal, discordComponentToken } from "./renderer.js";
 import { normalizeMessageComponentInteraction, normalizeModalSubmission } from "./interactionNormalization.js";
@@ -92,10 +92,10 @@ async function enqueueInteractionTurn(
   interaction: ScopedRichInteraction,
   token: string,
   sourceMessageId: string,
-  originatingExecutionId: string,
+  _originatingExecutionId: string,
   basePrompt: string,
   requestKind: "component" | "modal",
-  actionMetadata?: DiscordStoredActionMetadata,
+  _actionMetadata?: DiscordStoredActionMetadata,
 ) {
   const startedAt = Date.now();
   const sourceMessage = await fetchDiscordMessage(client, interaction.channelId, sourceMessageId);
@@ -145,7 +145,6 @@ async function enqueueInteractionTurn(
   };
   const prepared = await prepareDiscordAgentTurn({ context: input, client, message: sourceMessage, responseSink, request, agentRuntimeExecution: runtime, requestLogger: logger, source: `discord.${requestKind}` });
   await input.deliveryObligations?.upsertPending({ executionId: runtime.executionId, threadKey, guildId: interaction.guildId!, channelId: interaction.channelId, statusChannelId: interaction.message.channelId, statusMessageId: interaction.message.id, sourceMessageId, metadata: { requestId: interaction.id, requestKind } });
-  await recordTraceEvent(input.repo, { eventName: "discord.component.accepted", summary: `Accepted Discord ${requestKind} interaction`, metadata: { originatingExecutionId, interactionExecutionId: runtime.executionId, sourceMessageId, actionMetadata: actionMetadata ?? null }, durationMs: durationMs(startedAt) });
   if (input.jobs) {
     if (!input.agentRuntime) throw new Error("Agent runtime repository is required to enqueue Discord interactions.");
     await enqueueAgentRuntimeSessionExecution({

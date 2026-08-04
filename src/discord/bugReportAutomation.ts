@@ -50,12 +50,12 @@ export async function automateDiscordBugReport(input: {
   try {
     const session = await input.agentRuntime.getSession({ sessionId: execution.sessionId });
     if (!session) throw new Error("The original AI run is no longer available for validation.");
-    const [events, tools] = execution.traceId
-      ? await Promise.all([
-          input.repo.getTraceEvents({ guildId, visibleChannelIds: [input.message.channelId], traceId: execution.traceId, limit: 30 }),
-          input.repo.getToolAuditLogs({ guildId, visibleChannelIds: [input.message.channelId], traceId: execution.traceId, limit: 20 })
-        ])
-      : [[], []];
+    const [events, tools] = await Promise.all([
+      input.agentRuntime.listEvents({ sessionId: execution.sessionId, executionId: execution.executionId, limit: 30 }),
+      execution.traceId
+        ? input.repo.getToolAuditLogs({ guildId, visibleChannelIds: [input.message.channelId], traceId: execution.traceId, limit: 20 })
+        : Promise.resolve([])
+    ]);
     const request = boundedEvidence({ execution, reply: input.message.content, events, tools });
     const taskId = `bug-${randomUUID()}`;
     await enqueueAgentRuntimeCodeUpdateTask({
@@ -91,7 +91,7 @@ function boundedEvidence(input: { execution: Awaited<ReturnType<DiscordAiAgentRe
     `Original user request:\n${input.execution.request}`,
     `AI reply marked with 🐛:\n${input.reply}`,
     `Run status: ${input.execution.status}${input.execution.error ? `; error: ${input.execution.error}` : ""}`,
-    "Trace events:",
+    "Runtime events:",
     ...input.events.map((event) => {
       const metadata = bugEvidenceMetadata(event.metadata);
       return `- [${event.level}] ${event.eventName}: ${event.summary ?? ""}${metadata ? `; metadata=${JSON.stringify(metadata)}` : ""}`;

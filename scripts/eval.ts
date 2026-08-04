@@ -145,7 +145,7 @@ export type EvalComparisonReport = {
   cases: EvalComparisonCase[];
 };
 
-type TraceEventLike = {
+type RuntimeEventLike = {
   eventName?: string;
   summary?: string | null;
   metadata?: Record<string, unknown>;
@@ -478,30 +478,33 @@ export function evaluatePromptAssertions(
 }
 
 async function createTraceReader() {
-  const [{ loadConfig }, { createPool }, { createAppDatabase }] = await Promise.all([
+  const [{ loadConfig }, { createPool }, { createAppDatabase }, { AgentRuntimeRepository }] = await Promise.all([
     import("../src/config/env.js"),
     import("../src/db/pool.js"),
-    import("../src/db/repositories.js")
+    import("../src/db/repositories.js"),
+    import("../src/db/agentRuntimeRepository.js")
   ]);
   const config = loadConfig();
   const pool = createPool(config);
   const repo = createAppDatabase(pool);
+  const agentRuntime = new AgentRuntimeRepository(pool);
   return {
     async read(traceId: string): Promise<EvalTraceEvidence> {
-      const [traceEvents, toolAudits] = await Promise.all([
-        repo.getTraceEventsForTrace({ traceId, limit: 500 }),
+      const execution = await repo.findAgentRuntimeChatExecutionByTraceId(traceId);
+      const [runtimeEvents, toolAudits] = await Promise.all([
+        execution ? agentRuntime.listEvents({ sessionId: execution.sessionId, executionId: execution.executionId, limit: 500 }) : Promise.resolve([]),
         repo.getToolAuditLogsForTrace({ traceId, limit: 300 })
       ]);
-      return evidenceFromTrace(traceEvents, toolAudits);
+      return evidenceFromTrace(runtimeEvents, toolAudits);
     },
     close: () => pool.end()
   };
 }
 
-export function evidenceFromTrace(traceEvents: TraceEventLike[], toolAudits: ToolAuditLike[]): EvalTraceEvidence {
+export function evidenceFromTrace(runtimeEvents: RuntimeEventLike[], toolAudits: ToolAuditLike[]): EvalTraceEvidence {
   const requestedTools: string[] = [];
   const selectedTools: string[] = [];
-  for (const event of traceEvents) {
+  for (const event of runtimeEvents) {
     const metadata = event.metadata ?? {};
     requestedTools.push(...stringArray(metadata.requestedToolCalls));
     requestedTools.push(...toolNamesFromRequests(metadata.requestedToolRequests));
@@ -515,7 +518,7 @@ export function evidenceFromTrace(traceEvents: TraceEventLike[], toolAudits: Too
     toolAuditLines: toolAudits.map((audit) =>
       [audit.toolName, audit.argumentsSummary, audit.resultSummary].filter(Boolean).join(" ")
     ),
-    traceEventCount: traceEvents.length,
+    traceEventCount: runtimeEvents.length,
     toolAuditCount: toolAudits.length
   };
 }

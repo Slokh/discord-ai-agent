@@ -7,7 +7,7 @@ import { logger } from "../util/logger.js";
 import { executeDiscordAgentRequest } from "./agentDelivery.js";
 import { discordEdit, discordReply } from "./api.js";
 import { discordChannelThreadKey } from "./mentionParsing.js";
-import { fetchDiscordMessage, recordTraceEvent, type DiscordAgentRequestInput } from "./requestContext.js";
+import { fetchDiscordMessage, type DiscordAgentRequestInput } from "./requestContext.js";
 import { DiscordResponseSink } from "./responseSink.js";
 import { BUG_FIX_TITLE, formatUpdateAnnouncement, generateUpdateNotes } from "./updateAnnouncements.js";
 
@@ -204,44 +204,12 @@ async function postBugFixUpdateAndRetry(
     model: generated.model,
     estimatedCostUsd: generated.estimatedCostUsd,
   }).catch((error) => logger.warn({ err: error, reportId: report.reportId }, "Failed to record bug-fix update audit"));
-  await recordTraceEvent(input.repo, {
-    traceId: retryRequestId,
-    requestId: retryRequestId,
-    guildId: report.guildId,
-    channelId: report.channelId,
-    userId: execution.userId,
-    eventName: "discord.bug_report.update_posted",
-    summary: "Posted the deployed bug-fix update beside the original request.",
-    metadata: {
-      reportId: report.reportId,
-      sourceRevision: report.sourceRevision,
-      deployedRevision: revision,
-      updateMessageId: announcementMessage.id,
-      reusedMarkedReply: announcementMessage.id === markedReply.id,
-    },
-  });
 
   const threadKey = discordChannelThreadKey(report.guildId, report.channelId);
   await input.repo.deleteConversationMessagesByDiscordMessageIds({
     threadKey,
     discordMessageIds: [original.id, markedReply.id],
   }).catch((error) => logger.warn({ err: error, reportId: report.reportId }, "Failed to clear stale bug-report conversation memory before retry"));
-  await recordTraceEvent(input.repo, {
-    traceId: retryRequestId,
-    requestId: retryRequestId,
-    guildId: report.guildId,
-    channelId: report.channelId,
-    userId: execution.userId,
-    eventName: "discord.bug_report.retry_started",
-    summary: "Retrying the original Discord prompt after its fix reached production.",
-    metadata: {
-      reportId: report.reportId,
-      sourceExecutionId: report.sourceExecutionId,
-      sourceRevision: report.sourceRevision,
-      deployedRevision: revision,
-      updateMessageId: announcementMessage.id,
-    },
-  });
 
   const responseSink = new DiscordResponseSink({
     client: input.client,
@@ -261,29 +229,8 @@ async function postBugFixUpdateAndRetry(
       userId: execution.userId,
       userDisplayName: original.member?.displayName ?? original.author.username,
     });
-    await recordTraceEvent(input.repo, {
-      traceId: retryRequestId,
-      requestId: retryRequestId,
-      guildId: report.guildId,
-      channelId: report.channelId,
-      userId: execution.userId,
-      eventName: "discord.bug_report.retry_completed",
-      summary: "Retried the original Discord prompt in a fresh reply after posting its bug-fix update.",
-      metadata: { reportId: report.reportId, deployedRevision: revision, updateMessageId: announcementMessage.id },
-    });
     return { announcement, retried: true };
   } catch (error) {
-    await recordTraceEvent(input.repo, {
-      traceId: retryRequestId,
-      requestId: retryRequestId,
-      guildId: report.guildId,
-      channelId: report.channelId,
-      userId: execution.userId,
-      eventName: "discord.bug_report.retry_failed",
-      level: "error",
-      summary: error instanceof Error ? error.message : String(error),
-      metadata: { reportId: report.reportId, deployedRevision: revision, updateMessageId: announcementMessage.id },
-    });
     return { announcement, retried: false, error };
   }
 }

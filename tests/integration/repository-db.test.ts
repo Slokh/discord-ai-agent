@@ -556,95 +556,12 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
     await expect(repo.isUserInteractionBlocked({ guildId, userId })).resolves.toBe(false);
   });
 
-  it("stores process runs, spans, events, and redacted artifact chunks", async () => {
-    const runId = `run-${randomUUID()}`;
-    const traceId = `trace-${randomUUID()}`;
-
-    const run = await repo.upsertProcessRun({
-      runId,
-      traceId,
-      kind: "prompt",
-      status: "running",
-      title: "test prompt run",
-      summary: "started",
-      requester: "test",
-      source: "test"
-    });
-    expect(run.runId).toBe(runId);
-
-    await repo.recordProcessRunSpan({
-      runId,
-      spanId: "model",
-      name: "Model call",
-      status: "succeeded",
-      durationMs: 123,
-      metadata: { model: "test/model" }
-    });
-    await repo.recordProcessRunEvent({
-      runId,
-      traceId,
-      eventName: "model.complete",
-      summary: "Model completed",
-      durationMs: 123
-    });
-    const artifact = await repo.storeProcessRunArtifact({
-      runId,
-      kind: "raw_json",
-      name: "raw",
-      content: `{"token":"ghp_${"a".repeat(40)}"}`,
-      contentType: "application/json"
-    });
-
-    expect(artifact?.preview).toContain("[REDACTED]");
-    const content = await repo.getProcessRunArtifact({ runId, artifactId: artifact!.artifactId });
-    expect(content?.content).toContain("[REDACTED]");
-    expect(content?.content).not.toContain("ghp_");
-
-    const largeArtifact = await repo.storeProcessRunArtifact({
-      runId,
-      kind: "command_log",
-      name: "large log",
-      content: "x".repeat(2 * 1024 * 1024 + 1),
-      contentType: "text/plain"
-    });
-    expect(largeArtifact?.expiresAt).toBeInstanceOf(Date);
-    expect(largeArtifact?.metadata).toEqual(expect.objectContaining({ retention: expect.objectContaining({ reason: "large_artifact" }) }));
-
-    const expiredArtifact = await repo.storeProcessRunArtifact({
-      runId,
-      kind: "command_log",
-      name: "expired log",
-      content: "expired content",
-      contentType: "text/plain",
-      expiresAt: new Date(Date.now() - 1000)
-    });
-    expect(expiredArtifact?.artifactId).toBeDefined();
-    await expect(repo.getProcessRunArtifact({ runId, artifactId: expiredArtifact!.artifactId })).resolves.toBeUndefined();
-    await expect(repo.cleanupExpiredProcessRunArtifacts()).resolves.toBeGreaterThanOrEqual(1);
-
-    await repo.updateProcessRun({ runId, status: "succeeded", summary: "done" });
-    await expect(repo.getProcessRunSpans(runId)).resolves.toHaveLength(1);
-    await expect(repo.getProcessRunEvents({ runId })).resolves.toHaveLength(1);
-    await expect(repo.getProcessRun(runId)).resolves.toEqual(expect.objectContaining({ status: "succeeded", completedAt: expect.any(Date) }));
-  });
-
-  it("retains new rows and active codegen events while deleting old terminal observability rows", async () => {
-    const oldRunId = `run-${randomUUID()}`;
-    const newRunId = `run-${randomUUID()}`;
-    const embeddingRunId = `run-${randomUUID()}`;
-    const oldTraceId = `trace-${randomUUID()}`;
+  it("retains active runtime events while deleting old terminal runtime records", async () => {
     const activeSessionId = `codegen-session-${randomUUID()}`;
     const activeExecutionId = `codegen-execution-${randomUUID()}`;
     const doneSessionId = `codegen-session-${randomUUID()}`;
     const doneExecutionId = `codegen-execution-${randomUUID()}`;
     const oldDate = new Date("2026-01-01T00:00:00Z");
-
-    await repo.upsertProcessRun({ runId: oldRunId, traceId: oldTraceId, kind: "prompt", status: "succeeded", title: "old", source: "test", completedAt: oldDate });
-    await repo.upsertProcessRun({ runId: newRunId, kind: "prompt", status: "succeeded", title: "new", source: "test" });
-    await repo.upsertProcessRun({ runId: embeddingRunId, kind: "embedding", status: "succeeded", title: "embedding", source: "test", completedAt: oldDate });
-    await pool.query("UPDATE process_runs SET updated_at = $2 WHERE run_id IN ($1, $3)", [oldRunId, oldDate, embeddingRunId]);
-    await repo.recordProcessRunEvent({ runId: oldRunId, traceId: oldTraceId, eventName: "old.event", summary: "old" });
-    await pool.query("UPDATE process_run_events SET created_at = $1 WHERE run_id = $2", [oldDate, oldRunId]);
 
     await agentRuntimeRepo.upsertSession({ sessionId: activeSessionId, threadKey: activeSessionId, title: "active", request: "active", requestedBy: "test" });
     await agentRuntimeRepo.createExecution({ executionId: activeExecutionId, sessionId: activeSessionId, status: "running" });
@@ -657,18 +574,12 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
 
     const result = await runDataRetentionOnce({
       db: pool,
-      config: { eventsDays: 30, auditDays: 30, embeddingRunsDays: 7, runtimeDays: 45 },
+      config: { runtimeEventsDays: 30, auditDays: 30, runtimeSessionsDays: 45 },
       now: new Date("2026-03-01T00:00:00Z"),
       limit: 10
     });
 
-    expect(result.processRunEvents).toBeGreaterThanOrEqual(1);
-    expect(result.processRuns).toBeGreaterThanOrEqual(1);
-    expect(result.embeddingProcessRuns).toBeGreaterThanOrEqual(1);
     expect(result.agentRuntimeSessions).toBeGreaterThanOrEqual(1);
-    await expect(repo.getProcessRun(oldRunId)).resolves.toBeUndefined();
-    await expect(repo.getProcessRun(newRunId)).resolves.toEqual(expect.objectContaining({ runId: newRunId }));
-    await expect(repo.getProcessRun(embeddingRunId)).resolves.toBeUndefined();
     const activeEvents = await pool.query("SELECT count(*)::int AS count FROM agent_runtime_events WHERE session_id = $1", [activeSessionId]);
     const doneEvents = await pool.query("SELECT count(*)::int AS count FROM agent_runtime_events WHERE session_id = $1", [doneSessionId]);
     expect(activeEvents.rows[0]?.count).toBe(1);
@@ -1051,11 +962,6 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
         expect.objectContaining({ execution_id: agentExecutionId, event_name: "agent.task.completed", summary: "Opened pull request." })
       ])
     );
-    const traceMirrors = await pool.query(
-      "SELECT count(*)::int AS count FROM trace_events WHERE request_id = $1",
-      [taskId]
-    );
-    expect(traceMirrors.rows[0]?.count).toBe(0);
   });
 
   it("fans terminal task failures into executions and releases warm leases", async () => {
@@ -1139,54 +1045,6 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
         })
       ])
     );
-  });
-
-  it("marks stale Discord process runs failed and closes running spans", async () => {
-    const runId = `run-${randomUUID()}`;
-    const traceId = `trace-${randomUUID()}`;
-    await repo.upsertProcessRun({
-      runId,
-      traceId,
-      kind: "discord",
-      status: "running",
-      title: "stale Discord run",
-      summary: "still running",
-      source: "test",
-      startedAt: new Date("2026-01-01T00:00:00.000Z")
-    });
-    await repo.recordProcessRunSpan({
-      runId,
-      spanId: "agent.model.round.1",
-      name: "LLM round 1",
-      status: "running",
-      startedAt: new Date("2026-01-01T00:00:01.000Z")
-    });
-
-    const marked = await repo.markStaleProcessRuns({
-      kind: "discord",
-      staleBefore: new Date(Date.now() + 1000),
-      summary: "stale cleanup"
-    });
-
-    expect(marked.map((run) => run.runId)).toContain(runId);
-    await expect(repo.getProcessRun(runId)).resolves.toEqual(
-      expect.objectContaining({
-        status: "failed",
-        summary: "stale cleanup",
-        completedAt: expect.any(Date),
-        metadata: expect.objectContaining({ stale: true })
-      })
-    );
-    await expect(repo.getProcessRunSpans(runId)).resolves.toEqual([
-      expect.objectContaining({
-        status: "failed",
-        completedAt: expect.any(Date),
-        durationMs: expect.any(Number)
-      })
-    ]);
-    await expect(repo.getProcessRunEvents({ runId })).resolves.toEqual([
-      expect.objectContaining({ eventName: "process_run.stale_failed", level: "warn" })
-    ]);
   });
 
   it("scrubs user profile metadata and prevents future rehydration after privacy deletion", async () => {
@@ -1278,7 +1136,7 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
     expect(embeddings.rows[0]?.count).toBe(0);
   });
 
-  it("scrubs tool audit and trace user content for privacy-deleted users", async () => {
+  it("scrubs tool audit user content for privacy-deleted users", async () => {
     const userId = `user-${randomUUID()}`;
     const guildId = `guild-${randomUUID()}`;
     const channelId = `channel-${randomUUID()}`;
@@ -1295,24 +1153,11 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
       resultSummary: "private result",
       error: "private error"
     });
-    await repo.recordTraceEvent({
-      traceId,
-      guildId,
-      channelId,
-      userId,
-      messageId: `message-${randomUUID()}`,
-      eventName: "test.private",
-      summary: "private trace summary",
-      metadata: { private: "trace metadata" }
-    });
     await repo.requestUserDeletion(userId);
 
-    const [audit, trace] = await Promise.all([
-      pool.query(
-        "SELECT user_id, arguments_summary, result_summary, error FROM tool_audit_logs WHERE tool_name = 'searchDiscordHistory' ORDER BY id DESC LIMIT 1"
-      ),
-      pool.query("SELECT user_id, summary, metadata FROM trace_events WHERE trace_id = $1 ORDER BY id DESC LIMIT 1", [traceId])
-    ]);
+    const audit = await pool.query(
+      "SELECT user_id, arguments_summary, result_summary, error FROM tool_audit_logs WHERE tool_name = 'searchDiscordHistory' ORDER BY id DESC LIMIT 1"
+    );
 
     expect(audit.rows[0]).toMatchObject({
       user_id: null,
@@ -1320,89 +1165,6 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
       result_summary: null,
       error: null
     });
-    expect(trace.rows[0]).toMatchObject({
-      user_id: null,
-      summary: null,
-      metadata: {}
-    });
-  });
-
-  it("records and reads trace events and traced tool audit logs", async () => {
-    const userId = `user-${randomUUID()}`;
-    const guildId = `guild-${randomUUID()}`;
-    const channelId = `channel-${randomUUID()}`;
-    const hiddenChannelId = `channel-${randomUUID()}`;
-    const traceId = `trace-${randomUUID()}`;
-
-    await repo.recordTraceEvent({
-      traceId,
-      guildId,
-      channelId,
-      userId,
-      messageId: `message-${randomUUID()}`,
-      eventName: "agent.request.started",
-      summary: "visible trace",
-      metadata: { step: 1 },
-      durationMs: 12
-    });
-    await repo.recordTraceEvent({
-      traceId: `trace-${randomUUID()}`,
-      guildId,
-      channelId: hiddenChannelId,
-      userId,
-      eventName: "agent.request.started",
-      summary: "hidden trace"
-    });
-    await repo.auditTool({
-      traceId,
-      guildId,
-      channelId,
-      userId,
-      toolName: "reportStatus",
-      resultSummary: "visible audit",
-      estimatedCostUsd: 0.001
-    });
-
-    await expect(
-      repo.getTraceEvents({
-        guildId,
-        visibleChannelIds: [channelId],
-        traceId,
-        limit: 10
-      })
-    ).resolves.toMatchObject([
-      {
-        traceId,
-        channelId,
-        eventName: "agent.request.started",
-        summary: "visible trace",
-        metadata: { step: 1 },
-        durationMs: 12
-      }
-    ]);
-    await expect(
-      repo.getToolAuditLogs({
-        guildId,
-        visibleChannelIds: [channelId],
-        traceId,
-        limit: 10
-      })
-    ).resolves.toMatchObject([
-      {
-        traceId,
-        channelId,
-        toolName: "reportStatus",
-        resultSummary: "visible audit",
-        estimatedCostUsd: 0.001
-      }
-    ]);
-    await expect(
-      repo.getTraceEvents({
-        guildId,
-        visibleChannelIds: [channelId],
-        limit: 10
-      })
-    ).resolves.toHaveLength(1);
   });
 
   it("stores server overlays", async () => {
@@ -1602,7 +1364,6 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
       statusMessage: "Kubernetes Job failed.",
       error: "Kubernetes Job failed."
     });
-    await expect(repo.getProcessRun(taskId)).resolves.toBeUndefined();
   });
 
   it("tracks agent task notifications, command output, cancellation, and history", async () => {

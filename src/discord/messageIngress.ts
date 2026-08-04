@@ -19,7 +19,6 @@ import { discordAttachmentContextsFromMessage, discordForwardedMessageSnapshot, 
 import { prepareDiscordAgentTurn } from "./turnPreparation.js";
 import {
   markDiscordDeliveryDelivered,
-  recordTraceEvent,
   type DiscordAgentRequestInput
 } from "./requestContext.js";
 
@@ -119,16 +118,6 @@ export async function handleMessageCreate(
     },
     "Discord AI Agent mention received"
   );
-  await recordTraceEvent(input.repo, {
-    eventName: "discord.mention.received",
-    summary: previewText(text),
-    metadata: {
-      rawContentPreview: previewText(message.content),
-      mentionKind: mentionContext.kind,
-      attachmentCount: requestAttachments.length,
-      imageAttachmentCount: requestAttachments.filter(isDiscordImageAttachment).length
-    }
-  });
   const responseSink = new DiscordResponseSink({
     client,
     sourceMessage: message,
@@ -138,23 +127,7 @@ export async function handleMessageCreate(
     logger: requestLogger
   });
   if (input.walletService && input.config.payments.userWalletsEnabled) {
-    await input.walletService.enqueueUserProvision(
-      { guildId: message.guildId, userId: message.author.id },
-      async (event) => {
-        await recordTraceEvent(input.repo, {
-          eventName: event.eventName,
-          level: event.level,
-          summary: event.summary,
-          metadata: event.metadata,
-          traceId: requestId,
-          requestId,
-          guildId: message.guildId,
-          channelId: message.channelId,
-          userId: message.author.id,
-          messageId: message.id
-        });
-      }
-    );
+    await input.walletService.enqueueUserProvision({ guildId: message.guildId, userId: message.author.id });
   }
   const agentRuntimeExecution = await ensureAgentRuntimePromptExecution({
     agentRuntime: input.agentRuntime,
@@ -193,11 +166,6 @@ export async function handleMessageCreate(
     sourceMessageId: message.id,
     metadata: { requestId, phase: "ingress" }
   }).catch((error) => requestLogger.warn({ err: error }, "Failed to record Discord delivery obligation"));
-  await recordTraceEvent(input.repo, {
-    eventName: "discord.acknowledgement.sent",
-    summary: "Added loading reaction acknowledgement",
-    metadata: { acknowledgement: "loading_reaction" }
-  });
   if (input.jobs) {
     const enqueuedAt = new Date();
     try {
@@ -238,20 +206,13 @@ export async function handleMessageCreate(
         enqueuedAt: enqueuedAt.toISOString()
       };
       if (!input.agentRuntime) throw new Error("Agent runtime repository is required to enqueue Discord chat turns.");
-      const jobId = (
-        await enqueueAgentRuntimeSessionExecution({
+      await enqueueAgentRuntimeSessionExecution({
           agentRuntime: input.agentRuntime,
           jobs: input.jobs,
           session: agentRuntimeExecution.session,
           execution: { executionId: agentRuntimeExecution.executionId, traceId: message.id },
           threadKey: agentRuntimeExecution.session.threadKey ?? discordChannelThreadKey(message.guildId, message.channelId),
           queue: queueInput
-        })
-      ).jobId;
-      await recordTraceEvent(input.repo, {
-        eventName: "discord.agent_request.enqueued",
-        summary: "Queued Discord mention for worker processing",
-        metadata: { jobId, turnEnvelopeArtifactId: preparedTurn.turnEnvelopeArtifactId, inputLinesArtifactId: preparedTurn.inputLinesArtifactId }
       });
       return;
     } catch (error) {

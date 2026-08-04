@@ -9,7 +9,6 @@ import { DiscordCrawler } from "./discord/crawler.js";
 import { createDiscordAiAgentBot } from "./discord/client.js";
 import { startAgentTaskNotifier } from "./discord/taskNotifications.js";
 import { startJobs } from "./jobs/queue.js";
-import { startStaleRunReconciler } from "./observability/staleRuns.js";
 import { logger } from "./util/logger.js";
 import { createAgentRuntimeRunner } from "./discord/agentRuntimeRunner.js";
 import { startPaymentReconciler } from "./payments/reconciler.js";
@@ -157,12 +156,6 @@ async function main() {
     "Job runtime ready"
   );
   const callbackServer = startsApi ? await startSandboxCallbackServer({ config, repo, agentRuntime: agentRuntimeRepo }) : null;
-  const staleRunReconciler = startsApi
-    ? startStaleRunReconciler({
-        repo,
-        staleAfterMs: Math.max(config.discordAgentResponseTimeoutMs + 60_000, 10 * 60 * 1000)
-      })
-    : null;
   const sandboxReconciler = startsTaskWorker && executionBackend ? startSandboxReconciler({ repo, backend: executionBackend }) : null;
   const paymentReconciler = walletService && startsWorker ? startPaymentReconciler({ walletService }) : null;
   const runtime =
@@ -179,7 +172,6 @@ async function main() {
     taskNotifier?.stop();
     await runtime?.drain(30_000).catch((error) => logger.warn({ err: error }, "Timed out draining Discord bot handlers"));
     sandboxReconciler?.stop();
-    staleRunReconciler?.stop();
     paymentReconciler?.stop();
     await callbackServer?.close().catch(() => undefined);
     await jobs.stop().catch(() => undefined);

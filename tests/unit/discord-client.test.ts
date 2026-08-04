@@ -229,12 +229,6 @@ describe("handleUndoCrossReaction", () => {
       discordMessageIds: ["reply-1"]
     });
     expect(channel.messages.delete).toHaveBeenCalledWith("reply-1");
-    expect(repo.recordTraceEvent).toHaveBeenCalledWith(
-      expect.objectContaining({
-        eventName: "discord.reply.undone_by_reaction",
-        metadata: expect.objectContaining({ replyMessageId: "reply-1", deletedMemoryRows: 2, reactorUserId: "user-1" })
-      })
-    );
   });
 
   it("ignores ❌ reactions that the bot itself added", async () => {

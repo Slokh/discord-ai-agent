@@ -48,7 +48,7 @@ export const productConfig = {
     taskTimeoutSeconds: 1_800,
     ttlSecondsAfterFinished: 3_600
   },
-  retention: { eventsDays: 60, auditDays: 90, embeddingRunsDays: 14, runtimeDays: 90 },
+  retention: { runtimeEventsDays: 60, auditDays: 90, runtimeSessionsDays: 90 },
   memory: { compactionThreshold: 100, compactionKeepRecent: 30 },
   crawl: { batchSize: 100, fetchRetries: 3, retryBaseMs: 1_000, retryMaxMs: 30_000, scheduleCron: "0 6 * * *" },
   context: { maxHistoryResults: 10, maxThreadSummaryMessages: 80, agentPromptMaxConcurrency: 4 },

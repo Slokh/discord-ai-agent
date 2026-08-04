@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { recordAgentEvent } from "../../src/agent/runtimeTranscript.js";
 import type { ToolContext } from "../../src/tools/types.js";
 
-function ctx(repo: Record<string, unknown>, requestId?: string): ToolContext {
+function ctx(repo: Record<string, unknown>, requestId?: string, agentRuntime?: Record<string, unknown>): ToolContext {
   return {
     repo,
     requestId,
@@ -11,17 +11,20 @@ function ctx(repo: Record<string, unknown>, requestId?: string): ToolContext {
     userId: "user",
     userDisplayName: "User",
     visibleChannelIds: ["channel"],
+    agentRuntime,
+    agentRuntimeSession: agentRuntime ? { sessionId: "session-1", traceId: requestId ?? null } : undefined,
+    agentRuntimeExecutionId: agentRuntime ? "execution-1" : undefined,
   } as unknown as ToolContext;
 }
 
 describe("runtime transcript event recorder", () => {
-  it("records trace and audit sinks without creating a process-run span", async () => {
+  it("records canonical runtime and audit events", async () => {
     const repo = {
-      recordTraceEvent: vi.fn(async () => undefined),
       auditTool: vi.fn(async () => undefined),
     };
+    const agentRuntime = { recordEvent: vi.fn(async () => undefined) };
 
-    await recordAgentEvent(ctx(repo, "run-1"), {
+    await recordAgentEvent(ctx(repo, "run-1", agentRuntime), {
       eventName: "agent.model.round.complete",
       level: "info",
       summary: "round complete",
@@ -48,19 +51,12 @@ describe("runtime transcript event recorder", () => {
       },
     });
 
-    expect(repo.recordTraceEvent).toHaveBeenCalledWith({
+    expect(agentRuntime.recordEvent).toHaveBeenCalledWith(expect.objectContaining({
+      executionId: "execution-1",
       eventName: "agent.model.round.complete",
       level: "info",
-      summary: "round complete",
       metadata: { round: 1 },
-      durationMs: 25,
-      traceId: undefined,
-      requestId: undefined,
-      guildId: undefined,
-      channelId: undefined,
-      userId: undefined,
-      messageId: undefined,
-    });
+    }));
     expect(repo.auditTool).toHaveBeenCalledWith({
       guildId: "guild",
       channelId: "channel",

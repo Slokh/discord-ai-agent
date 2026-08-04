@@ -1,7 +1,7 @@
 import { truncateForDiscord } from "../util/text.js";
 import { extractMentionId, visibleIndexedChannelIdsForRequest } from "./toolContext.js";
 import type { ToolContext } from "./types.js";
-import type { AgentMemoryTurnStats, ConversationMessage, DiscordAttachmentSearchResult, DiscordChannelLookupResult, DiscordUserLookupResult, SearchResult, ToolAuditLog, TraceEvent } from "../db/repositories.js";
+import type { AgentMemoryTurnStats, ConversationMessage, DiscordAttachmentSearchResult, DiscordChannelLookupResult, DiscordUserLookupResult, SearchResult, ToolAuditLog } from "../db/repositories.js";
 
 export function formatDiscordUserMatches(results: DiscordUserLookupResult[]) {
   if (results.length === 0) return "No visible indexed Discord users matched.";
@@ -12,21 +12,6 @@ export function formatDiscordUserMatches(results: DiscordUserLookupResult[]) {
       const aliases = result.aliases?.length ? ` aliases=${result.aliases.join(", ")}` : "";
       return `[${index + 1}] ${names} id=${result.id}${result.isBot ? " bot=true" : ""}${aliases} messages=${result.messageCount}${formatLastSeen(result.lastMessageAt)}`;
     })
-  ].join("\n");
-}
-
-export function formatTraceEvents(events: TraceEvent[]) {
-  if (events.length === 0) return "Trace events: none.";
-  return [
-    "Trace events:",
-    ...events
-      .slice()
-      .reverse()
-      .map((event) => {
-        const duration = event.durationMs == null ? "" : ` ${event.durationMs}ms`;
-        const summary = event.summary ? ` - ${truncateForDiscord(event.summary, 180)}` : "";
-        return `- ${event.createdAt.toISOString()} ${event.level} ${event.eventName}${duration}${summary}`;
-      })
   ].join("\n");
 }
 

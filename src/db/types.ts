@@ -304,23 +304,7 @@ export type InteractionBlock = {
   updatedAt: Date;
 };
 
-export type TraceEventLevel = "debug" | "info" | "warn" | "error";
-
-export type TraceEvent = {
-  id: number;
-  traceId: string;
-  requestId: string | null;
-  guildId: string | null;
-  channelId: string | null;
-  userId: string | null;
-  messageId: string | null;
-  eventName: string;
-  level: TraceEventLevel;
-  summary: string | null;
-  metadata: Record<string, unknown>;
-  durationMs: number | null;
-  createdAt: Date;
-};
+export type EventLevel = "debug" | "info" | "warn" | "error";
 
 export type ToolAuditLog = {
   id: number;
@@ -335,85 +319,6 @@ export type ToolAuditLog = {
   model: string | null;
   estimatedCostUsd: number | null;
   createdAt: Date;
-};
-
-export type ProcessRunKind = "codegen" | "discord" | "crawl" | "embedding" | "prompt" | "workflow" | "ops";
-export type ProcessRunStatus = "queued" | "running" | "succeeded" | "failed" | "no_changes" | "cancelled";
-export type ProcessRunArtifactKind =
-  | "prompt"
-  | "command_log"
-  | "diff"
-  | "pr_body"
-  | "model_transcript"
-  | "tool_transcript"
-  | "crawl_summary"
-  | "embedding_summary"
-  | "raw_json"
-  | "response"
-  | "diagnostic";
-
-export type ProcessRunRecord = {
-  runId: string;
-  traceId: string | null;
-  kind: ProcessRunKind;
-  status: ProcessRunStatus;
-  title: string;
-  summary: string | null;
-  guildId: string | null;
-  channelId: string | null;
-  userId: string | null;
-  messageId: string | null;
-  requester: string | null;
-  source: string;
-  metadata: Record<string, unknown>;
-  links: Record<string, unknown>;
-  startedAt: Date;
-  completedAt: Date | null;
-  updatedAt: Date;
-};
-
-export type ProcessRunSpanRecord = {
-  id: number;
-  runId: string;
-  spanId: string;
-  parentSpanId: string | null;
-  name: string;
-  status: ProcessRunStatus;
-  startedAt: Date;
-  completedAt: Date | null;
-  durationMs: number | null;
-  metadata: Record<string, unknown>;
-  updatedAt: Date;
-};
-
-export type ProcessRunEventRecord = {
-  id: number;
-  runId: string;
-  traceId: string | null;
-  level: TraceEventLevel;
-  eventName: string;
-  summary: string | null;
-  metadata: Record<string, unknown>;
-  durationMs: number | null;
-  createdAt: Date;
-};
-
-export type ProcessRunArtifactRecord = {
-  artifactId: string;
-  runId: string;
-  kind: ProcessRunArtifactKind;
-  name: string;
-  contentType: string;
-  sizeBytes: number;
-  preview: string;
-  redacted: boolean;
-  expiresAt: Date | null;
-  metadata: Record<string, unknown>;
-  createdAt: Date;
-};
-
-export type ProcessRunArtifactContent = ProcessRunArtifactRecord & {
-  content: string;
 };
 
 export type AgentTaskStatus = "queued" | "running" | "succeeded" | "failed" | "no_changes" | "cancelled";
@@ -460,7 +365,7 @@ export type TaskEvent = {
   taskId: string;
   traceId: string | null;
   eventName: string;
-  level: TraceEventLevel;
+  level: EventLevel;
   summary: string | null;
   metadata: Record<string, unknown>;
   createdAt: Date;
@@ -474,7 +379,7 @@ export type AgentRuntimeEvent = {
   spanId?: string | null;
   parentSpanId?: string | null;
   kind: string;
-  level: TraceEventLevel;
+  level: EventLevel;
   eventName: string;
   summary: string | null;
   metadata: Record<string, unknown>;
@@ -507,12 +412,14 @@ export type AgentRuntimeMessage = {
   createdAt: Date;
 };
 
+export type AgentRuntimeStatus = "queued" | "running" | "succeeded" | "failed" | "no_changes" | "cancelled";
+
 export type AgentRuntimeChatExecution = {
   executionId: string;
   sessionId: string;
   traceId: string | null;
   sessionTraceId: string | null;
-  status: ProcessRunStatus;
+  status: AgentRuntimeStatus;
   title: string;
   request: string;
   requestedBy: string | null;

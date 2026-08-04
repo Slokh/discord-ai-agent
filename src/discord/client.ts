@@ -16,7 +16,7 @@ import { handleMessageCreate, queueIncomingMessageEmbedding } from "./messageIng
 import { handleUndoCrossReaction, persistReactionMessage, persistReactionMessageUpdate } from "./reactions.js";
 import { clearDiscordBugMarkersForMessage, clearDiscordBugMarkersForReaction, handleDiscordBugMarkerReaction } from "./bugMarkerReaction.js";
 import { deletedMessageIdsForConfiguredGuild, isSelfMessage, isSelfUser, shouldProcessGuildEvent } from "./mentionParsing.js";
-import { discordMessageTraceContext, recordTraceEvent } from "./requestContext.js";
+import { discordMessageTraceContext } from "./requestContext.js";
 import { logger } from "../util/logger.js";
 import { runWithTrace } from "../util/trace.js";
 import { announceDeployment } from "./deploymentAnnouncements.js";
@@ -165,7 +165,6 @@ export function createDiscordAiAgentBot(input: {
           if (isSelfMessage(fetched as Message, client.user?.id)) return;
           await persistDiscordMessage(input.repo, fetched as Message);
           queueIncomingMessageEmbedding(input, fetched as Message, client.user?.id, "message_update");
-          await recordTraceEvent(input.repo, { eventName: "discord.message.updated", summary: "Persisted edited Discord message" });
         }
       } catch (error) {
         logger.warn({ err: error }, "Failed to persist message update");
@@ -177,7 +176,6 @@ export function createDiscordAiAgentBot(input: {
     runWithTrace(discordMessageTraceContext(message), async () => {
       if (!shouldProcessGuildEvent(input.config.discord.guildId, message.guildId)) return;
       if (message.id) await input.repo.markMessageDeleted(message.id).catch(() => undefined);
-      await recordTraceEvent(input.repo, { eventName: "discord.message.deleted", summary: "Marked Discord message deleted" });
     }),
   }));
 

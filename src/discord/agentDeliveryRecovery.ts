@@ -1,6 +1,6 @@
 import type { Logger } from "pino";
 import type { AgentFile } from "../tools/types.js";
-import { recordTraceEvent, type DiscordAgentExecutionRequest, type DiscordAgentRequestInput } from "./requestContext.js";
+import type { DiscordAgentExecutionRequest, DiscordAgentRequestInput } from "./requestContext.js";
 import {
   deliveryFileReference,
   DISCORD_DELIVERY_FILE_ARTIFACT_KIND,
@@ -42,8 +42,5 @@ export async function releaseFailedRequestWager(
   requestLogger: Logger,
 ) {
   const explanation = `Agent request failed before wager completion: ${error instanceof Error ? error.message : String(error)}`;
-  await input.walletService?.releaseOpenWagerByRequestId(request.requestId, explanation, async (event) => recordTraceEvent(input.repo, {
-    ...event,
-    metadata: { ...event.metadata, requestId: request.requestId },
-  })).catch((releaseError) => requestLogger.error({ err: releaseError }, "Failed to release wager after agent request failure"));
+  await input.walletService?.releaseOpenWagerByRequestId(request.requestId, explanation).catch((releaseError) => requestLogger.error({ err: releaseError }, "Failed to release wager after agent request failure"));
 }

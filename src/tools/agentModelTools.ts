@@ -210,25 +210,4 @@ async function auditModelChange(
       : undefined,
     error,
   });
-  await ctx.repo.recordTraceEvent({
-    traceId: ctx.requestId,
-    requestId: ctx.requestId,
-    guildId: ctx.guildId,
-    channelId: ctx.channelId,
-    userId: ctx.userId,
-    eventName: error
-      ? "agent.model_override.denied"
-      : input.action === "reset"
-        ? "agent.model_override.cleared"
-        : "agent.model_override.updated",
-    level: error ? "warn" : "info",
-    summary: error
-      ? "Denied NanoCodex model override"
-      : `NanoCodex model ${input.action === "reset" ? "reset" : "updated"}`,
-    metadata: {
-      action: input.action,
-      effectiveModel,
-      error,
-    },
-  });
 }

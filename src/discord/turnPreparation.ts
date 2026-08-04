@@ -21,7 +21,6 @@ import { discordAttachmentContextsFromMessage, resolveDiscordReplyContext, REPLY
 import type { DiscordResponseSink } from "./responseSink.js";
 import {
   recordAgentRuntimeSpan,
-  recordTraceEvent,
   type DiscordAgentExecutionRequest,
   type DiscordAgentRequestInput,
   type PreparedDiscordAgentTurn
@@ -97,18 +96,6 @@ export async function prepareDiscordAgentTurn(input: {
     },
     "Resolved requester visibility"
   );
-  await recordTraceEvent(input.context.repo, {
-    eventName: "permissions.visibility.resolved",
-    summary: `Resolved ${visibleChannelIds.length} visible channels`,
-    metadata: {
-      source: input.source,
-      visibleChannelCount: visibleChannelIds.length,
-      mentionedChannelIds,
-      mentionedUserIds,
-      replyContextMessageId: replyContext?.messageId
-    },
-    durationMs: durationMs(permissionStartedAt)
-  });
   if (input.agentRuntimeExecution) {
     await recordAgentRuntimeSpan({
       agentRuntime: input.context.agentRuntime,
@@ -143,12 +130,6 @@ export async function prepareDiscordAgentTurn(input: {
     },
     "Loaded channel conversation memory"
   );
-  await recordTraceEvent(input.context.repo, {
-    eventName: "memory.session.loaded",
-    summary: `Loaded ${priorSessionMessages.length} channel memory messages`,
-    metadata: { threadKey, source: input.source, sessionMessageCount: priorSessionMessages.length, sessionContextLimit, hasReplyContext: Boolean(replyContext) },
-    durationMs: durationMs(sessionStartedAt)
-  });
   if (input.agentRuntimeExecution) {
     await recordAgentRuntimeSpan({
       agentRuntime: input.context.agentRuntime,
@@ -258,19 +239,6 @@ export async function replayPreparedDiscordAgentTurn(input: {
     },
     replaySummary
   );
-  await recordTraceEvent(input.context.repo, {
-    eventName: "agent.execution.context_replayed",
-    summary: replaySummary,
-    metadata: {
-      threadKey: turnEnvelope.threadKey,
-      sessionMessageCount: priorSessionMessages.length,
-      staleSessionMessageCount: input.turnEnvelope.sessionMessages.length,
-      visibleChannelCount: turnEnvelope.visibleChannelIds.length,
-      sessionContextLimit,
-      refreshed
-    },
-    durationMs: durationMs(startedAt)
-  });
   return {
     turnEnvelope,
     turnEnvelopeArtifactId: null,

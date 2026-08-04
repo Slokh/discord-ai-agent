@@ -5,7 +5,7 @@ import { logger } from "../util/logger.js";
 import { deleteDiscordMessageById } from "./api.js";
 import { persistDiscordMessage } from "./messagePersistence.js";
 import { discordChannelThreadKey, isSelfMessage, isSelfUser, shouldProcessGuildEvent } from "./mentionParsing.js";
-import { recordTraceEvent, type DiscordAgentRequestInput } from "./requestContext.js";
+import type { DiscordAgentRequestInput } from "./requestContext.js";
 
 export async function persistReactionMessageUpdate(
   input: { config: AppConfig; repo: DiscordAiAgentRepository },
@@ -32,7 +32,7 @@ export async function handleUndoCrossReaction(
   if (!isSelfMessage(fetchedMessage as Message, client.user?.id)) return false;
 
   const threadKey = discordChannelThreadKey(fetchedMessage.guildId, fetchedMessage.channelId);
-  const deletedMemoryRows = await input.repo
+  await input.repo
     .deleteConversationMessagesByDiscordMessageIds({ threadKey, discordMessageIds: [fetchedMessage.id] })
     .catch((error) => {
       logger.warn({ err: error, messageId: fetchedMessage.id }, "Failed to delete undone bot reply from conversation memory");
@@ -40,11 +40,6 @@ export async function handleUndoCrossReaction(
     });
   await deleteDiscordMessageById(fetchedMessage as Message, fetchedMessage.id).catch((error) => {
     logger.warn({ err: error, messageId: fetchedMessage.id }, "Failed to delete undone Discord bot reply");
-  });
-  await recordTraceEvent(input.repo, {
-    eventName: "discord.reply.undone_by_reaction",
-    summary: "Removed bot reply from memory after ❌ reaction",
-    metadata: { replyMessageId: fetchedMessage.id, deletedMemoryRows, reactorUserId: user.id },
   });
   return true;
 }

@@ -98,11 +98,6 @@ describe("inspectDiscordFile", () => {
     expect(transcribeAudio).toHaveBeenCalledWith(expect.objectContaining({ format: "mp4" }));
     expect(result).toContain("Parser: openrouter-transcription");
     expect(result).toContain("A fictional speaker describes a launch checklist.");
-    expect(recordTraceEvent).toHaveBeenCalledWith(expect.objectContaining({
-      eventName: "discord.file.transcribed",
-      metadata: expect.objectContaining({ model: "test/transcription", format: "mp4", extractedChars: 49 })
-    }));
-    expect(JSON.stringify(recordTraceEvent.mock.calls)).not.toContain("launch checklist");
   });
 
   it("transcribes a QuickTime MOV attachment through the media transcription provider", async () => {

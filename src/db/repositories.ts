@@ -11,7 +11,6 @@ import * as discordComponentActions from "./discordComponentActionRepository.js"
 import * as discordEmojiUsage from "./discordEmojiUsageRepository.js";
 import * as embeddings from "./embeddingRepository.js";
 import * as friction from "./frictionRepository.js";
-import * as processRuns from "./processRunRepository.js";
 import * as retrieval from "./retrievalRepository.js";
 import * as serverOverlays from "./serverOverlayRepository.js";
 import type { AgentRunFeedback, PersistedMessage } from "./types.js";
@@ -49,7 +48,6 @@ export function createAppDatabase(pool: DbPool) {
     ...bindRepository(pool, discordComponentActions),
     ...bindRepository(pool, embeddings),
     ...bindRepository(pool, friction),
-    ...bindRepository(pool, processRuns),
     ...bindRepository(pool, retrieval),
     ...bindRepository(pool, serverOverlays),
 

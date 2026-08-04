@@ -192,6 +192,8 @@ export function buildDiscordStatsBaseQuery(input: {
 
 export function discordStatsMetricSql(metric: DiscordStatsMetric) {
   const channelCreatedAtSql = discordChannelCreatedAtSql("c.id", "m.created_at", "c.discord_created_at");
+  if (metric === "characters") return "coalesce(sum(char_length(m.normalized_content)), 0)::bigint";
+  if (metric === "words") return "coalesce(sum(coalesce(cardinality(regexp_split_to_array(nullif(btrim(m.normalized_content), ''), '\\s+')), 0)), 0)::bigint";
   if (metric === "attachments") return "coalesce(sum(attachment_stats.attachment_count), 0)::int";
   if (metric === "reactions") return "coalesce(sum(reaction_stats.reaction_count), 0)::int";
   if (metric === "uniqueActiveDays") return "count(DISTINCT date_trunc('day', m.created_at))::int";
@@ -408,6 +410,7 @@ export function parseVectorText(value: unknown): number[] | null {
 export function emptyDiscordStats(metric: DiscordStatsMetric, groupBy: DiscordStatsGroupBy): DiscordStats {
   return {
     totalMessages: 0,
+    totalValue: 0,
     totalAttachments: 0,
     totalReactions: 0,
     userCount: 0,

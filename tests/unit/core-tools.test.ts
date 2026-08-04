@@ -332,6 +332,28 @@ describe("Discord lookup tools", () => {
 });
 
 describe("getDiscordStats", () => {
+  it("supports authoritative word totals grouped by user", async () => {
+    const ctx = {
+      repo: {
+        getVisibleIndexedChannelIds: vi.fn(async () => ["channel"]),
+        discordStats: vi.fn(async () => ({
+          totalMessages: 2, totalValue: 23, totalAttachments: 0, totalReactions: 0,
+          userCount: 1, channelCount: 1, activeDays: 1, metric: "words", groupBy: "user",
+          rows: [{ key: "author", label: "alice", value: 23, authorId: "author", authorUsername: "alice", channelId: null, channelName: null, messageId: null, messageLink: null, periodStart: null, messageCount: 2, activeDays: 1, channelCreatedAt: null, channelAgeDays: null }],
+          topUsers: [], topChannels: []
+        })),
+        auditTool: vi.fn(async () => undefined)
+      },
+      guildId: "guild", channelId: "channel", userId: "user", visibleChannelIds: ["channel"]
+    } as unknown as ToolContext;
+
+    const response = await getDiscordStats(ctx, { authorIds: ["author"], groupBy: "user", metric: "words" });
+
+    expect(ctx.repo.discordStats).toHaveBeenCalledWith(expect.objectContaining({ authorIds: ["author"], groupBy: "user", metric: "words" }));
+    expect(response).toContain("Metric: words");
+    expect(response).toContain("@alice: 23");
+  });
+
   it("formats permission-filtered indexed Discord stats", async () => {
     const ctx = {
       repo: {

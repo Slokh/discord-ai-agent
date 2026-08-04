@@ -12,7 +12,7 @@ The sandbox supervisor never receives the Discord token or database URL. It rece
 
 ## Durable lifecycle
 
-1. `src/tools/agentTaskTools.ts` records the task projection and a task-linked runtime execution, then returns a status result to the parent chat turn.
+1. `src/tools/agentTaskTools.ts` records the task projection and exactly one task-linked runtime execution, then returns a status result to the parent chat turn.
 2. `src/jobs/agentTaskEnqueue.ts` atomically hands the task to pg-boss. The parent tool call does not wait for the PR.
 3. Discord task notification code creates or edits one progress message for queued, running, and terminal state.
 4. `src/execution/backend.ts` creates an isolated Kubernetes Job.

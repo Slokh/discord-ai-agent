@@ -55,7 +55,7 @@ export async function getAgentRuntimeTaskEventsForTask(
           ce.created_at
         FROM agent_runtime_events ce
         JOIN agent_runtime_executions cex ON cex.execution_id = ce.execution_id
-        WHERE cex.task_id = $1
+        WHERE cex.execution_id = 'agent-task-execution-' || $1
           AND cex.metadata->>'runtime' = 'agent'
           AND ce.event_name LIKE 'agent.task.%'
         ORDER BY ce.created_at DESC, ce.id DESC

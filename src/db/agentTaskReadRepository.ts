@@ -287,7 +287,7 @@ export async function cancelAgentTask(pool: DbPool, input: { taskId: string; rea
                   error = $2,
                   completed_at = coalesce(completed_at, now()),
                   updated_at = now()
-              WHERE task_id = $1
+              WHERE execution_id = 'agent-task-execution-' || $1
               RETURNING session_id, execution_id, trace_id, event_sequence AS sequence
             ),
             session_update AS (
@@ -342,7 +342,7 @@ export async function getSandboxCommandEvents(pool: DbPool, input: {
         LEFT JOIN agent_runtime_artifacts artifact ON artifact.artifact_id = ce.metadata->>'artifactId'
         WHERE at.guild_id = $1
           AND ($2::text[] IS NULL OR at.channel_id IS NULL OR at.channel_id = ANY($2::text[]))
-          AND ($3::text IS NULL OR cex.task_id = $3)
+          AND ($3::text IS NULL OR cex.execution_id = 'agent-task-execution-' || $3)
           AND ($4::text IS NULL OR at.trace_id = $4 OR cex.task_id = $4)
           AND ce.event_name = 'agent.task.command'
         ORDER BY ce.created_at DESC, ce.id DESC
@@ -371,7 +371,7 @@ export async function getSandboxCommandEventsForTask(pool: DbPool, input: { task
           FROM agent_runtime_events ce
           JOIN agent_runtime_executions cex ON cex.execution_id = ce.execution_id
           LEFT JOIN agent_runtime_artifacts artifact ON artifact.artifact_id = ce.metadata->>'artifactId'
-          WHERE cex.task_id = $1
+          WHERE cex.execution_id = 'agent-task-execution-' || $1
             AND ce.event_name = 'agent.task.command'
           ORDER BY ce.created_at DESC, ce.id DESC
           LIMIT $2

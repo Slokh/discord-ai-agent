@@ -52,5 +52,12 @@ describe.skipIf(!runDbTests)("agent task command runtime projection", () => {
     const expected = expect.objectContaining({ taskId, sandboxRunId, step: "verify", exitCode: 1, outputTail: expect.stringContaining("stderr tail") });
     await expect(repo.getSandboxCommandEvents({ guildId, visibleChannelIds: [channelId], taskId })).resolves.toEqual([expected]);
     await expect(repo.getSandboxCommandEventsForTask({ taskId })).resolves.toEqual([expected]);
+    await expect(agentRuntime.createExecution({
+      executionId: `duplicate-${executionId}`,
+      sessionId,
+      taskId,
+      traceId,
+      status: "running",
+    })).rejects.toThrow(/unique/i);
   });
 });

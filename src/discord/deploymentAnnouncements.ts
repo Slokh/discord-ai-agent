@@ -35,8 +35,7 @@ export async function announceDeployment(input: {
   repo: AnnouncementRepository;
   openRouter: Pick<OpenRouterClient, "chat">;
   fetchImpl?: typeof fetch;
-  deliveredBugFix?: { content: string; messageId: string } | null;
-}): Promise<"disabled" | "baseline" | "duplicate" | "posted" | "bug_fix"> {
+}): Promise<"disabled" | "baseline" | "duplicate" | "posted"> {
   const { config, repo } = input;
   const guildId = config.discord.guildId;
   const channelId = config.releaseNotes.channelId;
@@ -62,17 +61,6 @@ export async function announceDeployment(input: {
   const traceId = `deployment:${revision}`;
   try {
     const comparisonUrl = githubComparisonUrl(config.github.repository, previousRevision, revision);
-    if (input.deliveredBugFix) {
-      await repo.markDeploymentAnnouncementPosted({
-        guildId,
-        revision,
-        content: input.deliveredBugFix.content,
-        comparisonUrl,
-        discordMessageId: input.deliveredBugFix.messageId,
-      });
-      return "bug_fix";
-    }
-
     const channel = await input.client.channels.fetch(channelId);
     if (!channel || typeof (channel as any).send !== "function") {
       throw new Error(`Release notes channel ${channelId} is missing or is not message-capable.`);

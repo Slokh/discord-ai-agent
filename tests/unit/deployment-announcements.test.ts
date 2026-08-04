@@ -91,23 +91,21 @@ describe("deployment announcements", () => {
     expect(fixture.repo.markDeploymentAnnouncementPosted).toHaveBeenCalledWith(expect.objectContaining({ discordMessageId: "existing" }));
   });
 
-  it("records a contextual bug-fix update without duplicating it in the release channel", async () => {
+  it("publishes release-wide notes even when contextual bug-fix updates were delivered", async () => {
     const fixture = setup();
     await expect(announceDeployment({
       ...fixture,
       deliveredBugFix: { content: "## 🐛 Bug fix\n- Better retries.", messageId: "bug-fix-update-1" },
-    } as any)).resolves.toBe("bug_fix");
+    } as any)).resolves.toBe("posted");
 
-    expect(fixture.client.channels.fetch).not.toHaveBeenCalled();
-    expect(fixture.fetchImpl).not.toHaveBeenCalled();
-    expect(fixture.send).not.toHaveBeenCalled();
-    expect(fixture.repo.markDeploymentAnnouncementPosted).toHaveBeenCalledWith({
-      guildId: "guild-1",
-      revision: newRevision,
-      content: "## 🐛 Bug fix\n- Better retries.",
-      comparisonUrl: `https://github.com/example-org/example-agent/compare/${oldRevision}...${newRevision}`,
-      discordMessageId: "bug-fix-update-1",
-    });
+    expect(fixture.client.channels.fetch).toHaveBeenCalledWith("release-channel");
+    expect(fixture.fetchImpl).toHaveBeenCalledOnce();
+    expect(fixture.send).toHaveBeenCalledWith(expect.objectContaining({
+      content: expect.stringContaining("## ✨ Bot update"),
+    }));
+    expect(fixture.repo.markDeploymentAnnouncementPosted).toHaveBeenCalledWith(expect.objectContaining({
+      discordMessageId: "announcement-1",
+    }));
   });
 
   it("falls back to bounded commit summaries when the utility model is unavailable", async () => {

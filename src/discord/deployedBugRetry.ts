@@ -10,6 +10,7 @@ import { discordChannelThreadKey } from "./mentionParsing.js";
 import { fetchDiscordMessage, type DiscordAgentRequestInput } from "./requestContext.js";
 import { DiscordResponseSink } from "./responseSink.js";
 import { BUG_FIX_TITLE, formatUpdateAnnouncement, generateUpdateNotes } from "./updateAnnouncements.js";
+import { isAuthorizedDiscordBugReporter } from "./bugReportAuthority.js";
 
 const GITHUB_API_BASE_URL = "https://api.github.com";
 const DEPLOYED_BUG_RETRY_LIMIT = 20;
@@ -36,16 +37,15 @@ export async function retryDeployedDiscordBugReports(input: DiscordAgentRequestI
   const revision = input.config.appRevision?.trim();
   const repository = input.config.github.repository?.trim();
   if (!revision || revision === "unknown" || !repository || !input.agentRuntime) {
-    return { eligible: 0, retried: 0, skipped: 0, bugFixAnnouncement: null };
+    return { eligible: 0, retried: 0, skipped: 0 };
   }
   const reports = await input.repo.listDiscordBugReportsAwaitingDeployment(DEPLOYED_BUG_RETRY_LIMIT);
-  if (reports.length === 0) return { eligible: 0, retried: 0, skipped: 0, bugFixAnnouncement: null };
+  if (reports.length === 0) return { eligible: 0, retried: 0, skipped: 0 };
 
   const token = input.githubToken ?? await resolveGitHubTaskToken(input.config);
   const fetchImpl = input.fetchImpl ?? fetch;
   let retried = 0;
   let skipped = 0;
-  let bugFixAnnouncement: BugFixAnnouncement | null = null;
   for (const report of reports) {
     let deploymentClaimed = false;
     let retryOutcome: Parameters<typeof input.repo.recordDiscordBugReportRetry>[0] | null = null;
@@ -81,7 +81,6 @@ export async function retryDeployedDiscordBugReports(input: DiscordAgentRequestI
         announcementMessageId: result.announcement.messageId,
       };
       await persistRetryOutcome(input.repo, retryOutcome, revision);
-      bugFixAnnouncement ??= result.announcement;
       if (result.retried) {
         retried += 1;
       } else {
@@ -100,7 +99,7 @@ export async function retryDeployedDiscordBugReports(input: DiscordAgentRequestI
       logger.warn({ err: error, reportId: report.reportId, revision }, "Failed to retry a deployed Discord bug report");
     }
   }
-  return { eligible: reports.length, retried, skipped, bugFixAnnouncement };
+  return { eligible: reports.length, retried, skipped };
 }
 
 async function persistRetryOutcome(
@@ -157,6 +156,7 @@ async function postBugFixUpdateAndRetry(
   if (!execution?.traceId || !execution.userId || !execution.guildId || !execution.channelId || !execution.request.trim()) {
     throw new Error("The original Discord execution is incomplete and cannot be retried.");
   }
+  assertBugReportReplayAuthorized(report.reportedByUserId, execution.userId);
   const [original, markedReply] = await Promise.all([
     fetchDiscordMessage(input.client, execution.channelId, execution.traceId),
     fetchDiscordMessage(input.client, report.channelId, report.sourceMessageId),
@@ -291,7 +291,14 @@ function sameRevision(left: string, right: string) {
   return a === b || (a.length >= 7 && b.startsWith(a)) || (b.length >= 7 && a.startsWith(b));
 }
 
+function assertBugReportReplayAuthorized(reportedByUserId: string, originalRequesterUserId: string | null | undefined) {
+  if (!isAuthorizedDiscordBugReporter(reportedByUserId, originalRequesterUserId)) {
+    throw new Error("Only the original Discord requester can authorize an automatic bug-fix replay.");
+  }
+}
+
 export const __test = {
+  assertBugReportReplayAuthorized,
   bugFixEvidence,
   fallbackBugFixNote,
   postBugFixUpdate,

@@ -126,9 +126,9 @@ For operator triage, use the in-Discord tool for the requester's visible markers
 
 Unqualified requests such as “show my bug reports” or “fix my bugs” refer to this native inbox. GitHub/repository issue work requires explicit repository context. This distinction lives in tool contracts rather than keyword routing.
 
-The repair workflow reproduces the linked run, adds a general regression test, opens a focused PR when requested, and deploys after normal review. Once live, the marked reply becomes a persistent `Bug fix` update and its successful posting triggers the original prompt again into a fresh reply; that revision is not duplicated in the release-notes channel. Never copy private marker content into Frog, a public issue, PR metadata, or tracked fixtures.
+The workflow first reconstructs the linked run and performs evidence-only triage on a clean checkout. The marker is a report, not proof. Only a `confirmed_unfixed` verdict with a machine-checkable regression contract unlocks a separate repair phase; other verdicts leave source unchanged. When evidence is insufficient, the terminal result replies on the marked bot message, pings only the reporter, and identifies the context needed for a safe decision. Only a marker from the original request author can start automated triage/repair and authorize a post-deploy replay. A confirmed repair adds focused regression coverage, opens a focused PR, and deploys after normal review. Once live, the marked reply becomes a persistent `Bug fix` update and its successful posting triggers the original prompt again into a fresh reply. That contextual update does not replace the release-wide announcement; every verified revision still publishes its complete release-notes entry. Never copy private marker content into Frog, a public issue, PR metadata, or tracked fixtures.
 
-Every bug-marked execution is also captured as private negative feedback. Add expected/forbidden tools or required/forbidden answer text to the private regression suite, then run:
+Only a confirmed automated defect is captured as private negative feedback. Add expected/forbidden tools or required/forbidden answer text to the private regression suite, then run:
 
 ```bash
 npm run eval:regressions

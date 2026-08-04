@@ -42,7 +42,6 @@ describe("deployed Discord bug retry", () => {
       eligible: 1,
       retried: 1,
       skipped: 0,
-      bugFixAnnouncement: { content: "bug fix update", messageId: "update-1" },
     });
     expect(claimDiscordBugReportDeployment).toHaveBeenCalledWith({
       reportId: "report-1",
@@ -87,7 +86,7 @@ describe("deployed Discord bug retry", () => {
       processReport,
     } as any);
 
-    expect(result).toEqual({ eligible: 1, retried: 0, skipped: 1, bugFixAnnouncement: null });
+    expect(result).toEqual({ eligible: 1, retried: 0, skipped: 1 });
     expect(claimDiscordBugReportDeployment).not.toHaveBeenCalled();
     expect(processReport).not.toHaveBeenCalled();
   });
@@ -125,7 +124,6 @@ describe("deployed Discord bug retry", () => {
       eligible: 1,
       retried: 0,
       skipped: 1,
-      bugFixAnnouncement: { content: "bug fix update", messageId: "update-1" },
     });
     expect(recordDiscordBugReportRetry).toHaveBeenCalledWith(expect.objectContaining({ status: "failed", announcementMessageId: "update-1" }));
   });
@@ -155,6 +153,13 @@ describe("deployed Discord bug retry", () => {
     expect(result).toMatchObject({ retried: 1, skipped: 0 });
     expect(recordDiscordBugReportRetry).toHaveBeenCalledTimes(2);
     expect(recordDiscordBugReportRetry).toHaveBeenLastCalledWith(expect.objectContaining({ status: "succeeded" }));
+  });
+
+  it("refuses to replay a report created by someone other than the original requester", () => {
+    expect(() => __test.assertBugReportReplayAuthorized("reporter", "original-requester"))
+      .toThrow("Only the original Discord requester");
+    expect(() => __test.assertBugReportReplayAuthorized("original-requester", "original-requester"))
+      .not.toThrow();
   });
 
   it("turns the marked reply into the persistent bug-fix update", async () => {

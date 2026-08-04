@@ -20,18 +20,36 @@ describe("Discord bug report automation", () => {
     expect(harness.jobs.enqueueAgentTask).toHaveBeenCalledWith(expect.objectContaining({
       request: expect.stringContaining('"messageCount":4')
     }));
+    expect(harness.jobs.enqueueAgentTask).toHaveBeenCalledWith(expect.objectContaining({
+      request: expect.stringContaining("Source application revision: source-revision")
+    }));
+    expect(harness.jobs.enqueueAgentTask).toHaveBeenCalledWith(expect.objectContaining({
+      request: expect.stringContaining("Retained session messages")
+    }));
     expect(harness.jobs.enqueueAgentTask).toHaveBeenCalledWith(expect.not.objectContaining({
       discordResponseMessageId: expect.anything(),
     }));
     expect(harness.repo.attachDiscordBugReportTask).toHaveBeenCalledWith(expect.objectContaining({ statusMessageId: null }));
-    expect(harness.repo.captureRunFeedbackForEval).toHaveBeenCalledWith(expect.objectContaining({
-      runId: "execution-1",
+    expect(harness.repo.createDiscordBugReport).toHaveBeenCalledWith(expect.objectContaining({
+      sourceRevision: "source-revision",
+      reportedByUserId: "user-1",
     }));
+    expect(harness.repo.captureRunFeedbackForEval).not.toHaveBeenCalled();
     expect(harness.message.reply).not.toHaveBeenCalled();
+  });
+
+  it("keeps another member's marker without starting or replaying the original request", async () => {
+    const harness = fakeHarness(true, "user-2");
+
+    await expect(automateDiscordBugReport(harness.input as any)).resolves.toBe("not_original_requester");
+
+    expect(harness.repo.createDiscordBugReport).not.toHaveBeenCalled();
+    expect(harness.repo.captureRunFeedbackForEval).not.toHaveBeenCalled();
+    expect(harness.jobs.enqueueAgentTask).not.toHaveBeenCalled();
   });
 });
 
-function fakeHarness(created: boolean) {
+function fakeHarness(created: boolean, reportedByUserId = "user-1") {
   const status = { id: "status-1", edit: vi.fn(async () => undefined) };
   const message = {
     id: "reply-1", guildId: "guild-1", channelId: "channel-1",
@@ -40,7 +58,8 @@ function fakeHarness(created: boolean) {
   const execution = {
     executionId: "execution-1", sessionId: "session-1", traceId: "trace-1",
     guildId: "guild-1", channelId: "channel-1", status: "succeeded",
-    request: "the original request", error: null
+    request: "the original request", error: null, userId: "user-1",
+    metadata: { appRevision: "source-revision" }, sessionMetadata: { appRevision: "session-revision" },
   };
   const repo = {
     findAgentRuntimeChatExecutionByTraceId: vi.fn(async () => execution),
@@ -58,6 +77,10 @@ function fakeHarness(created: boolean) {
       eventName: "discord.response.delivered", level: "info", summary: "done",
       metadata: { replyMessageId: "reply-1", continuationMessageIds: ["reply-2", "reply-3", "reply-4"], messageCount: 4 }
     }]),
+    listMessages: vi.fn(async () => [
+      { role: "user", parts: [{ type: "text", text: "the original request" }] },
+      { role: "assistant", parts: [{ type: "text", text: "the AI reply" }] },
+    ]),
     recordEvent: vi.fn(async () => undefined), updateExecution: vi.fn(async () => undefined)
   };
   const jobs = {
@@ -72,7 +95,7 @@ function fakeHarness(created: boolean) {
         openRouter: { codegenModel: "test/model" }
       },
       repo,
-      agentRuntime, jobs, botUserId: "bot-1", message, reportedByUserId: "user-1"
+      agentRuntime, jobs, botUserId: "bot-1", message, reportedByUserId
     }
   };
 }

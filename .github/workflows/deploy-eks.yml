@@ -33,22 +33,36 @@ jobs:
       RELEASE_NOTES_CHANNEL_ID: ${{ vars.RELEASE_NOTES_CHANNEL_ID }}
       IMAGE_TAG: ${{ github.event.workflow_run.head_sha }}
     steps:
-      - uses: actions/checkout@v7
-        with:
-          ref: ${{ github.event.workflow_run.head_sha }}
-      - uses: actions/setup-node@v7
-        with:
-          node-version: 22
-          cache: npm
-      - run: npm ci --ignore-scripts
       - uses: aws-actions/configure-aws-credentials@v6
         with:
           role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
       - id: ecr
         uses: aws-actions/amazon-ecr-login@v2
+      - id: release
+        name: Check whether this revision has deployable images
+        run: |
+          deploy=false
+          if aws ecr describe-images --repository-name "$ECR_REPOSITORY" --image-ids "imageTag=$IMAGE_TAG" >/dev/null 2>&1 \
+            && aws ecr describe-images --repository-name "$ECR_REPOSITORY-sandbox" --image-ids "imageTag=$IMAGE_TAG" >/dev/null 2>&1; then
+            deploy=true
+          fi
+          echo "deploy=$deploy" >>"$GITHUB_OUTPUT"
+      - uses: actions/checkout@v7
+        if: steps.release.outputs.deploy == 'true'
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+      - uses: actions/setup-node@v7
+        if: steps.release.outputs.deploy == 'true'
+        with:
+          node-version: 22
+          cache: npm
+      - if: steps.release.outputs.deploy == 'true'
+        run: npm ci --ignore-scripts
       - uses: azure/setup-helm@v5
+        if: steps.release.outputs.deploy == 'true'
       - name: Deploy Helm chart
+        if: steps.release.outputs.deploy == 'true'
         env:
           REGISTRY: ${{ steps.ecr.outputs.registry }}
         run: |
@@ -98,6 +112,7 @@ jobs:
             --timeout 10m \
             "${helm_args[@]}"
       - name: Verify release and recover on failure
+        if: steps.release.outputs.deploy == 'true'
         run: |
           args=(
             --namespace "$K8S_NAMESPACE"

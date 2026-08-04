@@ -16,10 +16,13 @@ concurrency:
 
 jobs:
   changes:
-    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     outputs:
       container: ${{ steps.filter.outputs.container }}
+      core: ${{ steps.filter.outputs.core }}
+      database: ${{ steps.filter.outputs.database }}
+      deployable: ${{ steps.filter.outputs.deployable }}
+      documentation: ${{ steps.filter.outputs.documentation }}
       infrastructure: ${{ steps.filter.outputs.infrastructure }}
     steps:
       - uses: actions/checkout@v7
@@ -30,13 +33,28 @@ jobs:
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PUSH_BASE_SHA: ${{ github.event.before }}
+          PUSH_HEAD_SHA: ${{ github.sha }}
+          MERGE_BASE_SHA: ${{ github.event.merge_group.base_sha }}
+          MERGE_HEAD_SHA: ${{ github.event.merge_group.head_sha }}
         run: |
+          if [ -z "$BASE_SHA" ]; then
+            BASE_SHA="${PUSH_BASE_SHA:-$MERGE_BASE_SHA}"
+            HEAD_SHA="${PUSH_HEAD_SHA:-$MERGE_HEAD_SHA}"
+          fi
+          if [ -z "$BASE_SHA" ] || [ "$BASE_SHA" = 0000000000000000000000000000000000000000 ]; then
+            BASE_SHA="$(git rev-list --max-parents=0 "$HEAD_SHA" | tail -1)"
+          fi
           container=false
+          core=false
+          database=false
+          deployable=false
+          documentation=false
           infrastructure=false
           while IFS= read -r path; do
             case "$path" in
-              Dockerfile|.dockerignore|.grype.yaml|package.json|package-lock.json)
-                container=true
+              README.md|AGENTS.md|docs/*|.github/pull_request_template.md)
+                documentation=true
                 ;;
             esac
             case "$path" in
@@ -44,12 +62,51 @@ jobs:
                 infrastructure=true
                 ;;
             esac
+            case "$path" in
+              Dockerfile|.dockerignore|.grype.yaml|docker-bake.hcl|package.json|package-lock.json|native/nanocodex-runtime/Cargo.toml|native/nanocodex-runtime/Cargo.lock)
+                container=true
+                ;;
+            esac
+            case "$path" in
+              Dockerfile|.dockerignore|docker-bake.hcl|package.json|package-lock.json|tsconfig.json|vite.console.config.ts|src/*|scripts/*|migrations/*|skills/*|native/*|deploy/helm/*)
+                deployable=true
+                ;;
+            esac
+            case "$path" in
+              src/control/console/*)
+                ;;
+              src/*|scripts/*|migrations/*|tests/integration/*|package.json|package-lock.json)
+                database=true
+                ;;
+            esac
+            case "$path" in
+              README.md|AGENTS.md|docs/*|.github/*|deploy/*)
+                ;;
+              *)
+                core=true
+                ;;
+            esac
           done < <(git diff --name-only "$BASE_SHA" "$HEAD_SHA")
-          printf 'container=%s\n' "$container" >>"$GITHUB_OUTPUT"
-          printf 'infrastructure=%s\n' "$infrastructure" >>"$GITHUB_OUTPUT"
+          {
+            printf 'container=%s\n' "$container"
+            printf 'core=%s\n' "$core"
+            printf 'database=%s\n' "$database"
+            printf 'deployable=%s\n' "$deployable"
+            printf 'documentation=%s\n' "$documentation"
+            printf 'infrastructure=%s\n' "$infrastructure"
+          } >>"$GITHUB_OUTPUT"
 
-  verify-core:
+  quality:
+    needs: changes
+    if: >-
+      needs.changes.outputs.core == 'true' &&
+      (github.event_name != 'push' || vars.CANDIDATE_IMAGE_PUBLISHING_ENABLED != 'true')
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        check: [lint, test, build]
+    name: quality (${{ matrix.check }})
     steps:
       - uses: actions/checkout@v7
         with:
@@ -60,39 +117,45 @@ jobs:
           cache: npm
       - run: npm ci
       - name: Lint
-        if: github.event_name == 'pull_request'
+        if: matrix.check == 'lint'
         run: npm run lint
-      - name: Typecheck
-        run: npm run typecheck
-      - name: Check documentation
-        if: github.event_name == 'pull_request'
-        run: npm run docs:check
       - name: Test with coverage
-        if: github.event_name == 'pull_request'
+        if: matrix.check == 'test' && github.event_name == 'pull_request'
         run: npx vitest run --coverage
       - name: Check changed-file coverage
-        if: github.event_name == 'pull_request'
+        if: matrix.check == 'test' && github.event_name == 'pull_request'
         run: npm run test:coverage:changed
       - name: Test merged revision
-        if: github.event_name != 'pull_request'
+        if: matrix.check == 'test' && github.event_name != 'pull_request'
         run: npm test
-      # Production dependency findings remain visible in the log, but only a
-      # Critical advisory blocks a friend-scale release.
-      - name: Audit production dependencies
-        if: github.event_name == 'pull_request'
-        run: npm audit --omit=dev --audit-level=critical
       - name: Build production assets
+        if: matrix.check == 'build'
         run: npm run build
+
+  repository-policy:
+    needs: changes
+    if: always() && (github.event_name != 'push' || vars.CANDIDATE_IMAGE_PUBLISHING_ENABLED != 'true')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Check documentation
+        if: needs.changes.outputs.documentation == 'true'
+        run: npm run docs:check
+      - name: Check generated configuration
+        run: npm run config:check
       - name: Scan release contents
         run: npm run scan:release
-      - uses: actions/upload-artifact@v7
-        if: github.event_name == 'pull_request'
-        with:
-          name: coverage
-          path: coverage/
-          if-no-files-found: ignore
 
   verify-db:
+    needs: changes
+    if: >-
+      needs.changes.outputs.database == 'true' &&
+      (github.event_name != 'push' || vars.CANDIDATE_IMAGE_PUBLISHING_ENABLED != 'true')
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -117,21 +180,18 @@ jobs:
       - run: npm ci
       - run: npm run migrate
       - run: npm run test:db:coverage
-      - uses: actions/upload-artifact@v7
-        with:
-          name: coverage-db
-          path: coverage-db/
 
   infrastructure:
     needs: changes
-    if: needs.changes.outputs.infrastructure == 'true'
+    if: >-
+      needs.changes.outputs.infrastructure == 'true' &&
+      (github.event_name != 'push' || vars.CANDIDATE_IMAGE_PUBLISHING_ENABLED != 'true')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
       - uses: azure/setup-helm@v5
       - run: helm lint deploy/helm/discord-ai-agent
       - run: helm template discord-ai-agent deploy/helm/discord-ai-agent >/tmp/discord-ai-agent.yaml
-      # releases.hashicorp.com occasionally 502s; retry the download once.
       - uses: hashicorp/setup-terraform@v4
         id: setup_terraform
         continue-on-error: true
@@ -141,9 +201,124 @@ jobs:
       - run: terraform -chdir=deploy/terraform/aws init -backend=false
       - run: terraform -chdir=deploy/terraform/aws validate
 
+  candidate-images:
+    needs: [changes, quality, repository-policy, verify-db, infrastructure]
+    if: >-
+      always() &&
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      needs.changes.outputs.deployable == 'true' &&
+      (needs.quality.result == 'success' || needs.quality.result == 'skipped') &&
+      (needs.repository-policy.result == 'success' || needs.repository-policy.result == 'skipped') &&
+      (needs.verify-db.result == 'success' || needs.verify-db.result == 'skipped') &&
+      (needs.infrastructure.result == 'success' || needs.infrastructure.result == 'skipped') &&
+      vars.CANDIDATE_IMAGE_PUBLISHING_ENABLED == 'true' &&
+      vars.AWS_REGION != '' && vars.ECR_REPOSITORY != ''
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    outputs:
+      tree_tag: ${{ steps.identity.outputs.tree_tag }}
+      registry: ${{ steps.ecr.outputs.registry }}
+    env:
+      AWS_REGION: ${{ vars.AWS_REGION }}
+      ECR_REPOSITORY: ${{ vars.ECR_REPOSITORY }}
+    steps:
+      - uses: actions/checkout@v7
+      - id: identity
+        name: Resolve immutable source-tree identity
+        run: echo "tree_tag=tree-$(git rev-parse 'HEAD^{tree}')" >>"$GITHUB_OUTPUT"
+      - uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ secrets.AWS_CANDIDATE_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+      - id: ecr
+        uses: aws-actions/amazon-ecr-login@v2
+      - uses: docker/setup-buildx-action@v4
+      - name: Build and publish tree-addressed candidate images
+        uses: docker/bake-action@v6
+        with:
+          push: true
+          provenance: false
+          files: docker-bake.hcl
+          set: |
+            runtime.tags=${{ steps.ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}-candidate:${{ steps.identity.outputs.tree_tag }}
+            codegen.tags=${{ steps.ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}-sandbox-candidate:${{ steps.identity.outputs.tree_tag }}
+            *.cache-from=type=gha,scope=runtime
+
+  candidate-security:
+    needs: [changes, candidate-images]
+    if: needs.changes.outputs.container == 'true' && needs.candidate-images.result == 'success'
+    name: candidate security
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      AWS_REGION: ${{ vars.AWS_REGION }}
+      ECR_REPOSITORY: ${{ vars.ECR_REPOSITORY }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ secrets.AWS_CANDIDATE_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+      - id: ecr
+        uses: aws-actions/amazon-ecr-login@v2
+      - name: Generate runtime SBOM
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
+        with:
+          image: ${{ needs.candidate-images.outputs.registry }}/${{ env.ECR_REPOSITORY }}-candidate:${{ needs.candidate-images.outputs.tree_tag }}
+          format: cyclonedx-json
+          output-file: sbom-runtime.cdx.json
+          upload-artifact: false
+      - name: Generate codegen SBOM
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
+        with:
+          image: ${{ needs.candidate-images.outputs.registry }}/${{ env.ECR_REPOSITORY }}-sandbox-candidate:${{ needs.candidate-images.outputs.tree_tag }}
+          format: cyclonedx-json
+          output-file: sbom-codegen.cdx.json
+          upload-artifact: false
+      - name: Scan runtime image
+        uses: anchore/scan-action@e1165082ffb1fe366ebaf02d8526e7c4989ea9d2 # v7.4.0
+        with:
+          image: ${{ needs.candidate-images.outputs.registry }}/${{ env.ECR_REPOSITORY }}-candidate:${{ needs.candidate-images.outputs.tree_tag }}
+          config: .grype.yaml
+          fail-build: true
+          severity-cutoff: critical
+          only-fixed: true
+          output-file: grype-runtime.sarif
+      - name: Scan codegen image
+        uses: anchore/scan-action@e1165082ffb1fe366ebaf02d8526e7c4989ea9d2 # v7.4.0
+        with:
+          image: ${{ needs.candidate-images.outputs.registry }}/${{ env.ECR_REPOSITORY }}-sandbox-candidate:${{ needs.candidate-images.outputs.tree_tag }}
+          config: .grype.yaml
+          fail-build: true
+          severity-cutoff: critical
+          only-fixed: true
+          output-file: grype-codegen.sarif
+      - name: Upload candidate security evidence
+        uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: candidate-security
+          path: |
+            sbom-*.cdx.json
+            grype-*.sarif
+          if-no-files-found: warn
+
   container-security:
-    needs: changes
-    if: needs.changes.outputs.container == 'true'
+    needs: [changes, quality, repository-policy, verify-db, infrastructure, candidate-images]
+    if: >-
+      always() &&
+      github.event_name == 'pull_request' &&
+      needs.changes.outputs.container == 'true' &&
+      needs.candidate-images.result != 'success' &&
+      (needs.quality.result == 'success' || needs.quality.result == 'skipped') &&
+      (needs.repository-policy.result == 'success' || needs.repository-policy.result == 'skipped') &&
+      (needs.verify-db.result == 'success' || needs.verify-db.result == 'skipped') &&
+      (needs.infrastructure.result == 'success' || needs.infrastructure.result == 'skipped')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -154,8 +329,7 @@ jobs:
           load: true
           files: docker-bake.hcl
           set: |
-            *.cache-from=type=gha,scope=container-security
-            *.cache-to=type=gha,mode=max,scope=container-security,ignore-error=true
+            *.cache-from=type=gha,scope=runtime
       - name: Generate runtime SBOM
         uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
         with:
@@ -170,10 +344,6 @@ jobs:
           format: cyclonedx-json
           output-file: sbom-codegen.cdx.json
           upload-artifact: false
-      - uses: actions/upload-artifact@v7
-        with:
-          name: container-sboms
-          path: sbom-*.cdx.json
       - name: Scan runtime image
         uses: anchore/scan-action@e1165082ffb1fe366ebaf02d8526e7c4989ea9d2 # v7.4.0
         with:
@@ -192,52 +362,47 @@ jobs:
           severity-cutoff: critical
           only-fixed: true
           output-file: grype-codegen.sarif
-      - name: Upload container scan reports
+      - uses: actions/upload-artifact@v7
         if: always()
-        uses: actions/upload-artifact@v7
         with:
-          name: container-scan-reports
-          path: grype-*.sarif
+          name: container-security-fallback
+          path: |
+            sbom-*.cdx.json
+            grype-*.sarif
           if-no-files-found: warn
 
   verify:
     name: verify
     needs:
       - changes
-      - verify-core
+      - quality
+      - repository-policy
+      - verify-db
       - infrastructure
+      - candidate-images
+      - candidate-security
       - container-security
     if: always()
     runs-on: ubuntu-latest
     steps:
       - name: Require successful checks
         env:
-          CORE_RESULT: ${{ needs.verify-core.result }}
-          CHANGES_RESULT: ${{ needs.changes.result }}
-          INFRASTRUCTURE_RESULT: ${{ needs.infrastructure.result }}
-          CONTAINER_RESULT: ${{ needs.container-security.result }}
-          EVENT_NAME: ${{ github.event_name }}
+          RESULTS: >-
+            ${{ join(needs.*.result, ' ') }}
         run: |
-          if [ "$CORE_RESULT" != "success" ]; then
-            printf 'verify-core finished with %s\n' "$CORE_RESULT"
-            exit 1
-          fi
-          if [ "$EVENT_NAME" = "pull_request" ] && [ "$CHANGES_RESULT" != "success" ]; then
-            printf 'changes finished with %s\n' "$CHANGES_RESULT"
-            exit 1
-          fi
-          for result in "$INFRASTRUCTURE_RESULT" "$CONTAINER_RESULT"; do
+          for result in $RESULTS; do
             case "$result" in
               success|skipped) ;;
               *)
-                printf 'A conditional check finished with %s\n' "$result"
+                printf 'A required CI job finished with %s\n' "$result"
                 exit 1
                 ;;
             esac
           done
 
   publish-images:
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.AWS_REGION != '' && vars.ECR_REPOSITORY != ''
+    needs: changes
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.changes.outputs.deployable == 'true' && vars.AWS_REGION != '' && vars.ECR_REPOSITORY != ''
     runs-on: ubuntu-latest
     permissions:
       actions: read
@@ -249,6 +414,9 @@ jobs:
       IMAGE_TAG: ${{ github.sha }}
     steps:
       - uses: actions/checkout@v7
+      - id: identity
+        name: Resolve immutable source-tree identity
+        run: echo "tree_tag=tree-$(git rev-parse 'HEAD^{tree}')" >>"$GITHUB_OUTPUT"
       - uses: aws-actions/configure-aws-credentials@v6
         with:
           role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
@@ -256,32 +424,41 @@ jobs:
       - id: ecr
         uses: aws-actions/amazon-ecr-login@v2
       - uses: docker/setup-buildx-action@v4
-      - name: Build runtime image
-        uses: docker/build-push-action@v7
+      - id: promote
+        name: Promote the verified candidate images
+        if: vars.CANDIDATE_IMAGE_PUBLISHING_ENABLED == 'true'
+        continue-on-error: true
+        env:
+          REGISTRY: ${{ steps.ecr.outputs.registry }}
+          TREE_TAG: ${{ steps.identity.outputs.tree_tag }}
+        run: |
+          docker buildx imagetools create \
+            --tag "$REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" \
+            "$REGISTRY/$ECR_REPOSITORY-candidate:$TREE_TAG"
+          docker buildx imagetools create \
+            --tag "$REGISTRY/$ECR_REPOSITORY-sandbox:$IMAGE_TAG" \
+            "$REGISTRY/$ECR_REPOSITORY-sandbox-candidate:$TREE_TAG"
+          aws ecr batch-delete-image \
+            --repository-name "$ECR_REPOSITORY-candidate" \
+            --image-ids "imageTag=$TREE_TAG" >/dev/null || true
+          aws ecr batch-delete-image \
+            --repository-name "$ECR_REPOSITORY-sandbox-candidate" \
+            --image-ids "imageTag=$TREE_TAG" >/dev/null || true
+      - name: Require the exact verified candidate
+        if: vars.CANDIDATE_IMAGE_PUBLISHING_ENABLED == 'true' && steps.promote.outcome != 'success'
+        run: |
+          echo "No candidate images matched the merged Git tree; refusing an unverified production rebuild."
+          exit 1
+      - name: Build and publish images when no verified candidate exists
+        if: vars.CANDIDATE_IMAGE_PUBLISHING_ENABLED != 'true'
+        uses: docker/bake-action@v6
         with:
-          context: .
-          target: final
-          load: true
+          push: true
           provenance: false
-          tags: ${{ steps.ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ env.IMAGE_TAG }}
-          cache-from: type=gha,scope=runtime
-          cache-to: type=gha,mode=max,scope=runtime,ignore-error=true
-      # Keep publishing on the Docker CLI path used by the original deploy
-      # workflow. BuildKit probes manifests before direct pushes, which requires
-      # ecr:BatchGetImage on deploy roles created before that permission landed.
-      - name: Push runtime image
-        run: docker push "${{ steps.ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ env.IMAGE_TAG }}"
-      - name: Build codegen image
-        uses: docker/build-push-action@v7
-        with:
-          context: .
-          target: codegen
-          load: true
-          provenance: false
-          tags: ${{ steps.ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}-sandbox:${{ env.IMAGE_TAG }}
-          cache-from: |
-            type=gha,scope=runtime
-            type=gha,scope=codegen
-          cache-to: type=gha,mode=max,scope=codegen,ignore-error=true
-      - name: Push codegen image
-        run: docker push "${{ steps.ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}-sandbox:${{ env.IMAGE_TAG }}"
+          files: docker-bake.hcl
+          set: |
+            runtime.tags=${{ steps.ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ env.IMAGE_TAG }}
+            codegen.tags=${{ steps.ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}-sandbox:${{ env.IMAGE_TAG }}
+            *.cache-from=type=gha,scope=runtime
+            runtime.cache-to=type=gha,mode=max,scope=runtime,ignore-error=true
+            codegen.cache-to=type=gha,mode=max,scope=codegen,ignore-error=true

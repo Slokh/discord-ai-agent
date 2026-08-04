@@ -24,8 +24,6 @@ export const environmentVariables = [
   { name: "GITHUB_APP_PRIVATE_KEY", group: "github", description: "GitHub App private key.", requiredFor: "code updates (App mode)", secret: true, operator: true },
   { name: "GITHUB_APP_INSTALLATION_ID", group: "github", description: "GitHub App installation ID.", requiredFor: "code updates (App mode)", operator: true },
 
-  { name: "CONTROL_UI_AUTH_PASSWORD", group: "access", description: "Password protecting the run console and metrics endpoint.", requiredFor: "public control API", secret: true, operator: true },
-  { name: "CONTROL_UI_PUBLIC_URL", group: "access", description: "Externally routed HTTPS URL for task/run links.", requiredFor: "public control API", example: "https://tasks.example.com", operator: true },
   { name: "BOT_OWNER_USER_ID", group: "access", description: "Discord user ID with owner authority.", requiredFor: "owner-only mutations", operator: true },
   { name: "OPS_ALLOWLIST_USER_IDS", group: "access", description: "Comma-separated Discord user IDs with operations authority.", requiredFor: "restricted operations", operator: true },
   { name: "DISCORD_PREMIUM_SKU_IDS", group: "access", description: "Comma-separated configured Discord premium SKU IDs.", requiredFor: "premium buttons", operator: true },

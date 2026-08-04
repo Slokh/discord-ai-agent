@@ -1,18 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { agentTaskRunConsoleUrl, renderAgentTaskMessage } from "../../src/discord/taskNotifications.js";
-import type { AppConfig } from "../../src/config/env.js";
+import { renderAgentTaskMessage } from "../../src/discord/taskNotifications.js";
 import type { AgentTaskRecord, TaskEvent } from "../../src/db/repositories.js";
 
 describe("agent task Discord notifications", () => {
-  it("includes the run console link when a public control UI URL is configured", () => {
-    const task = agentTask({ status: "running", taskId: "task/with space" });
-    const config = { controlUi: { publicUrl: "https://agent.example" } } as AppConfig;
-    const url = agentTaskRunConsoleUrl(config, task.taskId);
-
-    expect(url).toBe("https://agent.example/runs/task%2Fwith%20space");
-    expect(renderAgentTaskMessage(task, undefined, undefined, { runConsoleUrl: url }).content).toContain(`Run console: ${url}`);
-  });
-
   it("renders a concise live status message while a task is running", () => {
     const task = agentTask({ status: "running", statusMessage: "Preparing the sandbox." });
 
@@ -80,12 +70,6 @@ describe("agent task Discord notifications", () => {
     );
   });
 
-  it("omits the run console line when no public control UI URL is configured", () => {
-    const task = agentTask({ status: "queued" });
-
-    expect(agentTaskRunConsoleUrl({ controlUi: { publicUrl: null } } as AppConfig, task.taskId)).toBeNull();
-    expect(renderAgentTaskMessage(task).content).not.toContain("Run console:");
-  });
 });
 
 function agentTask(overrides: Partial<AgentTaskRecord> = {}): AgentTaskRecord {

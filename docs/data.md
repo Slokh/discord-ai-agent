@@ -79,7 +79,7 @@ The `agent_runtime_*` tables explain both chat and code-update attempts:
 - artifacts and chunks store replay inputs, redacted model I/O, snapshots, files, and larger diagnostics;
 - task-linked executions record isolated code-update lifecycle and outcomes.
 
-Chat does not create a parallel process-run record. Code-update task rows are projections linked to the task runtime execution. The console and CLI inspectors normalize these sources for display without creating another history.
+Chat does not create a parallel process-run record. Code-update task rows are projections linked to the task runtime execution, which is also the sole artifact store for sandbox callbacks. Generic background jobs may use `process_runs`; code updates do not.
 
 Artifacts have explicit content type, size, checksum, sensitivity, and retention behavior. Binary delivery artifacts are stored once and referenced by the delivery manifest.
 
@@ -111,7 +111,7 @@ Run feedback stores reviewer rating, failure classification, expected behavior, 
 
 Frog's production namespace stores unresolved normal-reply friction as serialized entries plus deduplicated occurrence counts. The application stores only a generalized title/body, severity, category, affected capability, deployed revision, and canonical runtime identifiers. Operators use `npm run frog:agent -- list` and `npm run frog:agent -- resolve <id>` in the intended database environment. The repository-local Frog file store is a separate development context; production entries are never copied there or synchronized to public issue trackers.
 
-Confirmed automated bug validation may attach the same bounded regression contract: one supported failure class, an observable expected behavior, and at least one expected/forbidden tool or required/forbidden answer fragment. The control plane revalidates tool names and bounds before updating the original private feedback row. Cases without a machine-checkable assertion remain human-review candidates instead of becoming misleading automated tests. Revision-quality reports count good/bad classifications by revision without exporting the underlying prompt or note.
+Confirmed automated bug validation may attach the same bounded regression contract: one supported failure class, an observable expected behavior, and at least one expected/forbidden tool or required/forbidden answer fragment. The signed sandbox callback receiver revalidates tool names and bounds before updating the original private feedback row. Cases without a machine-checkable assertion remain human-review candidates instead of becoming misleading automated tests. Revision-quality reports count good/bad classifications by revision without exporting the underlying prompt or note.
 
 Bug-report deployment processing durably records the deployed revision, contextual update message, and whether retrying the original prompt succeeded or failed. The authenticated operator projection is deliberately content-free and requester-keyed; current message content remains available only through the normal Discord permission-filtered tool path. A separate content-free deployment verification row keys promotion by revision and unique rollout ID only after post-deploy gates pass, preventing startup-time bug retries and announcements from racing verification, rollback, or a repeated rollout of the same commit.
 

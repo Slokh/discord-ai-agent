@@ -18,7 +18,7 @@ Then open only the guide that owns the change:
 | Discord history, retrieval, memory, database, privacy, retention | [Data](data.md) |
 | Wallets, transfers, wagers, games, randomness | [Payments and games](payments.md) |
 | Code-update tasks, sandboxes, GitHub publication | [Code updates](code-updates.md) |
-| Local setup, deployment, console, production debugging | [Operations](operations.md) |
+| Local setup, deployment, sandbox callbacks, production debugging | [Operations](operations.md) |
 | Accepted environment variables and their ownership | [Configuration](configuration.md) |
 
 ## Guide contracts

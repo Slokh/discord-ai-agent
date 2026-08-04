@@ -24,7 +24,7 @@ export function loadSandboxEnv(): SandboxEnv {
     targetBranch: optionalEnv("TARGET_BRANCH"),
     targetPullRequestNumber: numberEnv("TARGET_PULL_REQUEST_NUMBER"),
     targetPullRequestUrl: optionalEnv("TARGET_PULL_REQUEST_URL"),
-    controlPlaneInternalUrl: argumentValue("--control-url") ?? productConfig.control.internalUrl,
+    callbackServerUrl: argumentValue("--callback-url") ?? productConfig.callback.internalUrl,
     taskToken: requiredEnv("AGENT_TASK_TOKEN"),
     taskCallbackSecret: requiredEnv("AGENT_TASK_CALLBACK_SECRET"),
     githubToken: requiredEnv("GITHUB_TOKEN"),

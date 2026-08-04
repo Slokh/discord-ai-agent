@@ -37,7 +37,7 @@ const expectedFamilyTools = {
     "summarizeDiscordHistory", "searchDiscordHistory",
   ],
   ops: [
-    "reportStatus", "setAgentModel", "inspectAgentLogs",
+    "reportStatus", "setAgentModel",
     "getDeploymentStatus", "getSpendSummary",
   ],
   friction: ["reportAgentFriction"],

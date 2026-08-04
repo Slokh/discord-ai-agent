@@ -275,7 +275,7 @@
     {
       "id": "codegen-self-update-skipped",
       "category": "codegen",
-      "prompt": "update yourself to make the run console show active codegen progress more clearly",
+      "prompt": "update yourself to make active codegen progress messages clearer",
       "expectedTools": [
         "runCodingAgent"
       ],

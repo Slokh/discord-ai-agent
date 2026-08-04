@@ -197,7 +197,7 @@ async function verifySandboxCallback(database: ReturnType<typeof createPool>) {
           CANARY_SANDBOX_RUN_ID: sandboxRunId,
           CANARY_TASK_TOKEN: token,
           CANARY_SIGNING_SECRET: callbackSecret,
-          CANARY_CALLBACK_URL: productConfig.control.internalUrl,
+          CANARY_CALLBACK_URL: productConfig.callback.internalUrl,
         },
       },
     });
@@ -246,7 +246,6 @@ async function verifySandboxCallback(database: ReturnType<typeof createPool>) {
     await core.deleteNamespacedSecret({ namespace, name: secretName }).catch((error: unknown) => {
       if (kubernetesStatus(error) !== 404) throw error;
     });
-    await database.query("DELETE FROM process_runs WHERE run_id = $1", [taskId]);
     await database.query("DELETE FROM agent_tasks WHERE task_id = $1", [taskId]);
   }
 }

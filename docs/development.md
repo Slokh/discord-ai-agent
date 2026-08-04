@@ -35,13 +35,13 @@ Map the observed failure to one owner before editing:
 
 | Observation | Start with |
 | --- | --- |
-| Wrong/missing Discord reply | `npm run discord:debug -- <link>`, then Discord ingress, agent execution, and delivery evidence |
-| Broad post-deploy regression | `npm run discord:audit -- --channel <id> --since-deploy --include-reply-chains` |
+| Wrong/missing Discord reply | Canonical production ledger evidence for ingress, agent execution, and delivery |
+| Broad post-deploy regression | Production ledger evidence grouped by deployed revision |
 | Wrong tool or response behavior | [Agent system](agent-system.md), contract, handler, prompt artifact, and closest test |
 | Missing/stale Discord knowledge | [Data](data.md), persistence/indexing/retrieval before prompt text |
 | Wallet, wager, or random result | [Payments and games](payments.md), durable ledger and provider/RNG evidence |
 | Code-update/PR/CI problem | [Code updates](code-updates.md), exact task or CI logs |
-| Deployment or console problem | [Operations](operations.md), deployed revision and typed events |
+| Deployment or sandbox-callback problem | [Operations](operations.md), deployed revision and typed events |
 
 Follow the full lifecycle for cross-domain work: ingress, authority, durable state, model/tool contract, external side effect, delivery, observability, recovery, and verification.
 
@@ -137,7 +137,7 @@ npm run eval -- --include-private
 npm run eval:regressions
 ```
 
-Dry-run validates every registered eval definition without provider calls. Live evals use configured model/database capabilities and may incur cost. `eval:regressions` exports reviewed, capture-enabled run feedback into the private eval directory and runs the complete private suite. A captured case without a machine-grade assertion is skipped until a reviewer adds expected/forbidden tools or required/forbidden answer text in the run console. Keep assertions about observable behavior; do not encode one server member, channel, message link, or private prompt in committed evals.
+Dry-run validates every registered eval definition without provider calls. Live evals use configured model/database capabilities and may incur cost. `eval:regressions` exports reviewed, capture-enabled run feedback into the private eval directory and runs the complete private suite. A captured case without a machine-grade assertion is skipped until a reviewer adds expected/forbidden tools or required/forbidden answer text in the private eval definition. Keep assertions about observable behavior; do not encode one server member, channel, message link, or private prompt in committed evals.
 
 Use an eval failure to choose the correct owner: tool selection, schema, result quality, retrieval, prompt context, code-update context, or lifecycle. Do not make the eval pass with an exact-phrase branch.
 

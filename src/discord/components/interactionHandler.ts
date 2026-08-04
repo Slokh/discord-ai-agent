@@ -1,5 +1,5 @@
 import { type Client, type Interaction, type Message } from "discord.js";
-import { enqueueAgentRuntimeSessionExecution } from "../../agent/runtimeControlPlane.js";
+import { enqueueAgentRuntimeSessionExecution } from "../../agent/runtimeLifecycle.js";
 import type { AgentRuntimeTurnEnvelope } from "../../agent/runtimeEnvelope.js";
 import { ensureAgentRuntimePromptExecution } from "../../agent/runtimeLedger.js";
 import { durationMs, logger } from "../../util/logger.js";

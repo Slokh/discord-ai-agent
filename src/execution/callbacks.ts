@@ -21,7 +21,7 @@ export async function complete(env: SandboxEnv, body: Record<string, unknown>) {
 export async function postJson(env: SandboxEnv, pathName: string, body: Record<string, unknown>) {
   const rawBody = JSON.stringify(body);
   const timestamp = String(Date.now());
-  const response = await fetch(`${env.controlPlaneInternalUrl}${pathName}`, {
+  const response = await fetch(`${env.callbackServerUrl}${pathName}`, {
     method: "POST",
     headers: {
       "content-type": "application/json",
@@ -32,7 +32,7 @@ export async function postJson(env: SandboxEnv, pathName: string, body: Record<s
     body: rawBody
   });
   if (!response.ok) {
-    throw new Error(`Control-plane callback failed (${response.status}): ${await response.text()}`);
+    throw new Error(`Sandbox callback failed (${response.status}): ${await response.text()}`);
   }
 }
 
@@ -51,7 +51,7 @@ export async function recordCommand(
   if (!env) return;
   await postJson(env, `/internal/tasks/${encodeURIComponent(env.taskId)}/commands`, {
     ...body,
-    sandboxRunId: env.sandboxRunId
+    metadata: { ...(body.metadata ?? {}), sandboxRunId: env.sandboxRunId }
   }).catch((error) => {
     console.error("Failed to post sandbox command event", error);
   });

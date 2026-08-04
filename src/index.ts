@@ -1,6 +1,6 @@
 import { Client, GatewayIntentBits, Partials } from "discord.js";
 import { assertDiscordConfig, assertExecutionConfig, assertOpenRouterConfig, assertPaymentConfig, assertTaskCallbackConfig, loadConfig } from "./config/env.js";
-import { startInternalApi } from "./control/internalApiServer.js";
+import { startSandboxCallbackServer } from "./execution/callbackServer.js";
 import { runMigrations } from "./db/migrate.js";
 import { createExecutionBackend } from "./execution/backend.js";
 import { startSandboxReconciler } from "./execution/reconciler.js";
@@ -82,7 +82,6 @@ async function main() {
     agentRuntime: agentRuntimeRepo,
     budget: budgetRepo,
     rng: rngRepo,
-    payments: paymentRepo,
     deliveryObligations: deliveryObligationsRepo,
     openRouter,
     wallet: walletService,
@@ -156,7 +155,7 @@ async function main() {
     { startsApi, startsBot, startsWorker, startsCrawlWorker, startsEmbeddingWorker, startsTaskWorker, startsAgentRuntimeWorker },
     "Job runtime ready"
   );
-  const internalApi = startsApi ? await startInternalApi({ config, repo, agentRuntimeRepo, paymentRepo, db: pool, jobs }) : null;
+  const callbackServer = startsApi ? await startSandboxCallbackServer({ config, repo, agentRuntime: agentRuntimeRepo }) : null;
   const staleRunReconciler = startsApi
     ? startStaleRunReconciler({
         repo,
@@ -181,7 +180,7 @@ async function main() {
     sandboxReconciler?.stop();
     staleRunReconciler?.stop();
     paymentReconciler?.stop();
-    await internalApi?.close().catch(() => undefined);
+    await callbackServer?.close().catch(() => undefined);
     await jobs.stop().catch(() => undefined);
     runtime?.destroy();
     if (!runtime) client?.destroy();
@@ -200,7 +199,7 @@ async function main() {
     await client.login(config.discord.token);
     logger.info("Discord AI Agent worker is online");
   } else if (startsApi) {
-    logger.info("Discord AI Agent internal API is online");
+    logger.info("Discord AI Agent sandbox callback server is online");
   } else {
     logger.info("Discord AI Agent process is online");
   }

@@ -31,26 +31,6 @@ export async function writeSandboxToolShims(
       "done",
       "",
     ].join("\n"),
-    "agent-progress": [
-      "#!/bin/sh",
-      "set -eu",
-      "step=${1:-codegen_note}",
-      "if [ \"$#\" -gt 0 ]; then shift; fi",
-      "message=${*:-Coding agent reported progress.}",
-      "node -e '",
-      "const [step, message] = process.argv.slice(1);",
-      "const taskId = process.env.TASK_ID;",
-      "const token = process.env.AGENT_TASK_TOKEN;",
-      `const baseUrl = ${JSON.stringify(env.controlPlaneInternalUrl.replace(/\/$/, ""))};`,
-      "if (!taskId || !token || !baseUrl) { console.error(\"Missing task callback environment.\"); process.exit(1); }",
-      "const url = `${baseUrl}/internal/tasks/${encodeURIComponent(taskId)}/events`;",
-      "const body = JSON.stringify({ step, message, metadata: { source: \"agent-progress\" } });",
-      "fetch(url, { method: \"POST\", headers: { \"content-type\": \"application/json\", authorization: `Bearer ${token}` }, body })",
-      "  .then(async (response) => { if (!response.ok) throw new Error(`${response.status}: ${await response.text()}`); })",
-      "  .catch((error) => { console.error(error); process.exit(1); });",
-      "' \"$step\" \"$message\"",
-      "",
-    ].join("\n"),
   };
   await Promise.all(
     Object.entries(shims).map(async ([name, content]) => {

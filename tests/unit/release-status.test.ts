@@ -45,7 +45,6 @@ describe("release status", () => {
       if (command === "gh" && args[0] === "pr") return { ok: true as const, stdout: JSON.stringify({ number: 343, statusCheckRollup: [{ conclusion: "SUCCESS" }] }) };
       if (command === "gh") return { ok: true as const, stdout: JSON.stringify([{ conclusion: "success", headSha: "revision-a", createdAt: "2026-08-03T00:00:00Z" }]) };
       if (args.includes("deployments,pods")) return { ok: true as const, stdout: JSON.stringify(kubernetesPayload) };
-      if (args.includes("agentTaskStatus.js")) return { ok: true as const, stdout: JSON.stringify({ activeAgentExecutions: [], activeTasks: [], activeSandboxRuns: [], pendingSandboxCleanup: [] }) };
       return { ok: true as const, stdout: JSON.stringify({ assessment: { status: "pass" } }) };
     };
     const status = collectReleaseStatus({ runner });
@@ -67,7 +66,6 @@ describe("release status", () => {
       if (command === "helm") return { ok: true as const, stdout: JSON.stringify({ info: { status: "deployed" } }) };
       if (command === "gh") return { ok: true as const, stdout: "[]" };
       if (args.includes("deployments,pods")) return { ok: true as const, stdout: JSON.stringify(kubernetesPayload) };
-      if (args.includes("agentTaskStatus.js")) return { ok: true as const, stdout: JSON.stringify({ activeAgentExecutions: [], activeTasks: [], activeSandboxRuns: [], pendingSandboxCleanup: [] }) };
       return { ok: true as const, stdout: JSON.stringify({ assessment: { status: "awaiting_traffic" } }) };
     };
     const status = collectReleaseStatus({ runner });

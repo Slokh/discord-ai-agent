@@ -2,7 +2,7 @@ import type { Client, Message } from "discord.js";
 import { embeddingPriorityForMessageTimestamp } from "../jobs/embeddingPriority.js";
 import type { JobRuntime } from "../jobs/queue.js";
 import { ensureAgentRuntimePromptExecution, finishAgentRuntimePromptExecution } from "../agent/runtimeLedger.js";
-import { enqueueAgentRuntimeSessionExecution } from "../agent/runtimeControlPlane.js";
+import { enqueueAgentRuntimeSessionExecution } from "../agent/runtimeLifecycle.js";
 import { durationMs, logger, previewText } from "../util/logger.js";
 import { persistDiscordMessage } from "./messagePersistence.js";
 import { DiscordResponseSink } from "./responseSink.js";
@@ -18,7 +18,6 @@ import {
 import { discordAttachmentContextsFromMessage, discordForwardedMessageSnapshot, isDiscordImageAttachment } from "./replyContext.js";
 import { prepareDiscordAgentTurn } from "./turnPreparation.js";
 import {
-  discordTraceFooter,
   markDiscordDeliveryDelivered,
   recordTraceEvent,
   type DiscordAgentRequestInput
@@ -180,7 +179,7 @@ export async function handleMessageCreate(
   });
   if (!agentRuntimeExecution) {
     const errorContent = "I hit an error: could not create the agent runtime ledger for this turn.";
-    await responseSink.sendError(errorContent, discordTraceFooter(input.config, requestId, messageStartedAt));
+    await responseSink.sendError(errorContent);
     return;
   }
   await responseSink.acknowledge();
@@ -264,7 +263,7 @@ export async function handleMessageCreate(
         })
         .catch((deleteError) => requestLogger.warn({ err: deleteError }, "Failed to remove failed queued user turn from channel memory"));
       const errorContent = `I hit an error: ${error instanceof Error ? error.message : String(error)}`;
-      const finalReply = (await responseSink.sendError(errorContent, discordTraceFooter(input.config, requestId, messageStartedAt))).message;
+      const finalReply = (await responseSink.sendError(errorContent)).message;
       await markDiscordDeliveryDelivered(input, agentRuntimeExecution.executionId, finalReply, requestLogger);
       await finishAgentRuntimePromptExecution({
         agentRuntime: input.agentRuntime,

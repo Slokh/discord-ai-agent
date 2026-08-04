@@ -29,7 +29,6 @@ const CODEGEN_TOOL_NAME_ANCHORS = new Set([
   "retryAgentTask",
   "cancelAgentTask",
   "getDeploymentStatus",
-  "inspectAgentLogs",
   "undoConversationTurns",
   "reportStatus"
 ]);

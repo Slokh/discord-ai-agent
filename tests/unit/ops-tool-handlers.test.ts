@@ -4,7 +4,6 @@ import type { ToolContext } from "../../src/tools/types.js";
 
 const mocks = vi.hoisted(() => ({
   getDeploymentStatus: vi.fn(),
-  inspectAgentLogs: vi.fn(),
   reportStatus: vi.fn(),
   setAgentModel: vi.fn(),
   getSpendSummary: vi.fn(),
@@ -17,7 +16,6 @@ vi.mock("../../src/tools/agentModelTools.js", () => ({
   setAgentModel: mocks.setAgentModel,
 }));
 vi.mock("../../src/tools/discordOpsTools.js", () => ({
-  inspectAgentLogs: mocks.inspectAgentLogs,
   reportStatus: mocks.reportStatus,
 }));
 vi.mock("../../src/tools/spendTools.js", () => ({
@@ -32,7 +30,6 @@ describe("opsToolHandlers", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.getDeploymentStatus.mockResolvedValue(" deployment status ");
-    mocks.inspectAgentLogs.mockResolvedValue(" agent logs ");
     mocks.reportStatus.mockResolvedValue(" report status ");
     mocks.setAgentModel.mockResolvedValue({ content: " model updated ", status: "ok", outcome: { kind: "agent_model", state: "succeeded", terminal: true } });
     mocks.getSpendSummary.mockResolvedValue(" spend summary ");
@@ -57,28 +54,6 @@ describe("opsToolHandlers", () => {
     expect(mocks.setAgentModel).toHaveBeenCalledWith(ctx, {
       action: "set",
       model: "moonshotai/kimi-k3",
-    });
-  });
-
-  it("routes detailed and summary log inspection", async () => {
-    await opsToolHandlers.inspectAgentLogs(ctx, route("inspectAgentLogs", {
-      traceId: " trace-1 ",
-      limit: "10",
-      detail: "model_io",
-    }), "inspect logs");
-    expect(mocks.inspectAgentLogs).toHaveBeenLastCalledWith(ctx, {
-      traceId: "trace-1",
-      limit: 10,
-      detail: "model_io",
-    });
-
-    await expect(opsToolHandlers.inspectAgentLogs(ctx, route("inspectAgentLogs", {
-      detail: "unexpected",
-    }), "inspect logs")).resolves.toEqual({ content: "agent logs" });
-    expect(mocks.inspectAgentLogs).toHaveBeenLastCalledWith(ctx, {
-      traceId: undefined,
-      limit: undefined,
-      detail: "summary",
     });
   });
 

@@ -1,5 +1,4 @@
 import type { DbPool } from "./pool.js";
-import * as processRunRepository from "./processRunRepository.js";
 import { queuedAgentTaskStatusMessage, removeUndefinedValues } from "./shared.js";
 
 export async function upsertAgentTaskQueued(pool: DbPool, input: {
@@ -71,30 +70,6 @@ export async function upsertAgentTaskQueued(pool: DbPool, input: {
         statusMessage
       ]
     );
-    await processRunRepository.upsertProcessRun(pool, {
-      runId: input.taskId,
-      traceId: input.traceId,
-      kind: "codegen",
-      status: "queued",
-      title: input.title,
-      summary: statusMessage,
-      guildId: input.guildId,
-      channelId: input.channelId,
-      userId: input.userId,
-      requester: input.requestedBy,
-      source: "agent_task",
-      metadata: {
-        taskType: input.taskType,
-        request: input.request,
-        threadKey: input.threadKey,
-        retriedFromTaskId: input.retriedFromTaskId,
-        parentAgentSessionId: input.parentAgentSessionId,
-        parentAgentExecutionId: input.parentAgentExecutionId,
-        parentAgentThreadKey: input.parentAgentThreadKey,
-        discordResponseChannelId: input.discordResponseChannelId,
-        discordResponseMessageId: input.discordResponseMessageId
-      }
-    }).catch(() => undefined);
   }
 
 export async function attachAgentTasksToDiscordResponse(pool: DbPool, input: { traceId: string; channelId: string; messageId: string }): Promise<number> {
@@ -187,12 +162,6 @@ export async function markAgentTaskRunning(pool: DbPool, input: {
         ]
       )
       .catch(() => undefined);
-    await processRunRepository.updateProcessRun(pool, {
-      runId: input.taskId,
-      status: "running",
-      summary: input.statusMessage ?? "Running agent task.",
-      metadata: removeUndefinedValues(executionMetadata)
-    }).catch(() => undefined);
   }
 
 export async function markAgentTaskProgress(pool: DbPool, input: {
@@ -258,18 +227,6 @@ export async function markAgentTaskProgress(pool: DbPool, input: {
         [input.taskId, input.step, input.statusMessage, JSON.stringify(input.metadata ?? {})]
       )
       .catch(() => undefined);
-    await processRunRepository.updateProcessRun(pool, {
-      runId: input.taskId,
-      status: "running",
-      summary: input.statusMessage,
-      metadata: { backend: input.backend ?? undefined, currentStep: input.step }
-    }).catch(() => undefined);
-    await processRunRepository.recordProcessRunEvent(pool, {
-      runId: input.taskId,
-      eventName: "task.progress",
-      summary: input.statusMessage,
-      metadata: { step: input.step, ...(input.metadata ?? {}) }
-    }).catch(() => undefined);
   }
 
 export async function recordSandboxRun(pool: DbPool, input: {
@@ -390,13 +347,6 @@ export async function markAgentTaskSucceeded(pool: DbPool, input: {
       `,
       [input.taskId, input.branchName, input.prUrl, input.draft, input.verifyPassed, JSON.stringify(input.metadata ?? {})]
     );
-    await processRunRepository.updateProcessRun(pool, {
-      runId: input.taskId,
-      status: "succeeded",
-      summary: "Opened pull request.",
-      links: { pullRequest: input.prUrl, branch: input.branchName },
-      metadata: { draft: input.draft, verifyPassed: input.verifyPassed, ...(input.metadata ?? {}) }
-    }).catch(() => undefined);
     await pool
       .query(
         `
@@ -472,12 +422,6 @@ export async function markAgentTaskFailed(pool: DbPool, input: {
       `,
       [input.taskId, input.status ?? "failed", input.error, JSON.stringify(input.metadata ?? {})]
     );
-    await processRunRepository.updateProcessRun(pool, {
-      runId: input.taskId,
-      status: input.status ?? "failed",
-      summary: input.error,
-      metadata: { error: input.error, ...(input.metadata ?? {}) }
-    }).catch(() => undefined);
     await pool
       .query(
         `

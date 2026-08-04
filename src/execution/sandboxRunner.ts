@@ -10,7 +10,7 @@
  * - `dependencyCache.ts`: install/restore/manifest dependency cache.
  * - `contextPack.ts`: codegen request context building.
  * - `harness/nanocodex.ts`: native NanoCodex workspace execution and typed progress projection.
- * - `callbacks.ts` + `commands.ts`: control-plane callbacks and command runs.
+ * - `callbacks.ts` + `commands.ts`: signed sandbox callbacks and command runs.
  */
 import { main } from "./runnerPipeline.js";
 

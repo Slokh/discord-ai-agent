@@ -288,7 +288,6 @@ export async function requestUserDeletion(pool: DbPool, userId: string) {
       [userId],
     );
     await pool.query("DELETE FROM agent_runtime_sessions WHERE user_id = $1 OR requested_by = $1", [userId]);
-    await pool.query("DELETE FROM process_runs WHERE user_id = $1 OR requester = $1", [userId]);
     await pool.query("DELETE FROM agent_tasks WHERE user_id = $1 OR requested_by = $1", [userId]);
     await pool.query(
       `DELETE FROM conversation_sessions session
@@ -360,16 +359,6 @@ export async function requestUserDeletion(pool: DbPool, userId: string) {
           arguments_summary = NULL,
           result_summary = NULL,
           error = NULL
-        WHERE user_id = $1
-      `,
-      [userId]
-    );
-    await pool.query(
-      `
-        UPDATE trace_events
-        SET user_id = NULL,
-          summary = NULL,
-          metadata = '{}'::jsonb
         WHERE user_id = $1
       `,
       [userId]

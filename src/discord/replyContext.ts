@@ -4,7 +4,6 @@ import type { DiscordAiAgentRepository } from "../db/repositories.js";
 import type { DiscordAttachmentContext, DiscordReplyContext, DiscordReplyContextMessage } from "../tools/types.js";
 import { previewText } from "../util/logger.js";
 import { persistDiscordMessage, reactionSummariesFromMessage } from "./messagePersistence.js";
-import { recordTraceEvent } from "./requestContext.js";
 import { classifyDiscordWriteError } from "./api.js";
 
 export const REPLY_CHAIN_CONTEXT_MESSAGE_LIMIT = 24;
@@ -38,12 +37,6 @@ export async function resolveDiscordReplyContext(input: {
         { referencedMessageId: reference.messageId, referencedChannelId, depth },
         "Skipping Discord reply context because requester cannot view a referenced channel"
       );
-      await recordTraceEvent(input.repo, {
-        eventName: "discord.reply_context.skipped",
-        level: "warn",
-        summary: "Referenced channel is not visible to requester",
-        metadata: { referencedMessageId: reference.messageId, referencedChannelId, depth }
-      });
       break;
     }
 
@@ -58,12 +51,6 @@ export async function resolveDiscordReplyContext(input: {
         { err: error, referencedMessageId: reference.messageId, referencedChannelId, depth },
         expectedUnavailable ? "Discord reply chain parent is no longer available" : "Failed to fetch Discord reply chain parent"
       );
-      await recordTraceEvent(input.repo, {
-        eventName: expectedUnavailable ? "discord.reply_context.unavailable" : "discord.reply_context.fetch_failed",
-        level: expectedUnavailable ? "info" : "warn",
-        summary: expectedUnavailable ? "Referenced Discord message is no longer available" : error instanceof Error ? error.message : String(error),
-        metadata: { referencedMessageId: reference.messageId, referencedChannelId, depth }
-      });
       break;
     }
 
@@ -111,19 +98,6 @@ export async function resolveDiscordReplyContext(input: {
     },
     "Resolved Discord reply chain context"
   );
-  await recordTraceEvent(input.repo, {
-    eventName: "discord.reply_context.resolved",
-    summary: previewText(context.content) || "Resolved Discord reply chain",
-    metadata: {
-      referencedMessageId: context.messageId,
-      rootMessageId,
-      replyChainLength: chain.length,
-      referencedChannelId: context.channelId,
-      referencedAuthorId: context.authorId,
-      attachmentCount: context.attachmentSummaries.length,
-      reactionKindCount: chain.reduce((count, message) => count + (message.reactionSummaries?.length ?? 0), 0)
-    }
-  });
   return context;
 }
 

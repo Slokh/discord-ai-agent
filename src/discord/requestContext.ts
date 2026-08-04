@@ -11,7 +11,6 @@ import type { JobRuntime } from "../jobs/queue.js";
 import type { AgentRuntimePromptExecutor } from "../agent/runtimeExecutor.js";
 import type { AgentRuntimeTurnEnvelope } from "../agent/runtimeEnvelope.js";
 import type { AgentPromptExecutionRef } from "../agent/runtimeLedger.js";
-import { logger } from "../util/logger.js";
 import type { TraceContext } from "../util/trace.js";
 import type { WalletService } from "../payments/walletService.js";
 
@@ -67,17 +66,6 @@ export function discordMessageTraceContext(
   };
 }
 
-export async function recordTraceEvent(
-  repo: DiscordAiAgentRepository,
-  input: Parameters<DiscordAiAgentRepository["recordTraceEvent"]>[0]
-) {
-  const recorder = (repo as unknown as { recordTraceEvent?: (event: typeof input) => Promise<void> }).recordTraceEvent;
-  if (!recorder) return;
-  await recorder.call(repo, input).catch((error) => {
-    logger.warn({ err: error, eventName: input.eventName }, "Failed to record trace event");
-  });
-}
-
 export async function markDiscordDeliveryDelivered(
   input: DiscordAgentRequestInput,
   executionId: string,
@@ -110,15 +98,6 @@ export async function attachPromptTasksToDiscordReply(
     });
   if (attachedTasks <= 0) return;
   requestLogger.info({ traceId, replyMessageId: finalReply.id, attachedTasks }, "Attached prompt agent tasks to Discord reply");
-  await recordTraceEvent(input.repo, {
-    eventName: "agent.tasks.attached_to_reply",
-    summary: `Attached ${attachedTasks} agent task${attachedTasks === 1 ? "" : "s"} to the Discord reply`,
-    metadata: {
-      replyMessageId: finalReply.id,
-      replyUrl: finalReply.url,
-      attachedTasks
-    }
-  });
 }
 
 export async function recordAgentRuntimeSpan(input: {
@@ -205,10 +184,6 @@ export async function fetchDiscordMessage(client: Client, channelId: string, mes
   const messages = (channel as any)?.messages;
   if (!messages?.fetch) throw new Error(`Discord channel ${channelId} cannot fetch messages.`);
   return (await messages.fetch(messageId)) as Message;
-}
-
-export function isTerminalProcessRunStatus(status: string) {
-  return status === "succeeded" || status === "failed" || status === "no_changes" || status === "cancelled";
 }
 
 export function parseDateMs(value: string | undefined) {

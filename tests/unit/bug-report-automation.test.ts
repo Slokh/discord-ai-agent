@@ -47,10 +47,6 @@ function fakeHarness(created: boolean) {
     createDiscordBugReport: vi.fn(async (value) => ({ created, report: value })),
     captureRunFeedbackForEval: vi.fn(async (value) => value),
     markDiscordBugReportFailed: vi.fn(async () => undefined),
-    getTraceEvents: vi.fn(async () => [{
-      eventName: "discord.response.delivered", level: "info", summary: "done",
-      metadata: { replyMessageId: "reply-1", continuationMessageIds: ["reply-2", "reply-3", "reply-4"], messageCount: 4 }
-    }]),
     getToolAuditLogs: vi.fn(async () => []),
     upsertAgentTaskQueued: vi.fn(async () => undefined),
     attachDiscordBugReportTask: vi.fn(async () => undefined)
@@ -58,6 +54,10 @@ function fakeHarness(created: boolean) {
   const agentRuntime = {
     getSession: vi.fn(async () => ({ sessionId: "session-1", threadKey: "discord:guild-1:channel-1", traceId: "trace-1", guildId: "guild-1", channelId: "channel-1", userId: "user-1" })),
     appendMessage: vi.fn(async () => undefined), createExecution: vi.fn(async () => undefined),
+    listEvents: vi.fn(async () => [{
+      eventName: "discord.response.delivered", level: "info", summary: "done",
+      metadata: { replyMessageId: "reply-1", continuationMessageIds: ["reply-2", "reply-3", "reply-4"], messageCount: 4 }
+    }]),
     recordEvent: vi.fn(async () => undefined), updateExecution: vi.fn(async () => undefined)
   };
   const jobs = {

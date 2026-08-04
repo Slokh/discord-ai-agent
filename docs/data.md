@@ -28,7 +28,7 @@ Focused repositories under `src/db/` own persistence:
 | Bug markers, automated reports, deployment, and retry outcomes | `discordBugMarkerRepository.ts`, `discordBugReportRepository.ts` |
 | Components V2 actions | `discordComponentActionRepository.ts` |
 | Code-update projections | `agentTaskRepository.ts` and focused read repositories |
-| Audits, costs, and process projections | `auditRepository.ts`, `processRunRepository.ts` |
+| Audits and costs | `auditRepository.ts` |
 | Payments and randomness | focused payment repositories and `rngRepository.ts` |
 | Server overlays and model settings | `serverOverlayRepository.ts`, `agentSettingsRepository.ts` |
 | Private normal-reply friction | `frictionRepository.ts` through Frog's namespaced PostgreSQL store |
@@ -80,7 +80,7 @@ The `agent_runtime_*` tables explain chat, code-update, and durable background-j
 - task-linked executions record isolated code-update lifecycle and outcomes;
 - background-job executions retain crawl and embedding progress without a parallel ledger.
 
-Chat, code updates, crawls, and embedding batches do not create parallel process-run records. Code-update task rows are projections linked to the task runtime execution, which is also the sole artifact store for sandbox callbacks. The legacy `process_runs` tables remain only for bounded historical reads, privacy erasure, and retention until the window expires; a later forward-only migration can then remove them safely.
+Chat, code updates, crawls, and embedding batches record only in the canonical runtime ledger. Code-update task rows are projections linked to the task runtime execution, which is also the sole artifact store for sandbox callbacks.
 
 Artifacts have explicit content type, size, checksum, sensitivity, and retention behavior. Binary delivery artifacts are stored once and referenced by the delivery manifest.
 
@@ -103,7 +103,7 @@ Tracked files contain neutral behavior only. Private data lives in:
 
 - `.discord-ai-agent/prompt-overlay.md` for local deployment-specific prompt guidance;
 - `.discord-ai-agent/evals/` for private regression prompts;
-- Postgres for server overlays, Discord content, aliases, bug markers, model settings, traces, and memory.
+- Postgres for server overlays, Discord content, aliases, bug markers, model settings, canonical runtime records, and memory.
 - the `discord-ai-agent` Frog namespace in Postgres for generalized normal-reply friction and its runtime references.
 
 `npm run scan:release` rejects secret-shaped values, private markers, and real-looking Discord identifiers in tracked content. Never paste production prompt artifacts, member names, message links, dumps, or eval cases into public GitHub metadata.
@@ -128,9 +128,9 @@ DB integration tests mirror that ownership boundary. Each test file creates, mig
 
 ## Retention and deletion
 
-Worker maintenance bounds events, audits, embedding process runs, runtime sessions, and artifacts using the configured retention windows. A value of zero disables the corresponding automatic cleanup. Conversation compaction separately limits raw continuity rows.
+Worker maintenance bounds canonical runtime events, runtime sessions, artifacts, transient budget reservations, and audit logs using the configured retention windows. A value of zero disables the corresponding automatic cleanup. Conversation compaction separately limits raw continuity rows.
 
-Privacy deletion covers the archive, embeddings, attachments, emoji-derived state, bug markers/reports, conversation threads and snapshots derived from the requester, agent-runtime sessions/artifacts, run feedback, normal-reply Frog entries linked to those runtime sessions, code-update tasks, and process-run artifacts. Entire affected conversation threads are removed because summaries and assistant/tool turns may derive from the deleted message even when they have another author. Operational payment/randomness evidence may retain redacted structure when required to explain a transaction, but it must not retain deleted private message bodies unnecessarily.
+Privacy deletion covers the archive, embeddings, attachments, emoji-derived state, bug markers/reports, conversation threads and snapshots derived from the requester, agent-runtime sessions/artifacts, run feedback, normal-reply Frog entries linked to those runtime sessions, and code-update tasks. Entire affected conversation threads are removed because summaries and assistant/tool turns may derive from the deleted message even when they have another author. Operational payment/randomness evidence may retain redacted structure when required to explain a transaction, but it must not retain deleted private message bodies unnecessarily.
 
 ## Verification
 

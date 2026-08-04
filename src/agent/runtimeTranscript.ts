@@ -3,7 +3,19 @@ import type { ToolContext } from "../tools/types.js";
 import type { ToolName } from "../tools/toolDefinition.js";
 import { logger } from "../util/logger.js";
 
-type TraceInput = Parameters<ToolContext["repo"]["recordTraceEvent"]>[0];
+type RuntimeEventInput = {
+  eventName: string;
+  level?: "debug" | "info" | "warn" | "error";
+  summary?: string | null;
+  metadata?: Record<string, unknown>;
+  durationMs?: number | null;
+  traceId?: string | null;
+  requestId?: string | null;
+  guildId?: string | null;
+  channelId?: string | null;
+  userId?: string | null;
+  messageId?: string | null;
+};
 type SpanInput = {
   spanId: string;
   parentSpanId?: string | null;
@@ -16,7 +28,7 @@ type SpanInput = {
 };
 type AuditInput = Parameters<ToolContext["repo"]["auditTool"]>[0];
 
-export type AgentEventInput = Partial<TraceInput> &
+export type AgentEventInput = Partial<RuntimeEventInput> &
   Partial<SpanInput> & {
     name?: string;
     phase?: string;
@@ -48,14 +60,14 @@ export async function recordAgentEvent(
     input.span ?? (input.spanId ? spanFromTopLevel(input) : undefined);
 
   // Runtime events share a monotonically increasing per-execution sequence.
-  await recordTraceEvent(ctx, trace);
+  await recordRuntimeEvent(ctx, trace);
   await recordRuntimeSpan(ctx, span);
   await recordToolAudit(ctx, input.audit);
 }
 
-async function recordTraceEvent(
+async function recordRuntimeEvent(
   ctx: ToolContext,
-  input: TraceInput | undefined,
+  input: RuntimeEventInput | undefined,
 ) {
   if (!input) return;
   if (ctx.agentRuntime && ctx.agentRuntimeSession && ctx.agentRuntimeExecutionId && typeof ctx.agentRuntime.recordEvent === "function") {
@@ -79,18 +91,6 @@ async function recordTraceEvent(
     });
     return;
   }
-  const recorder = (
-    ctx.repo as unknown as {
-      recordTraceEvent?: (event: TraceInput) => Promise<void>;
-    }
-  ).recordTraceEvent;
-  if (!recorder) return;
-  await recorder.call(ctx.repo, input).catch((error) => {
-    logger.warn(
-      { err: error, eventName: input.eventName },
-      "Failed to record agent trace event",
-    );
-  });
 }
 
 function stringMetadata(value: unknown) {

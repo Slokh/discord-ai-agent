@@ -1,12 +1,10 @@
 import type { AgentRuntimeRepository } from "../db/agentRuntimeRepository.js";
-import type { DiscordAiAgentRepository } from "../db/repositories.js";
 import { logger } from "../util/logger.js";
 
 const DEFAULT_INTERVAL_MS = 60 * 60 * 1000;
 const DEFAULT_INITIAL_DELAY_MS = 5 * 60 * 1000;
 const DEFAULT_LIMIT = 500;
 
-type ArtifactRetentionRepo = Pick<DiscordAiAgentRepository, "cleanupExpiredProcessRunArtifacts">;
 type AgentRuntimeArtifactRetentionRepo = Pick<AgentRuntimeRepository, "cleanupExpiredArtifacts">;
 
 export type ArtifactRetentionMaintenance = {
@@ -14,26 +12,21 @@ export type ArtifactRetentionMaintenance = {
 };
 
 export async function runArtifactRetentionCleanupOnce(input: {
-  repo?: ArtifactRetentionRepo;
   agentRuntimeRepo?: AgentRuntimeArtifactRetentionRepo;
   limit?: number;
-}): Promise<{ processRunArtifacts: number; codegenArtifacts: number }> {
+}): Promise<{ runtimeArtifacts: number }> {
   const limit = cleanupLimit(input.limit);
-  const [processRunArtifacts, codegenArtifacts] = await Promise.all([
-    input.repo ? input.repo.cleanupExpiredProcessRunArtifacts(limit) : Promise.resolve(0),
-    input.agentRuntimeRepo ? input.agentRuntimeRepo.cleanupExpiredArtifacts(limit) : Promise.resolve(0)
-  ]);
-  return { processRunArtifacts, codegenArtifacts };
+  const runtimeArtifacts = input.agentRuntimeRepo ? await input.agentRuntimeRepo.cleanupExpiredArtifacts(limit) : 0;
+  return { runtimeArtifacts };
 }
 
 export function startArtifactRetentionMaintenance(input: {
-  repo?: ArtifactRetentionRepo;
   agentRuntimeRepo?: AgentRuntimeArtifactRetentionRepo;
   intervalMs?: number;
   initialDelayMs?: number;
   limit?: number;
 }): ArtifactRetentionMaintenance | null {
-  if (!input.repo && !input.agentRuntimeRepo) return null;
+  if (!input.agentRuntimeRepo) return null;
   const intervalMs = positiveMs(input.intervalMs, DEFAULT_INTERVAL_MS);
   const initialDelayMs = positiveMs(input.initialDelayMs, DEFAULT_INITIAL_DELAY_MS);
   let stopped = false;
@@ -43,7 +36,7 @@ export function startArtifactRetentionMaintenance(input: {
     if (stopped) return;
     try {
       const result = await runArtifactRetentionCleanupOnce(input);
-      if (result.processRunArtifacts > 0 || result.codegenArtifacts > 0) {
+      if (result.runtimeArtifacts > 0) {
         logger.info(result, "Cleaned expired observability artifacts");
       } else {
         logger.debug(result, "Expired observability artifact cleanup complete");

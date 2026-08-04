@@ -4,7 +4,6 @@ import type { DiscordAiAgentRepository } from "../db/repositories.js";
 import { logger } from "../util/logger.js";
 import { persistDiscordMessage } from "./messagePersistence.js";
 import { shouldProcessGuildEvent } from "./mentionParsing.js";
-import { recordTraceEvent } from "./requestContext.js";
 import { automateDiscordBugReport } from "./bugReportAutomation.js";
 import type { AgentRuntimeRepository } from "../db/agentRuntimeRepository.js";
 import type { JobRuntime } from "../jobs/queue.js";
@@ -39,15 +38,6 @@ export async function handleDiscordBugMarkerReaction(
     messageId: message.id,
     userId: user.id,
     present
-  });
-  await recordTraceEvent(input.repo, {
-    eventName: present ? "discord.bug_marker.added" : "discord.bug_marker.removed",
-    summary: present ? "Added Discord bug inbox marker" : "Removed Discord bug inbox marker",
-    metadata: {
-      markerEmoji: DISCORD_BUG_MARKER_EMOJI,
-      markerUserId: user.id,
-      markedMessageId: message.id
-    }
   });
   if (present) {
     await automateDiscordBugReport({

@@ -149,7 +149,7 @@ export async function startJobs(input: {
   const agentTaskBackendName = input.agentTask?.name ?? defaultAgentTaskBackendName(input.config);
   const runsAnyWorker = crawlWorkerEnabled || embeddingWorkerEnabled || taskWorkerEnabled || agentRuntimeWorkerEnabled;
   const artifactRetentionMaintenance = runsAnyWorker
-    ? startArtifactRetentionMaintenance({ repo: input.repo, agentRuntimeRepo: input.agentRuntimeRepo })
+    ? startArtifactRetentionMaintenance({ agentRuntimeRepo: input.agentRuntimeRepo })
     : null;
   const dataRetentionMaintenance = runsAnyWorker && input.db
     ? startDataRetentionMaintenance({ db: input.db, config: input.config.worker.retention })

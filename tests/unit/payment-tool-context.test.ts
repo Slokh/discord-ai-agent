@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { appendTempoTransactionFooter, paymentRecorder } from "../../src/tools/paymentToolContext.js";
 import type { ToolContext } from "../../src/tools/types.js";
 import { createAgentTurnOutput } from "../../src/tools/turnOutput.js";
@@ -9,8 +9,7 @@ describe("payment tool context", () => {
     ["moderato", "https://explore.testnet.tempo.xyz"]
   ] as const)("adds a network-aware transaction footer for %s", async (network, explorer) => {
     const transactionHash = `0x${"a".repeat(64)}`;
-    const recordTraceEvent = vi.fn(async () => undefined);
-    const ctx = context(network, recordTraceEvent);
+    const ctx = context(network);
     const record = paymentRecorder(ctx);
 
     await record({
@@ -27,11 +26,10 @@ describe("payment tool context", () => {
     expect(ctx.turnOutput?.footerLines).toEqual([
       `💸 [transfer](<${explorer}/tx/${transactionHash}>)`
     ]);
-    expect(recordTraceEvent).toHaveBeenCalledTimes(2);
   });
 
   it("ignores metadata that is not a complete Tempo transaction hash", () => {
-    const ctx = context("mainnet", vi.fn(async () => undefined));
+    const ctx = context("mainnet");
 
     appendTempoTransactionFooter(ctx, "0xabc");
     appendTempoTransactionFooter(ctx, undefined);
@@ -40,10 +38,10 @@ describe("payment tool context", () => {
   });
 });
 
-function context(network: "mainnet" | "moderato", recordTraceEvent: ReturnType<typeof vi.fn>): ToolContext {
+function context(network: "mainnet" | "moderato"): ToolContext {
   return {
     config: { payments: { tempoNetwork: network } },
-    repo: { recordTraceEvent },
+    repo: {},
     guildId: "guild",
     channelId: "channel",
     userId: "user",

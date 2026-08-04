@@ -48,10 +48,6 @@ describe("Discord forwarded message context", () => {
       reactionSummaries: ["<:party:101> ×2"],
     }));
     expect(context?.chain).toHaveLength(1);
-    expect(repo.recordTraceEvent).toHaveBeenCalledWith(expect.objectContaining({
-      eventName: "discord.reply_context.resolved",
-      metadata: expect.objectContaining({ referencedMessageId: "source-message" }),
-    }));
   });
 
   it("records a deleted reply parent as expected unavailable context", async () => {
@@ -74,10 +70,6 @@ describe("Discord forwarded message context", () => {
 
     expect(requestLogger.warn).not.toHaveBeenCalled();
     expect(requestLogger.info).toHaveBeenCalled();
-    expect(repo.recordTraceEvent).toHaveBeenCalledWith(expect.objectContaining({
-      eventName: "discord.reply_context.unavailable",
-      level: "info",
-    }));
   });
 
   it("creates useful prompts for Discord messages that have context but no text", () => {

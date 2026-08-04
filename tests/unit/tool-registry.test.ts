@@ -95,7 +95,7 @@ describe("toolRegistry", () => {
           mutates: true,
           outputContract: expect.arrayContaining(["PR link or failure reason"]),
           permissionRequirements: expect.arrayContaining(["explicit_user_request"]),
-          auditEvents: expect.arrayContaining(["tool_audit_logs", "trace_events"]),
+          auditEvents: expect.arrayContaining(["tool_audit_logs", "agent_runtime_events"]),
           examples: expect.arrayContaining(["@ai debug the failing CI on that PR"])
         }),
         expect.objectContaining({

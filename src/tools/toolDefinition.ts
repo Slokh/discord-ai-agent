@@ -84,7 +84,7 @@ export function defineTool<const T extends ToolDefinitionInput>(definition: T): 
           ? ["requester_visible_discord_channels", "tool_audit_log"]
           : ["tool_audit_log"]
     ),
-    auditEvents: definition.auditEvents ?? ["tool_audit_logs", "trace_events"],
+    auditEvents: definition.auditEvents ?? ["tool_audit_logs", "agent_runtime_events"],
     argumentExamples: definition.argumentExamples ?? [],
   };
 }

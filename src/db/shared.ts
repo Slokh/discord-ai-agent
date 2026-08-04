@@ -1,5 +1,4 @@
 export const LARGE_ARTIFACT_BYTES = 2 * 1024 * 1024;
-export const LARGE_ARTIFACT_RETENTION_DAYS = 14;
 export const VECTOR_SEARCH_STATEMENT_TIMEOUT_MS = 8_000;
 export const VECTOR_SEARCH_MAX_CANDIDATES = 1_000;
 export const FILTERED_VECTOR_SEARCH_MAX_CANDIDATES = 2_000;
@@ -28,8 +27,8 @@ export function orTsQuery(query: string): string {
 }
 
 import type { SearchResult, DiscordUserLookupResult, DiscordUserAlias, DiscordUserReferenceTerms, DiscordChannelLookupResult, DiscordAttachmentSearchResult, DiscordStats, DiscordStatsMetric, DiscordStatsGroupBy, DiscordStatsSort, DiscordStatsRow, DiscordChannelTopicCandidate, ConversationRole, ConversationMessage, AgentMemoryAnchorMessage, MessageForEmbedding, InteractionBlock, AgentTaskStatus, AgentTaskRecord, SandboxCommandEvent, ServerOverlay } from "./types.js";
-export type { PersistedAttachment, PersistedMessage, SearchResult, DiscordBugMarker, DiscordUserLookupResult, DiscordUserAlias, DiscordUserReferenceTerms, DiscordChannelLookupResult, DiscordAttachmentSearchResult, DiscordStats, DiscordStatsMetric, DiscordStatsGroupBy, DiscordStatsSort, DiscordStatsRow, DiscordChannelTopicCandidate, ConversationRole, ConversationMessage, AgentMemoryAnchorMessage, AgentMemoryTurnStats, MessageForEmbedding, DeletedConversationTurn, DeletedConversationTurns, InteractionBlock, TraceEventLevel, TraceEvent, ToolAuditLog, ProcessRunKind, ProcessRunStatus, ProcessRunArtifactKind, ProcessRunRecord, ProcessRunSpanRecord, ProcessRunEventRecord, ProcessRunArtifactRecord, ProcessRunArtifactContent, AgentTaskStatus, AgentTaskRecord, TaskEvent, AgentRuntimeEvent, AgentRuntimeMessage, AgentRuntimeChatExecution, AgentRuntimeArtifactRecord, AgentRuntimeArtifactContent, SandboxRunRecord, SandboxCommandEvent, ServerOverlay } from "./types.js";
-export { rowToTraceEvent, rowToToolAuditLog, rowToAgentRuntimeEvent, rowToAgentRuntimeChatExecution, rowToAgentRuntimeArtifact, rowToAgentRuntimeMessage, rowToProcessRun, rowToProcessRunSpan, rowToProcessRunEvent, rowToProcessRunArtifact, jsonObject, rowToTaskEvent, rowToSandboxRun } from "./runtimeMappers.js";
+export type { PersistedAttachment, PersistedMessage, SearchResult, DiscordBugMarker, DiscordUserLookupResult, DiscordUserAlias, DiscordUserReferenceTerms, DiscordChannelLookupResult, DiscordAttachmentSearchResult, DiscordStats, DiscordStatsMetric, DiscordStatsGroupBy, DiscordStatsSort, DiscordStatsRow, DiscordChannelTopicCandidate, ConversationRole, ConversationMessage, AgentMemoryAnchorMessage, AgentMemoryTurnStats, MessageForEmbedding, DeletedConversationTurn, DeletedConversationTurns, InteractionBlock, EventLevel, ToolAuditLog, AgentTaskStatus, AgentTaskRecord, TaskEvent, AgentRuntimeEvent, AgentRuntimeMessage, AgentRuntimeChatExecution, AgentRuntimeArtifactRecord, AgentRuntimeArtifactContent, SandboxRunRecord, SandboxCommandEvent, ServerOverlay } from "./types.js";
+export { rowToToolAuditLog, rowToAgentRuntimeEvent, rowToAgentRuntimeChatExecution, rowToAgentRuntimeArtifact, rowToAgentRuntimeMessage, jsonObject, rowToTaskEvent, rowToSandboxRun } from "./runtimeMappers.js";
 export function rowToSearchResult(row: any): SearchResult {
   return {
     messageId: String(row.message_id),
@@ -649,20 +648,6 @@ export function rowToSandboxCommandEvent(row: any): SandboxCommandEvent {
     durationMs: row.duration_ms == null ? null : Number(row.duration_ms),
     createdAt: new Date(row.created_at)
   };
-}
-
-export function chunkString(value: string, size: number) {
-  if (!value) return [];
-  const chunks: string[] = [];
-  for (let index = 0; index < value.length; index += size) {
-    chunks.push(value.slice(index, index + size));
-  }
-  return chunks;
-}
-
-export function defaultArtifactExpiresAt(sizeBytes: number) {
-  if (sizeBytes <= LARGE_ARTIFACT_BYTES) return null;
-  return new Date(Date.now() + LARGE_ARTIFACT_RETENTION_DAYS * 24 * 60 * 60 * 1000);
 }
 
 export function removeUndefinedValues(input: Record<string, unknown>) {

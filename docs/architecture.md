@@ -136,4 +136,4 @@ Observability may expose model inputs/outputs and deterministic decisions after 
 
 ## Overlay boundary
 
-Tracked source ships neutral defaults. Deployment-specific persona and instructions live in `.discord-ai-agent/prompt-overlay.md` or a Postgres server overlay. Private eval prompts live in `.discord-ai-agent/evals/`. Indexed messages, aliases, member data, bug markers, and traces live in Postgres. `npm run scan:release` enforces the public/private boundary.
+Tracked source ships neutral defaults. Deployment-specific persona and instructions live in `.discord-ai-agent/prompt-overlay.md` or a Postgres server overlay. Private eval prompts live in `.discord-ai-agent/evals/`. Indexed messages, aliases, member data, bug markers, and canonical runtime records live in Postgres. `npm run scan:release` enforces the public/private boundary.

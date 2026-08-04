@@ -7,10 +7,11 @@ function context(chat: ToolContext["openRouter"]["chat"]): ToolContext {
   return {
     config: { appRevision: "test-revision" } as never,
     repo: {
-      recordTraceEvent: vi.fn(async () => undefined),
-      recordProcessRunSpan: vi.fn(async () => undefined),
       auditTool: vi.fn(async () => undefined),
     },
+    agentRuntime: { recordEvent: vi.fn(async () => undefined) },
+    agentRuntimeSession: { sessionId: "session-1", traceId: "trace-1" },
+    agentRuntimeExecutionId: "execution-1",
     openRouter: { chat },
     guildId: "guild",
     channelId: "channel",
@@ -40,7 +41,7 @@ describe("runObservedModelCall", () => {
       chat: { messages: [{ role: "user", content: "hello" }], tools: [], maxTokens: 100 },
     });
 
-    expect(ctx.repo.recordTraceEvent).toHaveBeenCalledWith(expect.objectContaining({
+    expect(ctx.agentRuntime?.recordEvent).toHaveBeenCalledWith(expect.objectContaining({
       eventName: "agent.model.call.completed",
       metadata: expect.objectContaining({
         schemaVersion: 1,
@@ -66,7 +67,7 @@ describe("runObservedModelCall", () => {
       chat: { messages: [{ role: "user", content: "hello" }] },
     })).rejects.toThrow("provider down");
 
-    expect(ctx.repo.recordTraceEvent).toHaveBeenCalledWith(expect.objectContaining({
+    expect(ctx.agentRuntime?.recordEvent).toHaveBeenCalledWith(expect.objectContaining({
       eventName: "agent.model.call.failed",
       level: "error",
       metadata: expect.objectContaining({ error: "provider down" }),

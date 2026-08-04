@@ -472,20 +472,10 @@ export async function findAgentTaskByDiscordMessageId(pool: DbPool, messageId: s
         FROM agent_tasks at
         WHERE at.task_id = $1
            OR at.discord_response_message_id = $1
-           OR (
-             at.trace_id IS NOT NULL
-             AND EXISTS (
-               SELECT 1
-               FROM trace_events te
-               WHERE te.trace_id = at.trace_id
-                 AND te.message_id = $1
-             )
-           )
         ORDER BY
           CASE
             WHEN at.task_id = $1 THEN 0
             WHEN at.discord_response_message_id = $1 THEN 1
-            ELSE 2
           END,
           at.updated_at DESC,
           at.created_at DESC

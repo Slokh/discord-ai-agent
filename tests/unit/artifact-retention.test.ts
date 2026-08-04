@@ -7,23 +7,18 @@ afterEach(() => {
 });
 
 describe("artifact retention maintenance", () => {
-  it("cleans expired process-run and codegen artifacts in one pass", async () => {
-    const repo = { cleanupExpiredProcessRunArtifacts: vi.fn(async () => 2) };
+  it("cleans expired canonical runtime artifacts", async () => {
     const agentRuntimeRepo = { cleanupExpiredArtifacts: vi.fn(async () => 3) };
 
-    await expect(runArtifactRetentionCleanupOnce({ repo, agentRuntimeRepo, limit: 250 })).resolves.toEqual({
-      processRunArtifacts: 2,
-      codegenArtifacts: 3
-    });
-    expect(repo.cleanupExpiredProcessRunArtifacts).toHaveBeenCalledWith(250);
+    await expect(runArtifactRetentionCleanupOnce({ agentRuntimeRepo, limit: 250 })).resolves.toEqual({ runtimeArtifacts: 3 });
     expect(agentRuntimeRepo.cleanupExpiredArtifacts).toHaveBeenCalledWith(250);
   });
 
   it("runs periodically and stops cleanly", async () => {
     vi.useFakeTimers();
-    const repo = { cleanupExpiredProcessRunArtifacts: vi.fn(async () => 0) };
+    const agentRuntimeRepo = { cleanupExpiredArtifacts: vi.fn(async () => 0) };
     const maintenance = startArtifactRetentionMaintenance({
-      repo,
+      agentRuntimeRepo,
       intervalMs: 1000,
       initialDelayMs: 1000,
       limit: 10
@@ -31,10 +26,10 @@ describe("artifact retention maintenance", () => {
 
     expect(maintenance).not.toBeNull();
     await vi.advanceTimersByTimeAsync(1000);
-    expect(repo.cleanupExpiredProcessRunArtifacts).toHaveBeenCalledTimes(1);
+    expect(agentRuntimeRepo.cleanupExpiredArtifacts).toHaveBeenCalledTimes(1);
 
     maintenance!.stop();
     await vi.advanceTimersByTimeAsync(5000);
-    expect(repo.cleanupExpiredProcessRunArtifacts).toHaveBeenCalledTimes(1);
+    expect(agentRuntimeRepo.cleanupExpiredArtifacts).toHaveBeenCalledTimes(1);
   });
 });

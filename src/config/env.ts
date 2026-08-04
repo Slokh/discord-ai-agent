@@ -31,7 +31,7 @@ export const productConfig = {
     embeddingDimensions: 1_536
   },
   github: { repository: new URL(PUBLIC_REPOSITORY_URL).pathname.slice(1), baseBranch: "main" },
-  control: {
+  callback: {
     host: "0.0.0.0",
     port: 8_080,
     internalUrl: "http://discord-ai-agent-api:8080"
@@ -80,8 +80,6 @@ const envSchema = z.object({
   GITHUB_APP_PRIVATE_KEY: z.string().default(""),
   GITHUB_APP_INSTALLATION_ID: z.string().trim().default(""),
   TASK_SIGNING_SECRET: z.string().default(""),
-  CONTROL_API_AUTH_PASSWORD: z.string().default(""),
-  CONTROL_API_PUBLIC_URL: z.preprocess((value) => value === "" ? undefined : value, z.string().url().optional()),
 
   BOT_OWNER_USER_ID: z.string().trim().default(""),
   OPS_ALLOWLIST_USER_IDS: z.string().default(""),
@@ -118,7 +116,6 @@ export function loadConfig(argv = process.argv) {
   }
   const env = parsed.data;
   const processRole = processRoleFromArgs(argv);
-  assertControlApiConfig(env.CONTROL_API_PUBLIC_URL, env.CONTROL_API_AUTH_PASSWORD, processRole, env.NODE_ENV);
   const walletEnabled = Boolean(env.PRIVY_APP_ID?.trim() && env.PRIVY_APP_SECRET?.trim());
 
   return {
@@ -162,8 +159,7 @@ export function loadConfig(argv = process.argv) {
       appPrivateKey: env.GITHUB_APP_PRIVATE_KEY,
       appInstallationId: env.GITHUB_APP_INSTALLATION_ID
     },
-    internalApi: { host: productConfig.control.host, port: productConfig.control.port },
-    controlApi: { authPassword: env.CONTROL_API_AUTH_PASSWORD, publicUrl: env.CONTROL_API_PUBLIC_URL?.replace(/\/$/, "") || null },
+    callbackServer: { host: productConfig.callback.host, port: productConfig.callback.port },
     execution: {
       taskSigningSecret: env.TASK_SIGNING_SECRET,
       sandbox: { taskTimeoutSeconds: productConfig.sandbox.taskTimeoutSeconds },
@@ -235,18 +231,6 @@ function defaultLogLevel(nodeEnv: string) {
   if (nodeEnv === "test") return "silent";
   if (nodeEnv === "production") return "info";
   return "debug";
-}
-
-function assertControlApiConfig(publicUrl: string | undefined, password: string, processRole: ProcessRole, nodeEnv: string) {
-  if (publicUrl) {
-    const url = new URL(publicUrl);
-    const local = url.hostname === "localhost" || url.hostname === "127.0.0.1" || url.hostname === "::1";
-    if (url.protocol !== "https:" && !local) throw new Error("CONTROL_API_PUBLIC_URL must use HTTPS outside localhost.");
-  }
-  const servesApi = processRole === "api" || processRole === "all";
-  if (servesApi && !password && (Boolean(publicUrl) || nodeEnv === "production")) {
-    throw new Error("CONTROL_API_AUTH_PASSWORD is required when the API serves production or publicly routed control endpoints.");
-  }
 }
 
 function parseCsv(value: string) {

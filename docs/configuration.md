@@ -20,8 +20,6 @@ Production startup rejects retired variables so old deployment settings cannot s
 | `GITHUB_APP_ID` | code updates (App mode) | no | GitHub App ID. |
 | `GITHUB_APP_PRIVATE_KEY` | code updates (App mode) | yes | GitHub App private key. |
 | `GITHUB_APP_INSTALLATION_ID` | code updates (App mode) | no | GitHub App installation ID. |
-| `CONTROL_API_AUTH_PASSWORD` | public control API | yes | Password protecting control-plane API and metrics endpoints. |
-| `CONTROL_API_PUBLIC_URL` | public control API | no | Externally routed HTTPS URL for control-plane API access. |
 | `BOT_OWNER_USER_ID` | owner-only mutations | no | Discord user ID with owner authority. |
 | `OPS_ALLOWLIST_USER_IDS` | restricted operations | no | Comma-separated Discord user IDs with operations authority. |
 | `DISCORD_PREMIUM_SKU_IDS` | premium buttons | no | Comma-separated configured Discord premium SKU IDs. |

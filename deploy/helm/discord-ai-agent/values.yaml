@@ -42,20 +42,12 @@ config:
   previousAppRevision: ""
   # Optional Discord channel for automatic plain-English deployment notes.
   releaseNotesChannelId: ""
-  controlApiPublicUrl: ""
 
 api:
   replicas: 1
   port: 8080
   service:
     type: ClusterIP
-  publicService:
-    enabled: false
-    type: LoadBalancer
-    annotations: {}
-    port: 443
-  metrics:
-    scrapeAnnotations: true
   resources:
     requests: { cpu: 100m, memory: 128Mi }
     limits: { cpu: 500m, memory: 512Mi }

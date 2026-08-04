@@ -35,13 +35,13 @@ Map the observed failure to one owner before editing:
 
 | Observation | Start with |
 | --- | --- |
-| Wrong/missing Discord reply | `npm run discord:debug -- <link>`, then Discord ingress, agent execution, and delivery evidence |
-| Broad post-deploy regression | `npm run discord:audit -- --channel <id> --since-deploy --include-reply-chains` |
+| Wrong/missing Discord reply | Canonical production ledger evidence for ingress, agent execution, and delivery |
+| Broad post-deploy regression | Production ledger evidence grouped by deployed revision |
 | Wrong tool or response behavior | [Agent system](agent-system.md), contract, handler, prompt artifact, and closest test |
 | Missing/stale Discord knowledge | [Data](data.md), persistence/indexing/retrieval before prompt text |
 | Wallet, wager, or random result | [Payments and games](payments.md), durable ledger and provider/RNG evidence |
 | Code-update/PR/CI problem | [Code updates](code-updates.md), exact task or CI logs |
-| Deployment or control-plane problem | [Operations](operations.md), deployed revision and typed events |
+| Deployment or sandbox-callback problem | [Operations](operations.md), deployed revision and typed events |
 
 Follow the full lifecycle for cross-domain work: ingress, authority, durable state, model/tool contract, external side effect, delivery, observability, recovery, and verification.
 

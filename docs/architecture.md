@@ -10,7 +10,7 @@ The application is TypeScript on Node.js 22 with Postgres, pgvector, Discord, Op
 | --- | --- |
 | `bot` | Discord gateway events, ingress, reactions, delivery, component interactions, deployment announcements, and task notifications |
 | `worker` | Agent executions, crawl and embedding jobs, code-update jobs, reconciliation, compaction, and retention |
-| `api` | Authenticated control API, sandbox callbacks, and metrics |
+| `api` | Internal signed sandbox callbacks and health probe |
 
 `all` starts all roles for a fully configured single-process environment. Production normally splits them. Chat requires the bot plus a worker with agent-runtime work enabled. Code updates also require task work and the API callback surface.
 
@@ -32,7 +32,7 @@ Code-change tool call
 
 `src/index.ts` selects process roles and starts adapters. `src/runtime/applicationServices.ts` is the shared composition root for repositories, model access, randomness, payments, and delivery state; production and the local prompt runner consume the same services. `src/config/env.ts` is the canonical configuration schema. `src/jobs/queue.ts` registers recurring and queued work.
 
-Large entry points remain coordinators. Focused mechanics live beside them: keyed serialization and embedding priority under `src/jobs/`, OpenRouter response/error normalization under `src/models/`, sandbox command shims under `src/execution/`, and private bug-regression validation under `src/control/`. Architecture tests enforce source/test size budgets, acyclic imports, the generic-agent boundary, contract/handler direction, and centralized production environment access.
+Large entry points remain coordinators. Focused mechanics live beside them: keyed serialization and embedding priority under `src/jobs/`, OpenRouter response/error normalization under `src/models/`, and sandbox callbacks and private bug-regression validation under `src/execution/`. Architecture tests enforce source/test size budgets, acyclic imports, the generic-agent boundary, contract/handler direction, and centralized production environment access.
 
 ## Architectural invariants
 
@@ -43,7 +43,7 @@ Large entry points remain coordinators. Focused mechanics live beside them: keye
 - `src/agent/` is capability-agnostic. Installed product behavior enters through the capability session, tool contracts, and tool handlers rather than feature imports or tool-name branches in the model loop.
 - Every tool call is revalidated against its canonical schema, current deployment, requester scope, and access policy.
 - The current requester and current-turn intent are immutable authority.
-- Postgres owns durable state. In-memory values may cache or coordinate but cannot become an alternate source of truth. Control-plane status, channel, revision, and time filters execute in repository queries before limits, with partial recent-execution indexes keeping the path bounded.
+- Postgres owns durable state. In-memory values may cache or coordinate but cannot become an alternate source of truth. Repository queries apply status, channel, revision, and time filters before limits, with partial recent-execution indexes keeping the path bounded.
 - Migrations are forward-only. Fresh installs apply `migrations/001_initial.sql` and every later numbered migration.
 - Member-visible release actions require the deployed SHA and unique rollout ID's durable verification marker; pod readiness alone does not promote a release.
 - Private community content belongs in Postgres or `.discord-ai-agent/`, never tracked source.
@@ -51,7 +51,7 @@ Large entry points remain coordinators. Focused mechanics live beside them: keye
 ## Chat lifecycle
 
 1. `src/discord/client.ts` wires Discord events. `messageIngress.ts` and `turnPreparation.ts` decide whether to respond, persist the message, resolve reply context, and create the runtime session/execution.
-2. `src/agent/runtimeEnvelope.ts` stores a replayable, requester-scoped turn envelope and input artifact. `runtimeControlPlane.ts` enqueues the execution.
+2. `src/agent/runtimeEnvelope.ts` stores a replayable, requester-scoped turn envelope and input artifact. `runtimeLifecycle.ts` enqueues the execution.
 3. `src/discord/agentRuntimeRunner.ts` composes Discord delivery and installed feature services around the generic executor; `runtimeExecutor.ts` invokes the agent runtime.
 4. `src/capabilities/catalog.ts` is the installation manifest: it groups each tool contract and handler under a product capability and declares optional per-turn hooks. Optional contracts own their configuration predicate through `available`; there is no central feature-name switch. `src/capabilities/index.ts` prepares hooks into one capability session.
 5. `nanocodexAgentRuntime.ts` consumes only that generic session, builds the prompt, resumes a compatible opaque NanoCodex snapshot, exposes the deployment tool contract, and handles model/tool events.
@@ -115,7 +115,7 @@ See [Code updates](code-updates.md) for publication and sandbox details.
 | Private friction intake and lifecycle | `src/tools/contracts/friction.ts`, `src/tools/handlers/friction.ts`, `src/db/frictionRepository.ts` | handler-conformance plus runtime-recovery DB tests |
 | Discord ingress and delivery | `src/discord/client.ts`, `messageIngress.ts`, `agentDelivery.ts`, `responseSink.ts` | Discord client/delivery/response-sink tests |
 | Discord data and retrieval | `src/discord/crawler.ts`, `src/db/*Repository.ts`, `src/memory/`, retrieval tools | crawler/search/tool tests and DB integration tests |
-| Control plane | `src/control/internalApiServer.ts`, `src/control/` | internal API and observability tests |
+| Sandbox callback receiver | `src/execution/callbackServer.ts`, `src/execution/callbacks.ts` | sandbox callback tests |
 | Queue ownership | `src/jobs/queue.ts`, `agentTaskEnqueue.ts` | queue unit tests and `tests/integration/jobs-db.test.ts` |
 | Code-update execution | `src/execution/backend.ts`, `runnerPipeline.ts`, `repoWorkspace.ts` | sandbox runner, backend, callback, and task tests |
 | Payments and games | `src/payments/`, `src/tools/walletTools.ts`, `randomTools.ts`, `randomWagerTools.ts`, `standardWager*` | focused wallet/RNG tests and DB integration tests |
@@ -128,7 +128,7 @@ Entrypoints must not reconstruct application-owned services independently. Add a
 
 NanoCodex provider-call tokens are normalized into the canonical usage fields, while its terminal turn event owns the aggregate cost estimate used by spend projections so costs are not double-counted. Tool completion events retain stable error codes and retryability. Revision health uses the final result for each capability within a member execution while separately reporting total attempts and recovered argument-validation retries.
 
-Important model, tool, provider, queue, sandbox, mutation, and delivery transitions are typed events. `runtimeEventSchema.ts` maps registered event namespaces and terminal segments to controlled category/phase dimensions; exceptional events may provide an explicit phase, while unknown names stay `system/progress` rather than being guessed from words embedded in a name. Large or sensitive details are retained as redacted artifacts rather than event metadata. `runs:inspect`, `discord:debug`, task status, and metrics all project the same underlying ledger. Quality metrics group answer latency/cost/status by model and deployed revision, tool outcomes by typed status, reviewed feedback by failure mode, and recovered deliveries.
+Important model, tool, provider, queue, sandbox, mutation, and delivery transitions are typed events. `runtimeEventSchema.ts` maps registered event namespaces and terminal segments to controlled category/phase dimensions; exceptional events may provide an explicit phase, while unknown names stay `system/progress` rather than being guessed from words embedded in a name. Large or sensitive details are retained as redacted artifacts rather than event metadata. The canonical ledger remains in Postgres for trusted operational investigation. Quality metrics group answer latency/cost/status by model and deployed revision, tool outcomes by typed status, reviewed feedback by failure mode, and recovered deliveries.
 
 Every prompt execution declares a quality cohort. Member-originated Discord turns are `member`; CLI, evaluation, and deployment probes are `synthetic`. Revision health, baselines, tool outcomes, feedback, and delivery alerts use only the member cohort, so automated checks cannot manufacture a healthy production sample.
 

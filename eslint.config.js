@@ -22,7 +22,7 @@ export default [
   },
   {
     files: [
-      "src/control/internalApi*.ts",
+      "src/execution/callbackServer.ts",
       "src/observability/*.ts",
       "src/db/runtimeMappers.ts",
       "src/db/agentRuntimeArtifactRepository.ts",

@@ -30,7 +30,7 @@ The design is model-led and code-governed: the model owns language, relevance, t
 - Optional Spotify catalog tools
 - Optional Privy/Tempo managed wallets, transfers, wagers, and provable RNG
 - Sandboxed repository changes with verification, release scanning, and PR publication
-- Authenticated control API, typed runtime ledger, metrics, and recovery sweeps
+- Typed runtime ledger, signed sandbox callbacks, and recovery sweeps
 - Reviewed production feedback exported into a private executable regression suite
 
 ## Documentation
@@ -89,7 +89,7 @@ npm run dev
 npm run worker
 ```
 
-The bot accepts requests and delivers results; the worker executes queued chat turns. Start `npm run api` for the authenticated control API or code-update sandbox callbacks.
+The bot accepts requests and delivers results; the worker executes queued chat turns. Start `npm run api` only when code-update sandbox callbacks are enabled.
 
 ## Index Discord history
 
@@ -124,7 +124,7 @@ npm run verify:db
 npm run eval -- --dry-run
 ```
 
-Production operator commands such as `discord:debug`, `discord:audit`, `runs:inspect`, and `tasks:status` resolve the deployed control plane rather than silently falling back to local state. See [Operations](docs/operations.md).
+The runtime ledger is retained in Postgres; use the configured production database or a trusted application pod for operational investigation. See [Operations](docs/operations.md).
 
 ## Private data
 

@@ -56,20 +56,15 @@ describe("sandboxRunner", () => {
         githubRepository: "owner/repository",
         githubBaseBranch: "main",
         sandboxCacheDir: "/cache/agent's-data",
-        controlPlaneInternalUrl: "http://internal-api/",
-      } as Pick<SandboxEnv, "githubRepository" | "githubBaseBranch" | "sandboxCacheDir" | "controlPlaneInternalUrl"> as SandboxEnv;
+      } as Pick<SandboxEnv, "githubRepository" | "githubBaseBranch" | "sandboxCacheDir"> as SandboxEnv;
       await expect(writeSandboxToolShims(tempDir, env)).resolves.toEqual([
         "agent-task-context",
         "agent-cache-info",
-        "agent-progress",
       ]);
       const context = await fs.readFile(path.join(tempDir, "agent-task-context"), "utf8");
-      const progress = await fs.readFile(path.join(tempDir, "agent-progress"), "utf8");
       expect(context).toContain("Repository: owner/repository");
       expect(context).toContain("agent'\"'\"'s-data");
-      expect(progress).toContain('const baseUrl = "http://internal-api"');
-      expect(progress).toContain("/internal/tasks/${encodeURIComponent(taskId)}/events");
-      expect((await fs.stat(path.join(tempDir, "agent-progress"))).mode & 0o777).toBe(0o755);
+      expect((await fs.stat(path.join(tempDir, "agent-cache-info"))).mode & 0o777).toBe(0o755);
     } finally {
       await fs.rm(tempDir, { recursive: true, force: true });
     }
@@ -498,7 +493,7 @@ describe("sandboxRunner", () => {
     expect(prompt).toContain("Let the repository concept guides, source ownership, exact anchors, and tests determine the implementation path");
     expect(prompt).toContain("Batch initial reconnaissance");
     expect(prompt).toContain("Do not keep alternating search/read/search/read");
-    expect(prompt).toContain("$AGENT_TOOL_SHIM_DIR/agent-progress first_edit");
+    expect(prompt).toContain("$AGENT_TOOL_SHIM_DIR/agent-cache-info");
   });
 
   it("includes a built-in GitHub CI debugging skill for sandboxed code updates", () => {

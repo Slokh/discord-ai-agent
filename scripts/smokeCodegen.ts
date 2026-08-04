@@ -121,8 +121,8 @@ async function runCodegenSmokeCase(input: { args: SmokeArgs; config: ReturnType<
     }
   });
 
-  const controlPlaneInternalUrl = await listen(server);
-  process.stdout.write(`local control plane: ${controlPlaneInternalUrl}\n`);
+  const callbackServerUrl = await listen(server);
+  process.stdout.write(`local sandbox callback receiver: ${callbackServerUrl}\n`);
   process.stdout.write(`task id: ${taskId}\n`);
   process.stdout.write(`NanoCodex model: ${args.model}\n`);
   process.stdout.write(`artifacts: ${artifactDir}\n`);
@@ -145,7 +145,7 @@ async function runCodegenSmokeCase(input: { args: SmokeArgs; config: ReturnType<
     },
     useBuiltRunner: args.useBuiltRunner,
     model: args.model,
-    controlUrl: controlPlaneInternalUrl,
+    callbackUrl: callbackServerUrl,
     cacheDir,
   });
 
@@ -320,11 +320,11 @@ export function formatSmokeSuiteSummary(input: {
   return lines.join("\n");
 }
 
-function spawnRunner(input: { env: NodeJS.ProcessEnv; useBuiltRunner: boolean; model: string; controlUrl: string; cacheDir: string }) {
+function spawnRunner(input: { env: NodeJS.ProcessEnv; useBuiltRunner: boolean; model: string; callbackUrl: string; cacheDir: string }) {
   const command = process.execPath;
   const runnerArgs = input.useBuiltRunner
-    ? ["dist/src/execution/sandboxRunner.js", `--model=${input.model}`, `--control-url=${input.controlUrl}`, `--cache-dir=${input.cacheDir}`]
-    : [path.resolve("node_modules/tsx/dist/cli.mjs"), "src/execution/sandboxRunner.ts", `--model=${input.model}`, `--control-url=${input.controlUrl}`, `--cache-dir=${input.cacheDir}`];
+    ? ["dist/src/execution/sandboxRunner.js", `--model=${input.model}`, `--callback-url=${input.callbackUrl}`, `--cache-dir=${input.cacheDir}`]
+    : [path.resolve("node_modules/tsx/dist/cli.mjs"), "src/execution/sandboxRunner.ts", `--model=${input.model}`, `--callback-url=${input.callbackUrl}`, `--cache-dir=${input.cacheDir}`];
   process.stdout.write(`$ ${command} ${runnerArgs.join(" ")}\n`);
   const child = spawn(command, runnerArgs, {
     cwd: process.cwd(),
@@ -434,7 +434,7 @@ async function listen(server: http.Server) {
     server.listen(0, "127.0.0.1", () => {
       const address = server.address();
       if (!address || typeof address === "string") {
-        reject(new Error("Unable to bind local control plane."));
+        reject(new Error("Unable to bind local sandbox callback receiver."));
         return;
       }
       resolve(`http://127.0.0.1:${address.port}`);

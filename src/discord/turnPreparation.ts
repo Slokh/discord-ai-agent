@@ -10,7 +10,7 @@ import {
   storeAgentRuntimeTurnEnvelope,
   type AgentRuntimeTurnEnvelope
 } from "../agent/runtimeEnvelope.js";
-import { storeAgentRuntimeExecutionInputLines } from "../agent/runtimeControlPlane.js";
+import { storeAgentRuntimeExecutionInputLines } from "../agent/runtimeLifecycle.js";
 import type { AgentPromptExecutionRef } from "../agent/runtimeLedger.js";
 import type { DiscordReplyContext } from "../tools/types.js";
 import { durationMs } from "../util/logger.js";

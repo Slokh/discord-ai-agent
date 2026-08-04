@@ -39,21 +39,20 @@ npm run dev
 npm run worker
 ```
 
-The bot handles gateway ingress and delivery. The worker executes queued chat requests. Start `npm run api` for control-plane inspection or sandbox callbacks. `npm run start:all` is intended only for a fully configured built environment.
+The bot handles gateway ingress and delivery. The worker executes queued chat requests. Start `npm run api` only to receive signed callbacks from isolated code-update sandboxes. `npm run start:all` is intended only for a fully configured built environment.
 
 ## Configuration ownership
 
-`.env.example` and [Configuration](configuration.md) are generated from the accepted manifest in `src/config/environment.ts`. `src/config/env.ts` separates those deployment inputs from versioned `productConfig`. Environment variables are reserved for credentials, private Discord identity/policy, release metadata, the externally routed control URL, Kubernetes namespace, and the immutable sandbox image. Model choices, limits, repository target, queue topology, and payment rail change through reviewed source. Production startup rejects retired variables; run `npm run config:check` whenever the manifest changes.
+`.env.example` and [Configuration](configuration.md) are generated from the accepted manifest in `src/config/environment.ts`. `src/config/env.ts` separates those deployment inputs from versioned `productConfig`. Environment variables are reserved for credentials, private Discord identity/policy, release metadata, Kubernetes namespace, and the immutable sandbox image. Model choices, limits, repository target, queue topology, callback URL, and payment rail change through reviewed source. Production startup rejects retired variables; run `npm run config:check` whenever the manifest changes.
 
 Important feature gates:
 
 | Capability | Required configuration |
 | --- | --- |
 | Chat | Discord token/client/guild, OpenRouter key, database |
-| Code updates | GitHub PAT or App credentials, task-signing secret, worker; API for callbacks |
+| Code updates | GitHub PAT or App credentials, task-signing secret, worker, and internal callback receiver |
 | Spotify | Client ID and client secret |
 | Wallets, transfers, and wagers | Both Privy credentials |
-| Public control API | API role, password, HTTPS/public URL when exposed |
 
 Administrative mutations use `BOT_OWNER_USER_ID` and `OPS_ALLOWLIST_USER_IDS`. Code-update requests remain available to members when the feature is deployed.
 
@@ -72,13 +71,11 @@ Useful maintenance scripts include `aliases`, `blocked-users`, `embeddings:repri
 
 ## Production-first inspection
 
-Operator tools resolve the versioned production control-plane URL or the active Kubernetes context. They fail rather than silently falling back to localhost or a local database. Use `--api-url` for another explicit control plane and `--source db` only for intentional isolated direct-DB inspection.
+The runtime ledger is canonical Postgres data, not an HTTP operator API. Investigate it only from a trusted, configured application pod or an explicitly selected production database; never fall back to a local default while diagnosing production behavior.
+
+`release:status` remains the deployment-health command:
 
 ```bash
-npm run runs:inspect -- --list --limit 20
-npm run runs:inspect -- --list --channel <channel-id> --revision <sha> --since <ISO> --triage
-npm run tasks:status
-npm run bugs:status -- --requester <discord-user-id>
 npm run release:status -- --pr <number>
 ```
 
@@ -99,35 +96,15 @@ kubectl -n discord-ai-agent exec deploy/discord-ai-agent-worker -- node dist/scr
 kubectl -n discord-ai-agent exec deploy/discord-ai-agent-worker -- node dist/scripts/frogAgent.js resolve <entry-id>
 ```
 
-The authenticated friction API returns only category, severity, affected capability, occurrence count, revision, and a canonical run identifier. Titles, bodies, and session identifiers remain available only through the private operator command.
-
-List filters for kind, status, channel, revision, and start time are applied by the control plane before the result limit. This keeps older matching failures visible even when unrelated recent executions are numerous.
-
-The API role serves authenticated control-plane routes and Prometheus metrics. Keep the service private when possible. If public, require HTTPS and `CONTROL_API_AUTH_PASSWORD`.
+The API role is an internal-only signed callback receiver. It exposes only `/healthz` and task-scoped callback writes from isolated code-update sandboxes; it has no operator reads, metrics, browser UI, public service, or password configuration.
 
 `release:status` is the single safe release view. It combines an explicitly requested PR (or the current non-main branch), Helm release state, role images/readiness/revisions, current-pod restart counts, the matching deployment workflow, and the deployed revision-quality assessment. Running it from `main` intentionally omits PR evidence without producing a warning. It uses the same typed deployment-health evaluator as CI and exits nonzero for failed checks, deployment failure, role drift, incomplete rollout, restarted current pods, stale active execution/task work, or a failed quality gate; unavailable evidence is reported explicitly rather than guessed.
 
-`tasks:status` reports executions rather than treating durable conversation sessions as active work. It separates member and synthetic cohorts, marks nonterminal executions stale after 15 minutes, and limits “recent terminal tasks” to the last 24 hours. The worker reconciles stale non-task executions into an explicit failed terminal result so crashed probes or lost queue workers cannot remain running forever.
-
-Production API startup requires a control password even when no public URL is declared, preventing a private-service or load-balancer change from exposing a passwordless control plane. Configuration also rejects a non-HTTPS public control API URL. Clients may use standard Basic authentication and scripts use a bearer header. Credentials in cookies, `?auth=`, or `?token=` query strings are not accepted, so proxies and access logs do not capture them.
-
-The metrics surface reports runtime event latency/cost/tokens, answer status/latency/cost by model and application revision, tool outcomes, reviewed run ratings and failure modes, delivery recoveries, and code-update backlog/phase timing. These are observable outcomes rather than guesses derived from answer wording; for example, unnecessary refusals are counted only when a reviewer classifies them.
+The worker reconciles stale non-task executions into an explicit failed terminal result so crashed probes or lost queue workers cannot remain running forever.
 
 ## Debug a Discord result
 
-For a single Discord link, begin with:
-
-```bash
-npm run discord:debug -- <discord-message-link>
-```
-
-For a suspected rollout regression, audit the full channel and retained reply chains:
-
-```bash
-npm run discord:audit -- --channel <channel-id> --since-deploy --include-reply-chains
-```
-
-The audit reader uses bounded concurrency and honors Discord rate-limit retries. Warning signals include both warning- and error-level runtime events; a top-level successful prompt can therefore still be triaged when a tool or delivery sub-operation degraded.
+For a Discord link or suspected rollout regression, start from the retained production ledger and correlate ingress, reply-chain, model, tool, and delivery events. Warning signals include both warning- and error-level runtime events; a top-level successful prompt can therefore still be triaged when a tool or delivery sub-operation degraded.
 
 Investigation order:
 
@@ -145,7 +122,7 @@ Do not begin with browser scraping, provider blame, or source speculation when t
 
 The Unicode `🐛` reaction marks a Discord message for requester-scoped debugging. `listDiscordBugMarkers` returns only markers and context the requester may see. Removing the reaction clears the marker.
 
-For authenticated operator triage, `npm run bugs:status -- --requester <discord-user-id>` returns a content-free lifecycle for that requester's active markers: validation, disposition, repair PR, deployed revision, and original-prompt retry outcome. It never returns Discord message text, message links, channel IDs, or another requester's markers. Use the in-Discord tool when the actual marked content is needed because that path re-evaluates current channel visibility.
+For operator triage, use the in-Discord tool for the requester's visible markers and the trusted runtime ledger for the associated task lifecycle. The in-Discord path re-evaluates current channel visibility and must remain the source for marked-message content.
 
 Unqualified requests such as “show my bug reports” or “fix my bugs” refer to this native inbox. GitHub/repository issue work requires explicit repository context. This distinction lives in tool contracts rather than keyword routing.
 
@@ -163,7 +140,7 @@ Private regression cases carry their source application revision and failure cat
 
 ## Production triage
 
-Use `npm run runs:triage -- --since <ISO timestamp>` to group canonical runtime-ledger failures, warning/error event names, failed or empty tool results, and the slowest successful runs. Add `--revision <sha>`, `--channel <id>`, `--warnings-only`, or `--json` as needed. The report contains run IDs and signal taxonomy, not private prompt text; inspect a selected run separately for retained evidence.
+Group canonical runtime-ledger failures by deployed revision, warning/error event name, failed or empty tool result, and latency. Use retained artifacts only after authorization and redaction; do not export private prompt, reply, or member data.
 
 Deleted reply parents are informational `discord.reply_context.unavailable` events. Unexpected fetch failures remain warnings, so warning-only triage is not polluted by normal Discord deletion.
 
@@ -178,7 +155,7 @@ npm run verify:db
 npm run eval -- --dry-run
 ```
 
-CI classifies the changed paths and starts lint, tests, production build, repository-policy checks, and relevant DB or infrastructure verification in parallel. Documentation-only and control-plane-only changes do not start the DB service; application and high-consequence lifecycle changes still do. The production build performs the TypeScript compilation, so CI does not repeat a separate no-emit compilation. CodeQL remains an independent PR and scheduled analysis.
+CI classifies the changed paths and starts lint, tests, production build, repository-policy checks, and relevant DB or infrastructure verification in parallel. Documentation-only and callback-receiver-only changes do not start the DB service; application and high-consequence lifecycle changes still do. The production build performs the TypeScript compilation, so CI does not repeat a separate no-emit compilation. CodeQL remains an independent PR and scheduled analysis.
 
 For same-repository PRs, the optional candidate-image path waits for the cheaper verification jobs to pass, then publishes runtime and codegen images to separate ECR repositories under the checked-out Git tree hash. Its OIDC role has no production-repository or Kubernetes access. Dependency, Docker, or native-manifest changes scan those exact remote images on one shared runner. After merge, CI calculates the merged tree hash, promotes only the matching candidates to commit-tagged production references, and deletes the temporary tags; a one-day lifecycle is the cleanup fallback. Candidate repositories disable redundant ECR scanning because CI scans affected candidates and the production repositories scan the promoted release. Exact-tree promotion lets main omit repeated tests and rebuilding. Once candidate publication is enabled, a missing candidate fails closed rather than rebuilding an unverified release. Before enablement, main retains the existing full verification and builds and pushes both images through one Docker Bake graph. PR builds restore trusted default-branch BuildKit caches but do not fill one-use PR cache scopes. Nested Rust targets, Terraform providers, coverage, and other local build state are excluded from the Docker context.
 

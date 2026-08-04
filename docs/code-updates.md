@@ -81,11 +81,6 @@ Recovery produces an explicit terminal reason. It never silently publishes an un
 
 ## Operations and verification
 
-Inspect tasks with:
-
-```bash
-npm run tasks:status
-npm run runs:inspect -- --list --limit 20
-```
+Inspect task state through the canonical runtime ledger from a trusted, configured application environment. The sandbox callback receiver accepts writes only; it deliberately has no task-reading HTTP API.
 
 Changes to this lifecycle should test queue handoff, status rendering, context selection, branch policy, dependency refresh, callback authentication, terminal idempotency, cleanup, and publication metadata as relevant. Run `npm run verify`; run `npm run verify:db` for queue, task, or migration changes; run the appropriate smoke command only when credentials and external mutation are intentionally in scope.

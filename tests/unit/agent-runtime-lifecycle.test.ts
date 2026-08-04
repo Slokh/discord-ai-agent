@@ -5,10 +5,10 @@ import {
   enqueueAgentRuntimeSessionExecution,
   missingAgentRuntimeExecutionJobContext,
   storeAgentRuntimeExecutionInputLines
-} from "../../src/agent/runtimeControlPlane.js";
+} from "../../src/agent/runtimeLifecycle.js";
 import type { AgentRuntimeExecutionRecord, AgentRuntimeSessionRecord } from "../../src/db/agentRuntimeRepository.js";
 
-describe("agent runtime control plane", () => {
+describe("agent runtime lifecycle", () => {
   it("stores execution input lines as durable replay artifacts", async () => {
     const agentRuntime = fakeAgentRuntime();
 

@@ -22,8 +22,8 @@ contains the implementation and verification workflow.
 
 | Request shape | Start here | Required approach |
 | --- | --- | --- |
-| A Discord reply is wrong, slow, missing, or confusing | `npm run discord:debug -- <message-link>` and [`docs/operations.md`](docs/operations.md) | Compare ingress, reply chain, operative request, tool calls/results, guards, model I/O, and delivery. Do not blame a model or use browser scraping first. |
-| Many replies regressed after a deploy | `npm run discord:audit -- --channel <id> --since-deploy --include-reply-chains` | Audit the whole channel, including role-triggered requests and chains; cluster failures by deployed revision before editing. |
+| A Discord reply is wrong, slow, missing, or confusing | Canonical production ledger evidence and [`docs/operations.md`](docs/operations.md) | Compare ingress, reply chain, operative request, tool calls/results, guards, model I/O, and delivery. Do not blame a model or use browser scraping first. |
+| Many replies regressed after a deploy | Canonical production ledger evidence | Audit the whole channel, including role-triggered requests and chains; cluster failures by deployed revision before editing. |
 | A member marked a message with `🐛` | `listDiscordBugMarkers`, [`docs/operations.md`](docs/operations.md), and the linked run | This is the native, private bug inbox. Retrieve the requester's permission-filtered markers and evidence, reproduce, add a regression test, then open a focused repair PR when asked. Never make it a public GitHub issue by default. |
 | Model conversation, prompt, or tool use is poor | [`docs/agent-system.md`](docs/agent-system.md), `src/agent/`, and the run's prompt/debug artifacts | Improve general prompt/tool/result contracts and traceability. Do not add regex routes or canned replies for one wording; preserve the current request as authoritative. |
 | Model, reasoning level, fallback, or token-cost change | live config/deployment evidence, [`src/models/`](src/models/), and observed run cost | Verify the actually deployed primary/fallback configuration before changing it. Compare provider pricing and observed usage, preserve a fallback, and validate conversational/tool behavior with focused traces or evals. |
@@ -95,18 +95,18 @@ the private normal-reply namespace. Migration is idempotent.
   retained artifacts, not event metadata.
 - Before changing skills or prompts, distinguish static repository guidance from
   private server overlay content and from retrieved conversation context.
-- Treat production as the default target for run/task inspection and the live
-  console. Use the configured production control plane or current Kubernetes
-  context; pass `--source db` only for deliberate isolated local inspection.
+- Treat production as the default target for run/task inspection. Use a trusted
+  configured application pod or production database; never let a local default
+  masquerade as production evidence.
 - Use the repository-local `$discord-production-debug` skill for Discord links,
   deployed reply regressions, production audits, and native bug-inbox requests.
 - Treat a `discord.com/channels/...` URL as a native production-debug reference.
-  Run `npm run discord:debug -- <message-link>` before reading source or opening
-  Discord in a browser. If it fails, diagnose the control-plane, Discord API,
-  authentication, or permission path and report the concrete blocker.
-- For a regression since deployment, run `npm run discord:audit -- --channel
-  <id> --since-deploy --include-reply-chains`; use `npm run runs:inspect` for
-  ledger-level narrowing and `npm run tasks:status` for code-update tasks.
+  Inspect its retained production ledger evidence before reading source or
+  opening Discord in a browser. If it is unavailable, diagnose the database,
+  Discord API, authentication, or permission path and report the concrete blocker.
+- For a regression since deployment, use the ledger to compare affected reply
+  chains and cluster failures by revision; inspect code-update task state from
+  the same durable records.
 - Compare ingress, retained reply chain, session memory, operative request, model
   I/O, tools, deterministic guards, outcome state, and delivery separately.
   Group identical failures by revision before editing or blaming a provider.

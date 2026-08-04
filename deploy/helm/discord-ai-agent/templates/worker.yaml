@@ -31,14 +31,13 @@ spec:
           command: ["node", "dist/src/index.js", "worker"]
           env:
             {{- include "discord-ai-agent.commonEnv" . | nindent 12 }}
-            {{- include "discord-ai-agent.controlApiPublicEnv" . | nindent 12 }}
             {{- include "discord-ai-agent.databaseEnv" . | nindent 12 }}
             {{- include "discord-ai-agent.discordEnv" . | nindent 12 }}
             {{- include "discord-ai-agent.openRouterEnv" . | nindent 12 }}
             {{- include "discord-ai-agent.spotifyEnv" . | nindent 12 }}
             {{- include "discord-ai-agent.paymentEnv" . | nindent 12 }}
             {{- include "discord-ai-agent.githubEnv" . | nindent 12 }}
-            {{- include "discord-ai-agent.internalApiEnv" . | nindent 12 }}
+            {{- include "discord-ai-agent.sandboxCallbackEnv" . | nindent 12 }}
             {{- include "discord-ai-agent.sandboxLauncherEnv" . | nindent 12 }}
           resources:
             {{- toYaml .Values.worker.resources | nindent 12 }}

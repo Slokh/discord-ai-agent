@@ -99,10 +99,10 @@ export async function buildCodegenContextPack(checkoutDir: string, taskRequest =
       checks: ["tests/unit/tool-registry.test.ts", "tests/unit/tool-contract-validation.test.ts", "tests/unit/tool-handler-conformance.test.ts", "tests/integration/agent.test.ts"]
     },
     {
-      area: "Observability control plane",
-      purpose: "Runs, spans, events, artifacts, and the control API explain what happened and where latency went.",
-      files: ["src/observability/runs.ts", "src/observability/runtimeEventSchema.ts", "src/control/internalApiServer.ts", "docs/operations.md"],
-      checks: ["tests/unit/observability.test.ts", "tests/unit/internal-api-runs.test.ts"]
+      area: "Runtime ledger and sandbox callbacks",
+      purpose: "Runs, spans, events, and artifacts are retained in the runtime ledger; isolated sandboxes can only append signed task callbacks.",
+      files: ["src/observability/runs.ts", "src/observability/runtimeEventSchema.ts", "src/execution/callbackServer.ts", "docs/operations.md"],
+      checks: ["tests/unit/observability.test.ts", "tests/unit/sandbox-callback-server.test.ts"]
     },
     {
       area: "Architecture guides",
@@ -142,7 +142,7 @@ export async function buildCodegenContextPack(checkoutDir: string, taskRequest =
       "You are already inside an isolated Kubernetes sandbox with full filesystem/network access for this task.",
       "The checkout is a writable task branch. Edit files directly in the current repository.",
       "Do not create commits, push branches, open PRs, or mutate GitHub state; the sandbox runner handles that after your focused checks pass.",
-      "Use helper CLIs by absolute shim path when useful: $AGENT_TOOL_SHIM_DIR/agent-task-context, $AGENT_TOOL_SHIM_DIR/agent-cache-info, $AGENT_TOOL_SHIM_DIR/agent-progress <step> <message>.",
+      "Use helper CLIs by absolute shim path when useful: $AGENT_TOOL_SHIM_DIR/agent-task-context and $AGENT_TOOL_SHIM_DIR/agent-cache-info.",
       "Dependency cache is prepared before the harness runs. Inspect cache state with agent-cache-info only when relevant; do not reinstall dependencies unless package manifests changed.",
       "Use apply_patch for focused file edits when available; otherwise use the smallest reliable edit command.",
       "Prefer rg for search, then read only the files needed for the next concrete edit. If rg is unavailable, use the local search fallback or a minimal Node search rather than broad shell loops."

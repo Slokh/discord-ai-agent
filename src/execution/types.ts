@@ -57,7 +57,7 @@ export type SandboxEnv = {
   targetBranch: string | null;
   targetPullRequestNumber: number | null;
   targetPullRequestUrl: string | null;
-  controlPlaneInternalUrl: string;
+  callbackServerUrl: string;
   taskToken: string;
   taskCallbackSecret: string;
   githubToken: string;

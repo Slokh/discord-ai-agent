@@ -92,13 +92,13 @@ describe("sandbox callbacks", () => {
       message: "Sandbox process started.",
       metadata: { sandboxRunId: env.sandboxRunId }
     });
-    expect((requests[1]?.body.metadata as Record<string, unknown>).sandboxRunId).toBe(env.sandboxRunId);
-    expect(requests[2]?.body.sandboxRunId).toBe(env.sandboxRunId);
-    expect((requests[3]?.body.metadata as Record<string, unknown>).sandboxRunId).toBe(env.sandboxRunId);
+    expect(requests[1]?.body).toEqual(expect.objectContaining({ metadata: expect.objectContaining({ sandboxRunId: env.sandboxRunId }) }));
+    expect(requests[2]?.body).toEqual(expect.objectContaining({ metadata: expect.objectContaining({ sandboxRunId: env.sandboxRunId }) }));
+    expect(requests[3]?.body).toEqual(expect.objectContaining({ metadata: expect.objectContaining({ sandboxRunId: env.sandboxRunId }) }));
   });
 });
 
-function sandboxEnv(controlPlaneInternalUrl: string): SandboxEnv {
+function sandboxEnv(callbackServerUrl: string): SandboxEnv {
   const taskSigningSecret = "task-secret";
   const taskId = "task-1";
   const sandboxRunId = "run-1";
@@ -114,7 +114,7 @@ function sandboxEnv(controlPlaneInternalUrl: string): SandboxEnv {
     targetBranch: null,
     targetPullRequestNumber: null,
     targetPullRequestUrl: null,
-    controlPlaneInternalUrl,
+    callbackServerUrl,
     taskToken: taskBearerToken({ taskId, sandboxRunId, secret: taskSigningSecret }),
     taskCallbackSecret: taskCallbackSecret({ taskId, sandboxRunId, secret: taskSigningSecret }),
     githubToken: "github-token",

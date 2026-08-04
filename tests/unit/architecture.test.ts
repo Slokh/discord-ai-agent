@@ -107,7 +107,7 @@ describe("architecture guardrails", () => {
       "src/agent/capabilityRuntime.ts",
       "src/agent/nanocodexAgentRuntime.ts",
       "src/agent/promptBuilder.ts",
-      "src/agent/runtimeControlPlane.ts",
+      "src/agent/runtimeLifecycle.ts",
       "src/agent/toolDispatcher.ts",
       "src/tools/toolDeployment.ts",
       "src/tools/toolScope.ts",

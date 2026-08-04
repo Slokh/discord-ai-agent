@@ -18,6 +18,10 @@ output "github_actions_deploy_role_arn" {
   value = aws_iam_role.github_actions_deploy.arn
 }
 
+output "github_actions_candidate_role_arn" {
+  value = aws_iam_role.github_actions_candidate.arn
+}
+
 output "database_endpoint" {
   value = aws_db_instance.postgres.address
 }

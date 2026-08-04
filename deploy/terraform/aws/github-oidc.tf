@@ -42,8 +42,10 @@ data "aws_iam_policy_document" "github_actions_deploy" {
       "ecr:BatchCheckLayerAvailability",
       "ecr:BatchGetImage",
       "ecr:CompleteLayerUpload",
+      "ecr:DescribeImages",
       "ecr:DescribeRepositories",
       "ecr:GetAuthorizationToken",
+      "ecr:GetDownloadUrlForLayer",
       "ecr:InitiateLayerUpload",
       "ecr:PutImage",
       "ecr:UploadLayerPart"
@@ -63,4 +65,67 @@ resource "aws_iam_role_policy" "github_actions_deploy" {
   name   = "${var.name}-github-actions-deploy"
   role   = aws_iam_role.github_actions_deploy.id
   policy = data.aws_iam_policy_document.github_actions_deploy.json
+}
+
+data "aws_iam_policy_document" "github_actions_candidate_assume_role" {
+  statement {
+    actions = ["sts:AssumeRoleWithWebIdentity"]
+
+    principals {
+      type        = "Federated"
+      identifiers = [aws_iam_openid_connect_provider.github.arn]
+    }
+
+    condition {
+      test     = "StringEquals"
+      variable = "token.actions.githubusercontent.com:aud"
+      values   = ["sts.amazonaws.com"]
+    }
+
+    condition {
+      test     = "StringEquals"
+      variable = "token.actions.githubusercontent.com:sub"
+      values   = ["repo:${var.github_repository}:pull_request"]
+    }
+
+    condition {
+      test     = "StringEquals"
+      variable = "token.actions.githubusercontent.com:job_workflow_ref"
+      values   = ["${var.github_repository}/.github/workflows/candidate-images.yml@refs/heads/main"]
+    }
+  }
+}
+
+resource "aws_iam_role" "github_actions_candidate" {
+  name               = "${var.name}-github-actions-candidate"
+  assume_role_policy = data.aws_iam_policy_document.github_actions_candidate_assume_role.json
+}
+
+data "aws_iam_policy_document" "github_actions_candidate" {
+  statement {
+    actions   = ["ecr:GetAuthorizationToken"]
+    resources = ["*"]
+  }
+
+  statement {
+    actions = [
+      "ecr:BatchCheckLayerAvailability",
+      "ecr:BatchGetImage",
+      "ecr:CompleteLayerUpload",
+      "ecr:GetDownloadUrlForLayer",
+      "ecr:InitiateLayerUpload",
+      "ecr:PutImage",
+      "ecr:UploadLayerPart"
+    ]
+    resources = [
+      aws_ecr_repository.candidate_app.arn,
+      aws_ecr_repository.candidate_sandbox.arn
+    ]
+  }
+}
+
+resource "aws_iam_role_policy" "github_actions_candidate" {
+  name   = "${var.name}-github-actions-candidate"
+  role   = aws_iam_role.github_actions_candidate.id
+  policy = data.aws_iam_policy_document.github_actions_candidate.json
 }

@@ -65,8 +65,12 @@ const randomPrompt = [
 const pool = createPool(config);
 let deliveryChannelId: string;
 try {
-  await Promise.all([verifyGitHub(), verifySandboxCallback(pool)]);
-  deliveryChannelId = await runConversationCanary(pool);
+  const [, , channelId] = await Promise.all([
+    verifyGitHub(),
+    verifySandboxCallback(pool),
+    runConversationCanary(pool),
+  ]);
+  deliveryChannelId = channelId;
 } finally {
   await pool.end();
 }
@@ -76,9 +80,11 @@ await verifyDiscordAccess(deliveryChannelId);
 process.stdout.write("Post-deploy canary passed: model, retrieval, bounded randomness, hosted web, follow-up continuity, GitHub, sandbox scheduling, and Discord access are operational.\n");
 
 async function runConversationCanary(database: ReturnType<typeof createPool>) {
-  await runCapabilityCanary(database, statsPrompt, "POST_DEPLOY_STATS_OK", passingStatsCanaryChannel);
-  await runCapabilityCanary(database, randomPrompt, "POST_DEPLOY_RANDOM_OK", passingRandomCanaryChannel);
-  const channelId = await runCapabilityCanary(database, webPrompt, "POST_DEPLOY_WEB_OK", passingWebCanaryChannel);
+  const [, , channelId] = await Promise.all([
+    runCapabilityCanary(database, statsPrompt, "POST_DEPLOY_STATS_OK", passingStatsCanaryChannel),
+    runCapabilityCanary(database, randomPrompt, "POST_DEPLOY_RANDOM_OK", passingRandomCanaryChannel),
+    runCapabilityCanary(database, webPrompt, "POST_DEPLOY_WEB_OK", passingWebCanaryChannel),
+  ]);
   await runFollowUpContinuityCanary(database, channelId);
   return channelId;
 }

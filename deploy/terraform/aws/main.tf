@@ -46,6 +46,51 @@ resource "aws_ecr_repository" "sandbox" {
   }
 }
 
+resource "aws_ecr_repository" "candidate_app" {
+  name                 = "${var.name}-candidate"
+  image_tag_mutability = "MUTABLE"
+
+  image_scanning_configuration {
+    scan_on_push = true
+  }
+}
+
+resource "aws_ecr_repository" "candidate_sandbox" {
+  name                 = "${var.name}-sandbox-candidate"
+  image_tag_mutability = "MUTABLE"
+
+  image_scanning_configuration {
+    scan_on_push = true
+  }
+}
+
+locals {
+  candidate_image_lifecycle_policy = jsonencode({
+    rules = [{
+      rulePriority = 1
+      description  = "Remove disposable candidate images after 14 days"
+      selection = {
+        tagStatus     = "tagged"
+        tagPrefixList = ["tree-"]
+        countType     = "sinceImagePushed"
+        countUnit     = "days"
+        countNumber   = 14
+      }
+      action = { type = "expire" }
+    }]
+  })
+}
+
+resource "aws_ecr_lifecycle_policy" "candidate_app" {
+  repository = aws_ecr_repository.candidate_app.name
+  policy     = local.candidate_image_lifecycle_policy
+}
+
+resource "aws_ecr_lifecycle_policy" "candidate_sandbox" {
+  repository = aws_ecr_repository.candidate_sandbox.name
+  policy     = local.candidate_image_lifecycle_policy
+}
+
 module "eks" {
   source  = "terraform-aws-modules/eks/aws"
   version = "~> 20.0"

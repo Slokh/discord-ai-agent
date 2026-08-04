@@ -105,6 +105,8 @@ npm test -- tests/unit/tool-contract-validation.test.ts
 npm test -- tests/unit/discord-response-sink.test.ts
 ```
 
+PR CI uses a conservative changed-path classifier. Lint, unit coverage, and the production build run in parallel for publishable code; DB verification runs for server, lifecycle, migration, dependency, and integration-test changes; documentation and infrastructure checks run only for their owners. Unknown paths take the broader core path. The required aggregate check accepts an intentionally skipped conditional job, but never a cancelled or failed one.
+
 Then use the proportionate broad checks:
 
 | Change | Required checks |

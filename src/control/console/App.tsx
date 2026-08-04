@@ -86,9 +86,14 @@ const PaymentsDashboard = lazy(() =>
     default: module.PaymentsDashboard,
   })),
 );
+const FrictionDashboard = lazy(() =>
+  import("./frictionDashboard.js").then((module) => ({ default: module.FrictionDashboard })),
+);
 
 export function App() {
-  return window.location.pathname === "/payments" ? (
+  return window.location.pathname === "/friction" ? (
+    <Suspense fallback={<Loading label="Loading friction" />}><FrictionDashboard /></Suspense>
+  ) : window.location.pathname === "/payments" ? (
     <Suspense fallback={<Loading label="Loading payments" />}>
       <PaymentsDashboard />
     </Suspense>
@@ -349,6 +354,7 @@ function RunConsole() {
               <a className="ops-nav-link" href="/payments">
                 Payments
               </a>
+              <a className="ops-nav-link" href="/friction">Friction</a>
             </div>
             <div className="sidebar-actions">
               <Button.Icon

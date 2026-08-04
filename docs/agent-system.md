@@ -48,7 +48,7 @@ Configuration is validated in `src/config/env.ts`:
 - Code updates default to Terra with medium reasoning.
 - Owner/ops may set a per-guild conversational override to Sol or Luna through the guarded model tool.
 
-Public-web research crosses the typed `web__run` application capability. Its focused handler sends only the authoritative typed web operations to the nested provider, never the full outer Discord request, offers only the matching hosted search, fetch, or time capabilities, and requires hosted execution after the outer agent selects a validated operation. It rejects responses without recorded hosted execution and readable evidence. This prevents nested research from attempting unrelated work. Provider requests, usage, sources, and failures stay in the same runtime ledger. NanoCodex's provider-specific standalone search is disabled so the agent cannot bypass the configured provider or its application telemetry.
+Public-web research crosses the typed `web__run` application capability. Its model contract is one discriminated `operations` array with explicit `search`, `open`, and `time` records; the handler translates those records to provider-native operations. Its focused handler sends only the authoritative typed web operations to the nested provider, never the full outer Discord request, offers only the matching hosted search, fetch, or time capabilities, and requires hosted execution after the outer agent selects a validated operation. It rejects responses without recorded hosted execution and readable evidence. This prevents nested research from attempting unrelated work. Provider requests, usage, sources, and failures stay in the same runtime ledger. NanoCodex's provider-specific standalone search is disabled so the agent cannot bypass the configured provider or its application telemetry.
 
 Embeddings, image generation, and transcription are also direct provider-backed tools. They are not alternate agent engines.
 
@@ -102,6 +102,8 @@ The generic boundary may unwrap a JSON-encoded object or array only when the sch
 Mutating tools require explicit current-user intent and must be idempotent or durably deduplicated where repetition would be harmful. A successful mutation is retained immediately. If the model, audit write, balance refresh, or final synthesis later fails, the runtime delivers the committed result with a partial limitation instead of inviting a duplicate retry.
 
 Private friction reporting is internal telemetry rather than a user-requested product mutation, so the model may record it without asking permission. Frog deduplicates concurrent reports with the same normalized title and increments their occurrence count; trusted operator workflows own explicit resolution.
+
+Paid generation contracts may declare identical-success reuse. Within one turn, the generic runtime executes the first exact call, retains its successful output, and returns that evidence for an identical repeat without charging the provider or attaching the file again. Distinct arguments still execute normally. This is a contract-owned cost and delivery invariant, not semantic prompt routing.
 
 ## Typed results
 

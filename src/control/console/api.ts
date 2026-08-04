@@ -18,6 +18,28 @@ export type PaymentsSnapshot = {
   generatedAt: string;
 };
 
+export type FrictionSnapshot = {
+  generatedAt: string;
+  items: Array<{
+    id: string;
+    severity: "blocker" | "major" | "minor";
+    category: string;
+    affectedCapability: string | null;
+    occurrences: number;
+    appRevision: string | null;
+    executionId: string | null;
+  }>;
+  byCategory: Array<{ name: string; count: number }>;
+  bySeverity: Array<{ name: string; count: number }>;
+};
+
+export async function fetchFrictionSnapshot(): Promise<FrictionSnapshot> {
+  if (useFixtures) return { generatedAt: new Date().toISOString(), items: [], byCategory: [], bySeverity: [] };
+  const response = await fetch("/api/friction?limit=100", { credentials: "include" });
+  if (!response.ok) throw new Error(`Failed to load friction (${response.status})`);
+  return (await response.json()) as FrictionSnapshot;
+}
+
 export async function fetchPaymentsSnapshot(): Promise<PaymentsSnapshot> {
   if (useFixtures) {
     return { totals: {}, wallets: [], transfers: [], wagers: [], health: [], generatedAt: new Date().toISOString() };

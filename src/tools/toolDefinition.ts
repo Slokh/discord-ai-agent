@@ -50,11 +50,12 @@ export type ToolRegistryEntry = {
   permissionRequirements: string[];
   auditEvents: string[];
   argumentExamples: Record<string, unknown>[];
+  repeatPolicy: "allow" | "reuse_identical_success";
   parameters: FunctionToolDefinition["function"]["parameters"];
 };
 
-type ToolDefinitionInput = Omit<ToolRegistryEntry, "outputContract" | "permissionRequirements" | "auditEvents" | "argumentExamples" | "accessPolicy"> &
-  Partial<Pick<ToolRegistryEntry, "outputContract" | "permissionRequirements" | "auditEvents" | "argumentExamples" | "accessPolicy">>;
+type ToolDefinitionInput = Omit<ToolRegistryEntry, "outputContract" | "permissionRequirements" | "auditEvents" | "argumentExamples" | "accessPolicy" | "repeatPolicy"> &
+  Partial<Pick<ToolRegistryEntry, "outputContract" | "permissionRequirements" | "auditEvents" | "argumentExamples" | "accessPolicy" | "repeatPolicy">>;
 
 const outputContractByToolClass: Record<ToolClass, string[]> = {
   resolver: ["resolved IDs", "display names", "match confidence or ambiguity notes", "result count"],
@@ -74,6 +75,7 @@ export function defineTool<const T extends ToolDefinitionInput>(definition: T): 
   return {
     ...definition,
     accessPolicy: definition.accessPolicy ?? "default",
+    repeatPolicy: definition.repeatPolicy ?? "allow",
     outputContract: definition.outputContract ?? outputContractByToolClass[definition.toolClass],
     permissionRequirements: definition.permissionRequirements ?? (
       definition.mutates

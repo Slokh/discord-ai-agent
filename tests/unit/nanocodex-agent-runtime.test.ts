@@ -253,6 +253,28 @@ describe("NanoCodex agent runtime executor", () => {
     }));
   });
 
+  it("reuses an identical successful paid generation within one turn", async () => {
+    const runtime = agentRuntime();
+    const image = { name: "generated.png", contentType: "image/png", data: Buffer.from("image") };
+    const executeToolRoute = vi.fn(async () => ({ content: "Generated image", files: [image] }));
+    const runRuntime = vi.fn(async (input: any) => {
+      expect((await input.executeTool({ callId: "call-1", name: "generateImage", arguments: { prompt: "a gnome" } })).success).toBe(true);
+      const repeated = await input.executeTool({ callId: "call-2", name: "generateImage", arguments: { prompt: "a gnome" } });
+      expect(repeated).toMatchObject({ success: true, metadata: { status: "reused", reusedCallId: "call-1" } });
+      return result("done");
+    });
+
+    await expect(executeNanoCodexAgentRuntime({
+      toolContext: toolContext(runtime), text: "generate an image of a gnome", timeoutMs: 1_000,
+      runRuntime: runRuntime as never, executeToolRoute: executeToolRoute as never,
+    })).resolves.toMatchObject({ content: "done", files: [expect.objectContaining({ name: "generated.png" })] });
+    expect(executeToolRoute).toHaveBeenCalledTimes(1);
+    expect(runtime.recordEvent).toHaveBeenCalledWith(expect.objectContaining({
+      eventName: "agent.tool.complete",
+      metadata: expect.objectContaining({ status: "reused", reusedCallId: "call-1" }),
+    }));
+  });
+
   it("delivers generated files when the hard timeout wins the runtime race", async () => {
     const runtime = agentRuntime();
     const image = { name: "generated.png", contentType: "image/png", data: Buffer.from("image") };

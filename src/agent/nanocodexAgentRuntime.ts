@@ -123,6 +123,7 @@ async function runRetainedNanoCodexTurn(input: {
   const memoryEvents: NonNullable<AgentResponse["memoryEvents"]> = [];
   const successfulMutatingToolResults = input.recoveryState.successfulMutations;
   let lastSuccessfulFileToolResult: AgentResponse | undefined;
+  const reusableToolResults = new Map<string, { callId: string; result: AgentResponse }>();
   const initialPrompt = await buildNanoCodexPrompt(
     ctx,
     text,
@@ -213,6 +214,32 @@ async function runRetainedNanoCodexTurn(input: {
         arguments: args,
         argumentsText: JSON.stringify(args),
       };
+      const repeatKey = `${route.name}\0${route.argumentsText}`;
+      const reusable = tool.repeatPolicy === "reuse_identical_success" ? reusableToolResults.get(repeatKey) : undefined;
+      if (reusable) {
+        const elapsed = durationMs(startedAt);
+        const reusedResult = {
+          ...reusable.result,
+          files: undefined,
+          tables: undefined,
+          content: `The identical successful ${route.name} result from earlier in this turn is already available for final delivery. Do not call it again.`,
+        };
+        memoryEvents.push({ role: "tool", content: reusedResult.content, metadata: { toolName: route.name, arguments: args } });
+        await appendAgentRuntimeToolResult(ctx, {
+          round: toolSequence,
+          route,
+          result: reusedResult,
+          durationMs: elapsed,
+          skippedRedundantToolCall: true,
+        });
+        await recordAgentEvent(ctx, {
+          eventName: "agent.tool.complete",
+          summary: `${route.name}: reused identical successful result`,
+          durationMs: elapsed,
+          metadata: { toolName: route.name, callId: route.id, status: "reused", reusedCallId: reusable.callId, outputChars: reusedResult.content.length, fileCount: 0, tableCount: 0 },
+        });
+        return { success: true, output: reusedResult.content, metadata: { status: "reused", reusedCallId: reusable.callId } };
+      }
       await recordAgentEvent(ctx, {
         eventName: "agent.tool.started",
         summary: route.name,
@@ -224,6 +251,9 @@ async function runRetainedNanoCodexTurn(input: {
       }
       if (toolResult.status !== "error" && toolResult.files?.length) {
         lastSuccessfulFileToolResult = toolResult;
+      }
+      if (tool.repeatPolicy === "reuse_identical_success" && toolResult.status !== "error") {
+        reusableToolResults.set(repeatKey, { callId: route.id, result: toolResult });
       }
       input.capabilities.observeToolResult(route.name, toolResult);
       if (toolResult.files?.length) turnOutput.files.push(...toolResult.files);
@@ -252,6 +282,8 @@ async function runRetainedNanoCodexTurn(input: {
           fileCount: toolResult.files?.length ?? 0,
           tableCount: toolResult.tables?.length ?? 0,
           status: toolResult.status ?? "ok",
+          ...(toolResult.errorCode ? { errorCode: toolResult.errorCode } : {}),
+          ...(toolResult.retryable === undefined ? {} : { retryable: toolResult.retryable }),
         },
       });
       return {

@@ -27,6 +27,8 @@ npm run frog:agent -- resolve <entry-id>
 
 The wrapper maps the existing application `DATABASE_URL` to Frog's scoped `FROG_DATABASE_URL` and fixes the public namespace to `discord-ai-agent`; it adds no deployment secret or application environment setting. `migrate` is safe to run repeatedly, although normal application migrations already create the table. Run commands in the environment whose database you intend to inspect. `npx frog list` deliberately remains the repository-development view.
 
+Production images deliberately omit npm. Inside an application pod, invoke the compiled wrapper directly with `node dist/scripts/frogAgent.js <command>`.
+
 ## Find the owner
 
 Map the observed failure to one owner before editing:

@@ -152,6 +152,20 @@ describe("internal API run endpoints", () => {
     expect(inputs).toEqual([{ guildId: "guild-1", limit: 25 }]);
   });
 
+  it("serves content-free private friction summaries with run references", async () => {
+    runtime = await startInternalApi({ config: testConfig(), repo: fakeRepo({
+      friction: [{ id: "frog-1", title: "private title", body: "private body", severity: "major", category: "tool_contract", affectedCapability: "web", occurrences: 3, appRevision: "revision-1", executionId: "execution-1", sessionId: "session-1" }],
+    }) });
+    const auth = { authorization: `Basic ${Buffer.from("admin:secret").toString("base64")}` };
+    const response = await fetch(`${runtime.url}/api/friction`, { headers: auth });
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body).toMatchObject({ items: [{ id: "frog-1", category: "tool_contract", occurrences: 3, executionId: "execution-1" }], byCategory: [{ name: "tool_contract", count: 3 }] });
+    expect(JSON.stringify(body)).not.toContain("private title");
+    expect(JSON.stringify(body)).not.toContain("private body");
+    expect(JSON.stringify(body)).not.toContain("session-1");
+  });
+
   it("serves codegen status snapshots for operator tooling", async () => {
     runtime = await startInternalApi({ config: testConfig(), repo: fakeRepo(), db: fakeAgentTaskStatusPool() as never });
     const auth = { authorization: `Basic ${Buffer.from("admin:secret").toString("base64")}` };
@@ -366,7 +380,7 @@ function testConfig(): AppConfig {
   };
 }
 
-function fakeRepo(options: { onListProcessRuns?: (input: any) => void; bugStatuses?: any[] } = {}) {
+function fakeRepo(options: { onListProcessRuns?: (input: any) => void; bugStatuses?: any[]; friction?: any[] } = {}) {
   const run: ProcessRunRecord = {
     runId: "run-1",
     traceId: "trace-1",
@@ -461,7 +475,8 @@ function fakeRepo(options: { onListProcessRuns?: (input: any) => void; bugStatus
     getAgentRuntimeEventsForTrace: async () => [],
     getAgentRuntimeMessagesForTrace: async () => [],
     getToolAuditLogsForTrace: async () => [],
-    listDiscordBugInboxStatus: async () => options.bugStatuses ?? []
+    listDiscordBugInboxStatus: async () => options.bugStatuses ?? [],
+    listAgentFriction: async () => options.friction ?? [],
   } as unknown as DiscordAiAgentRepository;
 }
 

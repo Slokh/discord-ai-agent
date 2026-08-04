@@ -44,7 +44,7 @@ export const CONTEXT_DISCIPLINE_GUIDANCE =
   "For Discord replies, the current message remains the task. Use the reply chain only to resolve vague references like this, that, it, today, they, both, he, she, and those. A complete new question or request changes the subject even when it replies to an older message. Do not import unrelated channel memory, old assistant answers, or external topics just because words overlap. " +
   "Do not infer birthdays, anniversaries, or personal dates from the current date or request timestamp; state them only when the current request, reply chain, or fresh tool evidence provides them. ";
 export const EVIDENCE_EFFICIENCY_GUIDANCE =
-  "Use the smallest authoritative evidence. Stop once sufficient; do not repeat searches, reopen sources, or add broad history/web research after an exact result answers. Correct invalid tool arguments once instead of trying variants. ";
+  "Use the smallest authoritative evidence. Stop once sufficient; do not repeat searches, reopen sources, or add broad history/web research after an exact result answers. Correct invalid tool arguments once instead of trying variants. A successful file or generation result is ready for delivery; repeat only when the user requests distinct outputs. ";
 export const TOOL_RESULT_PROMPT_BYTE_LIMIT = 12 * 1024;
 
 export function chatMessages(

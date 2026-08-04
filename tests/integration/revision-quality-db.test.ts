@@ -125,4 +125,17 @@ describe.skipIf(!runDbTests)("revision quality database contract", () => {
       deliveries: [{ state: "abandoned", count: 1 }],
     });
   });
+
+  it("counts the final per-run capability outcome while retaining recovered retries", async () => {
+    const runtime = new AgentRuntimeRepository(database.pool);
+    await runtime.upsertSession({ sessionId: "retry-session", threadKey: "retry-thread", request: "test", metadata: { appRevision: "retry-revision", qualityCohort: "member" } });
+    await runtime.createExecution({ executionId: "retry-execution", sessionId: "retry-session", harness: "nanocodex", status: "succeeded", metadata: { appRevision: "retry-revision", qualityCohort: "member" } });
+    for (let index = 0; index < 3; index += 1) {
+      await runtime.recordEvent({ sessionId: "retry-session", executionId: "retry-execution", kind: "tool", eventName: "agent.tool.complete", metadata: { toolName: "web__run", status: "error", errorCode: "invalid_tool_arguments" } });
+    }
+    await runtime.recordEvent({ sessionId: "retry-session", executionId: "retry-execution", kind: "tool", eventName: "agent.tool.complete", metadata: { toolName: "web__run", status: "ok" } });
+    await expect(collectRevisionQuality(database.pool, "retry-revision", 48)).resolves.toMatchObject({
+      tools: [{ tool: "web__run", status: "ok", count: 1, attempt_count: 4, retry_count: 3, recovered_validation_retry_count: 3 }],
+    });
+  });
 });

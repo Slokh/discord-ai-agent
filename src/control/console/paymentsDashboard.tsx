@@ -49,6 +49,7 @@ export function PaymentsDashboard() {
           <a className="ops-nav-link" href="/runs">
             Runs
           </a>
+          <a className="ops-nav-link" href="/friction">Friction</a>
           <Button.Icon
             title="Refresh payments"
             variant="surface"

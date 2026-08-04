@@ -126,7 +126,7 @@ Entrypoints must not reconstruct application-owned services independently. Add a
 
 ## Observability
 
-NanoCodex provider-call tokens are normalized into the canonical usage fields, while its terminal turn event owns the aggregate cost estimate used by spend projections so costs are not double-counted.
+NanoCodex provider-call tokens are normalized into the canonical usage fields, while its terminal turn event owns the aggregate cost estimate used by spend projections so costs are not double-counted. Tool completion events retain stable error codes and retryability. Revision health uses the final result for each capability within a member execution while separately reporting total attempts and recovered argument-validation retries.
 
 Important model, tool, provider, queue, sandbox, mutation, and delivery transitions are typed events. `runtimeEventSchema.ts` maps registered event namespaces and terminal segments to controlled category/phase dimensions; exceptional events may provide an explicit phase, while unknown names stay `system/progress` rather than being guessed from words embedded in a name. Large or sensitive details are retained as redacted artifacts rather than event metadata. The console, `runs:inspect`, `discord:debug`, task status, and metrics all project the same underlying ledger. Quality metrics group answer latency/cost/status by model and deployed revision, tool outcomes by typed status, reviewed feedback by failure mode, and recovered deliveries.
 

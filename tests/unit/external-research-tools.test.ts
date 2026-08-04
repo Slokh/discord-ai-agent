@@ -43,7 +43,7 @@ describe("web__run", () => {
       {
         id: "call-1",
         name: "web__run",
-        arguments: { search_query: [{ q: "current UTC date" }] },
+        arguments: { operations: [{ kind: "search", query: "current UTC date" }] },
         argumentsText: "{}",
       },
       "What is the date?",
@@ -82,7 +82,7 @@ describe("web__run", () => {
       {
         id: "call-1",
         name: "web__run",
-        arguments: { time: [{ utc_offset: "+00:00" }], response_length: "short" },
+        arguments: { operations: [{ kind: "time", utcOffset: "+00:00" }] },
         argumentsText: "{}",
       },
       "What is the date?",
@@ -101,7 +101,7 @@ describe("web__run", () => {
       {
         id: "call-1",
         name: "web__run",
-        arguments: { time: [{ utc_offset: "+00:00" }] },
+        arguments: { operations: [{ kind: "time", utcOffset: "+00:00" }] },
         argumentsText: "{}",
       },
       "What is the date?",
@@ -122,7 +122,7 @@ describe("web__run", () => {
       {
         id: "call-1",
         name: "web__run",
-        arguments: { time: [{ utc_offset: "+00:00" }] },
+        arguments: { operations: [{ kind: "time", utcOffset: "+00:00" }] },
         argumentsText: "{}",
       },
       "What is the date?",
@@ -138,7 +138,7 @@ describe("web__run", () => {
       {
         id: "call-1",
         name: "web__run",
-        arguments: { time: [{ utc_offset: "+00:00" }] },
+        arguments: { operations: [{ kind: "time", utcOffset: "+00:00" }] },
         argumentsText: "{}",
       },
       "What is the date?",

@@ -1721,26 +1721,8 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
       statusMessage: "nanocodex is still running.",
       metadata: { command: "nanocodex run", stderrTail: "live stderr tail", durationMs: 30_000 }
     });
-    await repo.recordSandboxCommandEvent({
-      taskId,
-      sandboxRunId,
-      step: "scan",
-      command: "npm run scan:release",
-      exitCode: 1,
-      outputTail: "stdout tail",
-      errorTail: "stderr tail",
-      durationMs: 123
-    });
-
-    await expect(repo.getSandboxCommandEvents({ guildId, visibleChannelIds: [channelId], taskId, limit: 10 })).resolves.toEqual([
-      expect.objectContaining({ taskId, sandboxRunId, step: "scan", exitCode: 1, errorTail: "stderr tail" })
-    ]);
     await expect(repo.listRecentAgentTasks(5)).resolves.toEqual(expect.arrayContaining([expect.objectContaining({ taskId })]));
-    // Tasks without a registered runtime execution have no runtime events.
     await expect(repo.getAgentRuntimeTaskEventsForTask({ taskId, limit: 10 })).resolves.toEqual([]);
-    await expect(repo.getSandboxCommandEventsForTask({ taskId, limit: 10 })).resolves.toEqual([
-      expect.objectContaining({ taskId, sandboxRunId, step: "scan", exitCode: 1, errorTail: "stderr tail" })
-    ]);
     await expect(repo.getSandboxRunsForTask(taskId)).resolves.toEqual([
       expect.objectContaining({ taskId, sandboxRunId, backendJobName: "agent-task-cancel-test" })
     ]);

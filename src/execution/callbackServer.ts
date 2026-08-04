@@ -116,11 +116,11 @@ export async function handleSandboxCallbackRequest(input: {
   }
 
   if (kind === "commands") {
-    await input.repo.recordSandboxCommandEvent({
+    await recordSandboxCommand(input.agentRuntime, {
       taskId,
       sandboxRunId,
       step: optionalString(body.step) ?? "command",
-      command: optionalString(body.command),
+      command: optionalString(body.command)?.slice(0, 1_000) ?? null,
       exitCode: finiteInteger(body.exitCode),
       outputTail: optionalString(body.outputTail)?.slice(-40_000) ?? "",
       errorTail: optionalString(body.errorTail)?.slice(-40_000) ?? "",
@@ -259,6 +259,73 @@ function callbackKind(value: string | undefined): CallbackKind {
 
 function agentTaskExecutionId(taskId: string) {
   return `agent-task-execution-${taskId}`;
+}
+
+async function recordSandboxCommand(
+  agentRuntime: AgentRuntimeRepository,
+  input: {
+    taskId: string;
+    sandboxRunId: string;
+    step: string;
+    command: string | null;
+    exitCode: number | null;
+    outputTail: string;
+    errorTail: string;
+    durationMs: number | null;
+    metadata: Record<string, unknown>;
+  },
+) {
+  const execution = await agentRuntime.getExecution({ executionId: agentTaskExecutionId(input.taskId) });
+  if (!execution) return;
+  const artifact = await agentRuntime.storeArtifact({
+    sessionId: execution.sessionId,
+    executionId: execution.executionId,
+    kind: "command_log",
+    name: `${input.step} command output`.slice(0, 200),
+    content: commandLogContent(input),
+    contentType: "text/plain",
+    metadata: { taskId: input.taskId, sandboxRunId: input.sandboxRunId, step: input.step },
+  });
+  await agentRuntime.recordEvent({
+    sessionId: execution.sessionId,
+    executionId: execution.executionId,
+    traceId: execution.traceId,
+    kind: "command",
+    level: input.exitCode != null && input.exitCode !== 0 ? "error" : "info",
+    eventName: "agent.task.command",
+    summary: `${input.step}${input.exitCode == null ? "" : ` exited ${input.exitCode}`}`,
+    durationMs: input.durationMs,
+    metadata: {
+      taskId: input.taskId,
+      sandboxRunId: input.sandboxRunId,
+      step: input.step,
+      command: input.command,
+      exitCode: input.exitCode,
+      artifactId: artifact.artifactId,
+      ...input.metadata,
+    },
+  });
+}
+
+function commandLogContent(input: {
+  command: string | null;
+  exitCode: number | null;
+  outputTail: string;
+  errorTail: string;
+  durationMs: number | null;
+}) {
+  const full = [
+    `Command: ${input.command ?? ""}`,
+    `Exit code: ${input.exitCode ?? ""}`,
+    `Duration: ${input.durationMs ?? ""}`,
+    "",
+    "stdout:",
+    input.outputTail,
+    "",
+    "stderr:",
+    input.errorTail,
+  ].join("\n");
+  return ["Recent tail:", full.slice(-1_600), "", "Full command log:", full].join("\n");
 }
 
 function isFailureMode(value: string | null): value is FailureMode {

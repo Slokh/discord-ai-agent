@@ -23,6 +23,7 @@ export type StoreAgentRuntimeArtifactInput = {
   contentType?: string | null;
   metadata?: Record<string, unknown>;
   expiresAt?: Date | null;
+  eventName?: string;
 };
 
 export type StoreAgentRuntimeBinaryArtifactInput = Omit<StoreAgentRuntimeArtifactInput, "content"> & {
@@ -92,7 +93,7 @@ export class AgentRuntimeArtifactRepository {
       sessionId: input.sessionId,
       executionId: input.executionId,
       kind: "artifact",
-      eventName: "codegen.artifact",
+      eventName: input.eventName ?? "codegen.artifact",
       summary: `Stored artifact ${input.name}.`,
       metadata: { artifactId, kind: input.kind, sizeBytes },
     }).catch(() => undefined);
@@ -143,7 +144,7 @@ export class AgentRuntimeArtifactRepository {
       sessionId: input.sessionId,
       executionId: input.executionId,
       kind: "artifact",
-      eventName: "codegen.artifact",
+      eventName: input.eventName ?? "codegen.artifact",
       summary: `Stored binary artifact ${input.name}.`,
       metadata: { artifactId, kind: input.kind, sizeBytes, sha256, binary: true },
     }).catch(() => undefined);

@@ -9,9 +9,18 @@ import {
   PermissionsBitField
 } from "discord.js";
 import type { AppConfig } from "../config/env.js";
+import type { AgentRuntimeRepository } from "../db/agentRuntimeRepository.js";
 import type { DiscordAiAgentRepository } from "../db/repositories.js";
 import { embeddingPriorityForMessageTimestamp } from "../jobs/embeddingPriority.js";
 import type { MessageEmbeddingEnqueueOptions } from "../jobs/queue.js";
+import {
+  finishBackgroundJobRuntime,
+  recordBackgroundJobEvent,
+  recordBackgroundJobSpan,
+  startBackgroundJobRuntime,
+  storeBackgroundJobArtifact,
+  type BackgroundJobRuntime
+} from "../observability/backgroundJobRuntime.js";
 import { channelRecordFromChannel, persistDiscordMessage } from "./messagePersistence.js";
 import { logger } from "../util/logger.js";
 
@@ -34,13 +43,14 @@ type CrawlEmbeddingQueueStatus = "queued" | "deduped" | "empty" | "bot" | "priva
 export class DiscordCrawler {
   private embeddingQueue?: EmbeddingQueue;
   private warnedMissingEmbeddingQueue = false;
-  private activeCrawlRunId?: string;
+  private activeCrawlRuntime?: BackgroundJobRuntime | null;
 
   constructor(
     private readonly input: {
       client: Client;
       repo: DiscordAiAgentRepository;
       config: AppConfig;
+      agentRuntime?: AgentRuntimeRepository;
       embeddingQueue?: EmbeddingQueue;
     }
   ) {
@@ -67,17 +77,15 @@ export class DiscordCrawler {
 
     const channels = await this.discoverCrawlableChannels(guild);
     const runId = `crawl-${guild.id}-${Date.now()}`;
-    this.activeCrawlRunId = runId;
     const crawlStartedAt = Date.now();
-    await this.input.repo.upsertProcessRun({
-      runId,
+    this.activeCrawlRuntime = await startBackgroundJobRuntime({
+      agentRuntime: this.input.agentRuntime,
+      executionId: runId,
       traceId: runId,
-      kind: "crawl",
-      status: "running",
+      kind: "discord_crawl",
       title: `Discord crawl: ${guild.name}`,
-      summary: `Discovered ${channels.length} crawlable channels and threads.`,
+      request: `Crawl ${channels.length} Discord channels and threads.`,
       guildId: guild.id,
-      requester: "system",
       source: "discord_crawler",
       metadata: { channelCount: channels.length }
     });
@@ -87,8 +95,7 @@ export class DiscordCrawler {
     try {
       for (const channel of channels) {
         const channelStartedAt = Date.now();
-        await this.input.repo.recordProcessRunSpan({
-          runId,
+        await recordBackgroundJobSpan(this.activeCrawlRuntime, {
           spanId: `channel-${channel.id}`,
           name: channel.name ? `#${channel.name}` : channel.id,
           status: "running",
@@ -97,8 +104,7 @@ export class DiscordCrawler {
         });
         await this.crawlChannel(channel)
           .then(async () => {
-            await this.input.repo.recordProcessRunSpan({
-              runId,
+            await recordBackgroundJobSpan(this.activeCrawlRuntime, {
               spanId: `channel-${channel.id}`,
               name: channel.name ? `#${channel.name}` : channel.id,
               status: "succeeded",
@@ -110,8 +116,7 @@ export class DiscordCrawler {
           })
           .catch(async (error) => {
             logger.error({ err: error, channelId: channel.id }, "Channel crawl failed");
-            await this.input.repo.recordProcessRunSpan({
-              runId,
+            await recordBackgroundJobSpan(this.activeCrawlRuntime, {
               spanId: `channel-${channel.id}`,
               name: channel.name ? `#${channel.name}` : channel.id,
               status: "failed",
@@ -129,22 +134,20 @@ export class DiscordCrawler {
           });
       }
       const crawlStatus = await this.input.repo.getCrawlStatus(guild.id);
-      await this.input.repo.storeProcessRunArtifact({
-        runId,
+      await storeBackgroundJobArtifact(this.activeCrawlRuntime, {
         kind: "crawl_summary",
         name: "Crawl summary",
         content: JSON.stringify({ guildId: guild.id, channelCount: channels.length, crawlStatus }, null, 2),
         contentType: "application/json",
         metadata: { channelCount: channels.length }
       });
-      await this.input.repo.updateProcessRun({
-        runId,
+      await finishBackgroundJobRuntime(this.activeCrawlRuntime, {
         status: crawlStatus.some((row) => row.status === "error") ? "failed" : "succeeded",
         summary: `Crawl finished in ${formatDurationSeconds(Date.now() - crawlStartedAt)}.`,
         metadata: { crawlStatus, durationMs: Date.now() - crawlStartedAt }
       });
     } finally {
-      this.activeCrawlRunId = undefined;
+      this.activeCrawlRuntime = undefined;
     }
   }
 
@@ -372,11 +375,9 @@ export class DiscordCrawler {
   }
 
   private async recordCrawlPageEvent(channelId: string, pageSize: number, embeddingQueueStats: Record<CrawlEmbeddingQueueStatus, number>) {
-    if (!this.activeCrawlRunId) return;
-    await this.input.repo
-      .recordProcessRunEvent({
-        runId: this.activeCrawlRunId,
-        eventName: "crawl.page.stored",
+    if (!this.activeCrawlRuntime) return;
+    await recordBackgroundJobEvent(this.activeCrawlRuntime, {
+        eventName: "background.crawl.page.stored",
         summary: `Stored ${pageSize} messages from ${channelId}`,
         metadata: { channelId, pageSize, embeddingQueueStats }
       })

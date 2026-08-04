@@ -9,6 +9,12 @@ import type { DiscordAiAgentRepository } from "../db/repositories.js";
 import type { DbPool } from "../db/pool.js";
 import { startConversationCompactionMaintenance } from "../db/conversationCompaction.js";
 import { startArtifactRetentionMaintenance } from "../observability/artifactRetention.js";
+import {
+  finishBackgroundJobRuntime,
+  startBackgroundJobRuntime,
+  storeBackgroundJobArtifact,
+  type BackgroundJobRuntime
+} from "../observability/backgroundJobRuntime.js";
 import { startDataRetentionMaintenance } from "../observability/dataRetention.js";
 import type { OpenRouterClient } from "../models/openrouter.js";
 import { durationMs, logger } from "../util/logger.js";
@@ -40,7 +46,7 @@ export type CrawlJobRunner = {
 
 export type EmbeddingJobRunner = {
   embedMessage?: (messageId: string) => Promise<void>;
-  embedMessages?: (messageIds: string[], context?: { runId?: string }) => Promise<unknown>;
+  embedMessages?: (messageIds: string[], context?: { runtime?: BackgroundJobRuntime | null }) => Promise<unknown>;
 };
 
 export type AgentTaskRunner = {
@@ -265,28 +271,28 @@ export async function startJobs(input: {
           },
           "Running embedding.message batch"
         );
-        await input.repo
-          ?.upsertProcessRun({
-            runId,
-            traceId: uniqueStrings(jobs.map((job) => job.data.traceId).filter(Boolean))[0] ?? runId,
-            kind: "embedding",
-            status: "running",
-            title: `Embedding batch (${messageIds.length} messages)`,
-            summary: `Processing ${messageIds.length} message embedding jobs.`,
-            requester: "system",
-            source: "pgboss.embedding",
-            metadata: {
-              queue: EMBED_MESSAGE_JOB,
-              jobCount: jobs.length,
-              messageCount: messageIds.length,
-              jobIds: jobs.map((job) => job.id)
-            }
-          })
-          .catch((error) => logger.warn({ err: error, runId }, "Failed to create embedding run"));
+        const runtimeRecord = await startBackgroundJobRuntime({
+          agentRuntime: agentRuntimeRepo,
+          executionId: runId,
+          traceId: uniqueStrings(jobs.map((job) => job.data.traceId).filter(Boolean))[0] ?? runId,
+          kind: "embedding",
+          title: `Embedding batch (${messageIds.length} messages)`,
+          request: `Embed ${messageIds.length} stored Discord messages.`,
+          source: "pgboss.embedding",
+          metadata: {
+            queue: EMBED_MESSAGE_JOB,
+            jobCount: jobs.length,
+            messageCount: messageIds.length,
+            jobIds: jobs.map((job) => job.id)
+          }
+        }).catch((error) => {
+          logger.warn({ err: error, runId }, "Failed to create embedding run");
+          return null;
+        });
         try {
           let result: unknown;
           if (input.embedding!.embedMessages) {
-            result = await input.embedding!.embedMessages(messageIds, { runId });
+            result = await input.embedding!.embedMessages(messageIds, { runtime: runtimeRecord });
           } else if (input.embedding!.embedMessage) {
             for (const messageId of messageIds) {
               await input.embedding!.embedMessage(messageId);
@@ -294,32 +300,30 @@ export async function startJobs(input: {
           } else {
             throw new Error("Embedding worker requested without embedMessage or embedMessages runner.");
           }
-          await input.repo
-            ?.storeProcessRunArtifact({
-              runId,
-              kind: "embedding_summary",
-              name: "Embedding batch summary",
-              content: JSON.stringify({ messageIds, result }, null, 2),
-              contentType: "application/json",
-              metadata: { messageCount: messageIds.length }
-            })
+          await storeBackgroundJobArtifact(runtimeRecord, {
+            kind: "embedding_summary",
+            name: "Embedding batch summary",
+            content: JSON.stringify({ messageIds, result }, null, 2),
+            contentType: "application/json",
+            metadata: { messageCount: messageIds.length }
+          })
             .catch((error) => logger.warn({ err: error, runId }, "Failed to store embedding artifact"));
-          await input.repo
-            ?.updateProcessRun({
-              runId,
-              status: "succeeded",
-              summary: `Embedded batch in ${formatDurationSeconds(durationMs(startedAt))}.`,
-              metadata: { result, durationMs: durationMs(startedAt) }
-            })
+          await finishBackgroundJobRuntime(runtimeRecord, {
+            status: "succeeded",
+            summary: `Embedded batch in ${formatDurationSeconds(durationMs(startedAt))}.`,
+            metadata: { result, durationMs: durationMs(startedAt) },
+            durationMs: durationMs(startedAt)
+          })
             .catch((error) => logger.warn({ err: error, runId }, "Failed to complete embedding run"));
         } catch (error) {
-          await input.repo
-            ?.updateProcessRun({
-              runId,
-              status: "failed",
-              summary: error instanceof Error ? error.message : String(error),
-              metadata: { error: error instanceof Error ? error.message : String(error), durationMs: durationMs(startedAt) }
-            })
+          const message = error instanceof Error ? error.message : String(error);
+          await finishBackgroundJobRuntime(runtimeRecord, {
+            status: "failed",
+            summary: message,
+            error: message,
+            metadata: { error: message, durationMs: durationMs(startedAt) },
+            durationMs: durationMs(startedAt)
+          })
             .catch((runError) => logger.warn({ err: runError, runId }, "Failed to fail embedding run"));
           throw error;
         }
@@ -487,19 +491,20 @@ export async function startJobs(input: {
               },
               "Starting queued agent runtime execution"
             );
-            const existingRun = await input.repo?.getProcessRun(job.data.runId).catch(() => undefined);
-            if (existingRun && isTerminalProcessRunStatus(existingRun.status)) {
+            const runtimeExecution = job.data.agentExecutionId
+              ? await agentRuntimeRepo?.getExecution({ executionId: job.data.agentExecutionId }).catch(() => undefined)
+              : undefined;
+            if (runtimeExecution && isTerminalAgentRuntimeStatus(runtimeExecution.status)) {
               logger.info(
-                { queue: AGENT_RUNTIME_EXECUTION_JOB, jobId: job.id, runId: job.data.runId, status: existingRun.status },
+                { queue: AGENT_RUNTIME_EXECUTION_JOB, jobId: job.id, runId: job.data.runId, status: runtimeExecution.status },
                 "Skipping queued agent runtime execution because run is already terminal"
               );
               return;
             }
-            await input.repo
-              ?.updateProcessRun({
-                runId: job.data.runId,
+            await agentRuntimeRepo
+              ?.updateExecution({
+                executionId: job.data.agentExecutionId ?? `agent-execution-${job.data.runId}`,
                 status: "running",
-                summary: "Processing queued agent runtime execution.",
                 metadata: {
                   queue: AGENT_RUNTIME_EXECUTION_JOB,
                   pgbossJobId: job.id,
@@ -509,17 +514,25 @@ export async function startJobs(input: {
               .catch((error) => logger.warn({ err: error, runId: job.data.runId }, "Failed to mark Discord run running"));
             if (job.data.enqueuedAt) {
               const enqueuedAt = new Date(job.data.enqueuedAt);
-              if (Number.isFinite(enqueuedAt.getTime())) {
-                await input.repo
-                  ?.recordProcessRunSpan({
-                    runId: job.data.runId,
+              if (Number.isFinite(enqueuedAt.getTime()) && runtimeExecution && job.data.agentSessionId) {
+                await agentRuntimeRepo
+                  ?.recordEvent({
+                    sessionId: job.data.agentSessionId,
+                    executionId: runtimeExecution.executionId,
+                    traceId: job.data.traceId ?? job.data.runId,
+                    kind: "status",
+                    eventName: "agent.span",
+                    summary: "Wait in agent runtime queue",
+                    durationMs: Math.max(0, startedAt - enqueuedAt.getTime()),
+                    metadata: { span: {
                     spanId: "queue.wait",
                     name: "Wait in agent runtime queue",
                     status: "succeeded",
-                    startedAt: enqueuedAt,
-                    completedAt: new Date(startedAt),
+                    startedAt: enqueuedAt.toISOString(),
+                    completedAt: new Date(startedAt).toISOString(),
                     durationMs: Math.max(0, startedAt - enqueuedAt.getTime()),
                     metadata: { queue: AGENT_RUNTIME_EXECUTION_JOB, pgbossJobId: job.id }
+                    } }
                   })
                   .catch((error) => logger.warn({ err: error, runId: job.data.runId }, "Failed to record Discord queue wait span"));
               }
@@ -531,10 +544,12 @@ export async function startJobs(input: {
                 "Queued agent runtime execution complete"
               );
             } catch (error) {
-              await input.repo
-                ?.recordProcessRunEvent({
-                  runId: job.data.runId,
+              await agentRuntimeRepo
+                ?.recordEvent({
+                  sessionId: job.data.agentSessionId ?? `agent-session-${job.data.runId}`,
+                  executionId: job.data.agentExecutionId ?? `agent-execution-${job.data.runId}`,
                   traceId: job.data.traceId ?? job.data.runId,
+                  kind: "error",
                   level: "error",
                   eventName: "discord.agent_request.job_failed",
                   summary: error instanceof Error ? error.message : String(error),
@@ -585,6 +600,6 @@ function uniqueStrings(values: Array<string | undefined>): string[] {
   return [...new Set(values.filter((value): value is string => Boolean(value)))];
 }
 
-function isTerminalProcessRunStatus(status: string) {
+function isTerminalAgentRuntimeStatus(status: string) {
   return status === "succeeded" || status === "failed" || status === "no_changes" || status === "cancelled";
 }

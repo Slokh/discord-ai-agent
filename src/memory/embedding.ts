@@ -2,6 +2,11 @@ import { createHash } from "node:crypto";
 import type { AppConfig } from "../config/env.js";
 import type { DiscordAiAgentRepository, MessageForEmbedding } from "../db/repositories.js";
 import type { OpenRouterClient } from "../models/openrouter.js";
+import {
+  recordBackgroundJobSpan,
+  storeBackgroundJobArtifact,
+  type BackgroundJobRuntime
+} from "../observability/backgroundJobRuntime.js";
 import { durationMs, logger } from "../util/logger.js";
 import { chunkText } from "./normalize.js";
 
@@ -50,7 +55,7 @@ export async function embedStoredMessages(input: {
   openRouter: OpenRouterClient;
   config: AppConfig;
   messageIds: string[];
-  runId?: string;
+  runtime?: BackgroundJobRuntime | null;
 }): Promise<BatchEmbeddingResult> {
   const startedAt = Date.now();
   const messageIds = [...new Set(input.messageIds)].filter(Boolean);
@@ -66,7 +71,7 @@ export async function embedStoredMessages(input: {
 
   const loadStartedAt = Date.now();
   const messages = await input.repo.getMessagesForEmbedding(messageIds);
-  await recordEmbeddingSpan(input.repo, input.runId, {
+  await recordEmbeddingSpan(input.runtime, {
     spanId: "db.load_messages",
     name: "Load messages for embedding",
     startedAt: loadStartedAt,
@@ -103,7 +108,7 @@ export async function embedStoredMessages(input: {
       input.config.openRouter.embeddingModel,
       input.config.embeddingDimensions
     );
-    await recordEmbeddingSpan(input.repo, input.runId, {
+    await recordEmbeddingSpan(input.runtime, {
       spanId: `openrouter.embed.${batchIndex}`,
       name: `OpenRouter embed batch ${batchIndex + 1}`,
       startedAt: embedStartedAt,
@@ -139,7 +144,7 @@ export async function embedStoredMessages(input: {
     inputVersion: MESSAGE_EMBEDDING_INPUT_VERSION,
     items
   });
-  await recordEmbeddingSpan(input.repo, input.runId, {
+  await recordEmbeddingSpan(input.runtime, {
     spanId: "db.store_embeddings",
     name: "Store message embeddings",
     startedAt: storeStartedAt,
@@ -164,7 +169,7 @@ export async function embedStoredMessages(input: {
     },
     "Message embedding batch stored"
   );
-  await recordEmbeddingArtifact(input.repo, input.runId, {
+  await recordEmbeddingArtifact(input.runtime, {
     requestedMessages: messageIds.length,
     embedded: result.embedded,
     skipped: result.skipped,
@@ -286,41 +291,28 @@ function emptyBatchEmbeddingResult(): BatchEmbeddingResult {
 }
 
 async function recordEmbeddingSpan(
-  repo: DiscordAiAgentRepository,
-  runId: string | undefined,
+  runtime: BackgroundJobRuntime | null | undefined,
   input: { spanId: string; name: string; startedAt: number; durationMs: number; metadata?: Record<string, unknown> }
 ) {
-  if (!runId) return;
-  const recorder = (repo as unknown as { recordProcessRunSpan?: DiscordAiAgentRepository["recordProcessRunSpan"] }).recordProcessRunSpan;
-  if (!recorder) return;
-  await recorder
-    .call(repo, {
-      runId,
-      spanId: input.spanId,
-      name: input.name,
-      status: "succeeded",
-      startedAt: new Date(input.startedAt),
-      completedAt: new Date(input.startedAt + input.durationMs),
-      durationMs: input.durationMs,
-      metadata: input.metadata
-    })
-    .catch(() => undefined);
+  await recordBackgroundJobSpan(runtime, {
+    spanId: input.spanId,
+    name: input.name,
+    status: "succeeded",
+    startedAt: new Date(input.startedAt),
+    completedAt: new Date(input.startedAt + input.durationMs),
+    durationMs: input.durationMs,
+    metadata: input.metadata
+  }).catch(() => undefined);
 }
 
-async function recordEmbeddingArtifact(repo: DiscordAiAgentRepository, runId: string | undefined, summary: Record<string, unknown>) {
-  if (!runId) return;
-  const recorder = (repo as unknown as { storeProcessRunArtifact?: DiscordAiAgentRepository["storeProcessRunArtifact"] }).storeProcessRunArtifact;
-  if (!recorder) return;
-  await recorder
-    .call(repo, {
-      runId,
-      kind: "embedding_summary",
-      name: "Embedding internals",
-      content: JSON.stringify(summary, null, 2),
-      contentType: "application/json",
-      metadata: summary
-    })
-    .catch(() => undefined);
+async function recordEmbeddingArtifact(runtime: BackgroundJobRuntime | null | undefined, summary: Record<string, unknown>) {
+  await storeBackgroundJobArtifact(runtime, {
+    kind: "embedding_summary",
+    name: "Embedding internals",
+    content: JSON.stringify(summary, null, 2),
+    contentType: "application/json",
+    metadata: summary
+  }).catch(() => undefined);
 }
 
 async function mapWithConcurrency<T>(

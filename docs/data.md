@@ -69,7 +69,7 @@ Undo operations update both visible Discord output when possible and durable con
 
 ## Canonical runtime ledger
 
-The `agent_runtime_*` tables explain both chat and code-update attempts:
+The `agent_runtime_*` tables explain chat, code-update, and durable background-job attempts:
 
 - sessions group retained work by conversation/task scope;
 - executions represent queued, running, and terminal attempts;
@@ -77,9 +77,10 @@ The `agent_runtime_*` tables explain both chat and code-update attempts:
 - events store typed lifecycle transitions and safe metadata;
 - session and execution rows atomically allocate event sequence numbers, so concurrent model, tool, and delivery writers cannot overwrite or drop ledger evidence;
 - artifacts and chunks store replay inputs, redacted model I/O, snapshots, files, and larger diagnostics;
-- task-linked executions record isolated code-update lifecycle and outcomes.
+- task-linked executions record isolated code-update lifecycle and outcomes;
+- background-job executions retain crawl and embedding progress without a parallel ledger.
 
-Chat does not create a parallel process-run record. Code-update task rows are projections linked to the task runtime execution, which is also the sole artifact store for sandbox callbacks. Generic background jobs may use `process_runs`; code updates do not.
+Chat, code updates, crawls, and embedding batches do not create parallel process-run records. Code-update task rows are projections linked to the task runtime execution, which is also the sole artifact store for sandbox callbacks. The legacy `process_runs` tables remain only for bounded historical reads, privacy erasure, and retention until the window expires; a later forward-only migration can then remove them safely.
 
 Artifacts have explicit content type, size, checksum, sensitivity, and retention behavior. Binary delivery artifacts are stored once and referenced by the delivery manifest.
 

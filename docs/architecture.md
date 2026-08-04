@@ -37,7 +37,7 @@ Large entry points remain coordinators. Focused mechanics live beside them: keye
 ## Architectural invariants
 
 - NanoCodex is the only agent engine. Chat runs in the application; only repository changes enter a sandbox.
-- `agent_runtime_*` is the canonical execution ledger for chat and code-update attempts.
+- `agent_runtime_*` is the canonical execution ledger for chat, code-update attempts, and durable background jobs.
 - Discord delivery obligations describe what still needs to be rendered; they are not a second execution ledger.
 - The model receives one stable tool schema narrowed only by each contract's declarative deployment-availability predicate. It chooses tools directly.
 - `src/agent/` is capability-agnostic. Installed product behavior enters through the capability session, tool contracts, and tool handlers rather than feature imports or tool-name branches in the model loop.

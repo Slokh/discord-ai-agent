@@ -34,7 +34,7 @@ export async function persistDiscordMessage(repo: DiscordAiAgentRepository, mess
       bot: message.author.bot
     },
     content: message.content ?? "",
-    normalizedContent: normalizeMessageContent(message.content ?? ""),
+    normalizedContent: normalizeMessageContent(indexableMessageText(message)),
     createdAt: message.createdAt,
     editedAt: message.editedAt,
     messageType: message.type,
@@ -94,6 +94,42 @@ export async function persistDiscordMessage(repo: DiscordAiAgentRepository, mess
       }
     }))
   });
+}
+
+/** Native Discord polls carry their visible text outside Message.content. */
+export function indexableMessageText(message: Pick<Message, "content"> & { poll?: unknown }) {
+  const content = message.content ?? "";
+  const pollText = nativePollText((message as { poll?: unknown }).poll);
+  return [content, pollText].filter(Boolean).join(content && pollText ? "\n" : "");
+}
+
+export function nativePollText(poll: unknown) {
+  if (!poll || typeof poll !== "object") return "";
+  const value = poll as Record<string, unknown>;
+  const question = pollMediaText(value.question);
+  const answers = valuesOf(value.answers)
+    .map((answer) => pollMediaText(answer))
+    .filter(Boolean);
+  if (!question && answers.length === 0) return "";
+  return [question ? `Poll: ${question}` : "Poll", answers.length ? `Options: ${answers.join(" | ")}` : ""].filter(Boolean).join("\n");
+}
+
+function pollMediaText(value: unknown): string {
+  if (typeof value === "string") return value.trim();
+  if (!value || typeof value !== "object") return "";
+  const object = value as Record<string, unknown>;
+  for (const candidate of [object.text, (object.poll_media as Record<string, unknown> | undefined)?.text, (object.pollMedia as Record<string, unknown> | undefined)?.text, (object.media as Record<string, unknown> | undefined)?.text]) {
+    if (typeof candidate === "string" && candidate.trim()) return candidate.trim();
+  }
+  return "";
+}
+
+function valuesOf(value: unknown): unknown[] {
+  if (Array.isArray(value)) return value;
+  if (value && typeof value === "object" && "values" in value && typeof (value as { values?: unknown }).values === "function") {
+    return [...((value as { values: () => Iterable<unknown> }).values())];
+  }
+  return value && typeof value === "object" ? Object.values(value as Record<string, unknown>) : [];
 }
 
 export function channelRecordFromMessage(message: Message) {

@@ -9,6 +9,7 @@ import * as discordBugMarkers from "./discordBugMarkerRepository.js";
 import * as discordBugReports from "./discordBugReportRepository.js";
 import * as discordComponentActions from "./discordComponentActionRepository.js";
 import * as discordEmojiUsage from "./discordEmojiUsageRepository.js";
+import * as discordRetryReactions from "./discordRetryReactionRepository.js";
 import * as embeddings from "./embeddingRepository.js";
 import * as friction from "./frictionRepository.js";
 import * as retrieval from "./retrievalRepository.js";
@@ -46,6 +47,7 @@ export function createAppDatabase(pool: DbPool) {
     ...bindRepository(pool, discordBugMarkers),
     ...bindRepository(pool, discordBugReports),
     ...bindRepository(pool, discordComponentActions),
+    ...bindRepository(pool, discordRetryReactions),
     ...bindRepository(pool, embeddings),
     ...bindRepository(pool, friction),
     ...bindRepository(pool, retrieval),

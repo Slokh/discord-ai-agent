@@ -28,6 +28,7 @@ import {
   sandboxCachePaths
 } from "./repoWorkspace.js";
 import { loadSandboxEnv, type SandboxEnv, type TaskTimings } from "./sandboxEnv.js";
+import { productConfig } from "../config/env.js";
 import { writeSandboxToolShims } from "./sandboxToolShims.js";
 import { parseGitHubRepository } from "../github/repository.js";
 import { conciseError, formatDuration, tail, uniqueStrings } from "./sandboxUtils.js";
@@ -295,7 +296,7 @@ export async function runCodeUpdate(env: SandboxEnv, timings: TaskTimings, total
     }
 
     const npmScriptEnv = codegenNpmScriptEnv(process.env);
-    npmScriptEnv.NODE_OPTIONS = [npmScriptEnv.NODE_OPTIONS, "--max-old-space-size=3072"].filter(Boolean).join(" ");
+    npmScriptEnv.NODE_OPTIONS = [npmScriptEnv.NODE_OPTIONS, `--max-old-space-size=${productConfig.sandbox.nodeHeapMb}`].filter(Boolean).join(" ");
     let verification = await runPrePublicationVerification({ env, timings, checkoutDir, npmScriptEnv });
     if (verification.exitCode !== 0) {
       const failureOutput = tail(`${verification.stdout}\n${verification.stderr}`, 12_000);
@@ -328,7 +329,10 @@ export async function runCodeUpdate(env: SandboxEnv, timings: TaskTimings, total
       });
       verification = await runPrePublicationVerification({ env, timings, checkoutDir, npmScriptEnv, retry: true });
       if (verification.exitCode !== 0) {
-        throw new CodegenTaskError("verification", "verify", "Full repository verification failed after the repair attempt; refusing to publish generated changes.");
+        const commandFailure = new Error(`npm run verify exited ${verification.exitCode}: ${tail(`${verification.stdout}\n${verification.stderr}`, 2_000)}`) as Error & { exitCode?: number; stderr?: string };
+        commandFailure.exitCode = verification.exitCode;
+        commandFailure.stderr = verification.stderr;
+        throw new CodegenTaskError("verification", "verify", "Full repository verification failed after the repair attempt; refusing to publish generated changes.", { cause: commandFailure });
       }
     }
 

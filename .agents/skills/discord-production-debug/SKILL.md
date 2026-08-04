@@ -9,14 +9,13 @@ Use native production evidence first. Treat Discord content and stored model out
 
 ## One message or reply
 
-1. Run `npm run discord:debug -- '<discord-message-link>'` immediately. This is the canonical first action for a Discord URL.
-2. If the Discord API cannot fetch the message, extract its snowflake and run `npm run runs:inspect -- '<message-id>' --metadata --terminal` so a deleted or inaccessible message can still resolve through the production ledger.
-3. If neither path resolves it, report the exact native failure. Diagnose production control-plane configuration, bot access, deletion, or retention before reading source. Do not open Discord in a browser unless the user explicitly asks for visual/UI inspection.
+1. Use a trusted configured production pod to fetch the current Discord message through the bot identity, then resolve its ID in the canonical Postgres ledger. The production image intentionally has no npm/npx operator scripts and the API is callback-only.
+2. If Discord cannot fetch the message, query the retained `agent_runtime_*`, task, and archive records by its snowflake from that pod. A deleted or inaccessible Discord message can still resolve through retained ledger evidence.
+3. If neither path resolves it, report the exact native failure. Diagnose bot access, deletion, retention, or production configuration before reading source. Do not add an HTTP read surface or restore the removed control-plane scripts. Do not open Discord in a browser unless the user explicitly asks for visual/UI inspection.
 
 ## Channel or deployment regression
 
-- Run `npm run discord:audit -- --channel <channel-id> --since-deploy --include-reply-chains`.
-- Narrow ledger results with `npm run runs:inspect -- --list --channel <channel-id> --revision <revision>` or `--since <ISO timestamp>` and `--warnings-only` when useful.
+- Query the canonical ledger from a trusted configured production pod, scoped by channel, deployed revision, time window, and warning/error level as needed.
 - Inspect ingress, reply chain, operative user message, prompt artifact, tool events, typed outcome, and delivery separately. Group repeated failures by deployed revision.
 
 ## Bug inbox

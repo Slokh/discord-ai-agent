@@ -306,6 +306,18 @@ describe("sandboxRunner", () => {
       status: "failed",
       failedPhase: "typecheck"
     }));
+
+    const resource = diagnoseCodegenFailure({
+      error: new CodegenTaskError(
+        "verification",
+        "verify",
+        "Verification failed.",
+        { cause: Object.assign(new Error("Killed"), { exitCode: 137 }) },
+      ),
+      timings: { verify: 30_000, total: 31_000 },
+    });
+    expect(resource).toEqual(expect.objectContaining({ category: "sandbox_resource", status: "failed" }));
+    expect(resource.summary).toContain("ran out of resources");
   });
 
   it("classifies typed no-diff failures without parsing command output", () => {

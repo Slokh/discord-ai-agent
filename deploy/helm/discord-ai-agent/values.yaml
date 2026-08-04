@@ -36,6 +36,8 @@ secret:
 config:
   # Deployed commit SHA included in runtime and model-call telemetry.
   appRevision: unknown
+  # Unique workflow-run identifier; prevents a repeated SHA from reusing an older promotion.
+  releaseVerificationId: ""
   # The deploy workflow fills this from the currently running bot before rollout.
   previousAppRevision: ""
   # Optional Discord channel for automatic plain-English deployment notes.

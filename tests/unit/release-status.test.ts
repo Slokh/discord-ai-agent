@@ -45,7 +45,7 @@ describe("release status", () => {
       if (command === "gh" && args[0] === "pr") return { ok: true as const, stdout: JSON.stringify({ number: 343, statusCheckRollup: [{ conclusion: "SUCCESS" }] }) };
       if (command === "gh") return { ok: true as const, stdout: JSON.stringify([{ conclusion: "success", headSha: "revision-a", createdAt: "2026-08-03T00:00:00Z" }]) };
       if (args.includes("deployments,pods")) return { ok: true as const, stdout: JSON.stringify(kubernetesPayload) };
-      if (args.includes("agentTaskStatus.js")) return { ok: true as const, stdout: JSON.stringify({ activeAgentSessions: [], activeTasks: [], activeSandboxRuns: [], pendingSandboxCleanup: [] }) };
+      if (args.includes("agentTaskStatus.js")) return { ok: true as const, stdout: JSON.stringify({ activeAgentExecutions: [], activeTasks: [], activeSandboxRuns: [], pendingSandboxCleanup: [] }) };
       return { ok: true as const, stdout: JSON.stringify({ assessment: { status: "pass" } }) };
     };
     const status = collectReleaseStatus({ runner });
@@ -57,6 +57,22 @@ describe("release status", () => {
       warnings: [],
     });
     expect(releaseStatusExitCode(status)).toBe(0);
+  });
+
+  it("does not manufacture a pull-request warning on main", () => {
+    const calls: string[][] = [];
+    const runner = (command: string, args: string[]) => {
+      calls.push([command, ...args]);
+      if (command === "git") return { ok: true as const, stdout: "main" };
+      if (command === "helm") return { ok: true as const, stdout: JSON.stringify({ info: { status: "deployed" } }) };
+      if (command === "gh") return { ok: true as const, stdout: "[]" };
+      if (args.includes("deployments,pods")) return { ok: true as const, stdout: JSON.stringify(kubernetesPayload) };
+      if (args.includes("agentTaskStatus.js")) return { ok: true as const, stdout: JSON.stringify({ activeAgentExecutions: [], activeTasks: [], activeSandboxRuns: [], pendingSandboxCleanup: [] }) };
+      return { ok: true as const, stdout: JSON.stringify({ assessment: { status: "awaiting_traffic" } }) };
+    };
+    const status = collectReleaseStatus({ runner });
+    expect(calls.some((call) => call[0] === "gh" && call[1] === "pr")).toBe(false);
+    expect(status.warnings).toEqual([]);
   });
 
   it("fails when roles drift or quality fails", () => {

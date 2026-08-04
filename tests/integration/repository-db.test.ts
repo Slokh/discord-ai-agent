@@ -281,6 +281,7 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
       summary: "fixed",
       prUrl: "https://github.com/example/repo/pull/12",
     });
+    await repo.setDiscordBugMarker({ guildId, channelId, messageId: sourceMessageId, userId, present: true });
 
     await expect(repo.getDiscordBugReportForTask(taskId)).resolves.toMatchObject({ reportId, statusMessageId: null });
     await expect(repo.listDiscordBugReportsAwaitingDeployment()).resolves.toEqual(
@@ -291,6 +292,13 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
       mergeCommitSha: "merge-revision",
       deployedRevision: "deployed-revision",
     })).resolves.toBe(true);
+    await repo.recordDiscordBugReportRetry({ reportId, status: "succeeded", retryExecutionId: `bug-retry-${reportId}`, announcementMessageId: "announcement-message" });
+    await expect(repo.listDiscordBugInboxStatus({ guildId, requesterUserId: userId, limit: 20 })).resolves.toEqual([
+      expect.objectContaining({
+        validationStatus: "completed", disposition: "confirmed_fixed", deployedRevision: "deployed-revision",
+        retryStatus: "succeeded",
+      }),
+    ]);
     await expect(repo.claimDiscordBugReportDeployment({
       reportId,
       mergeCommitSha: "merge-revision",

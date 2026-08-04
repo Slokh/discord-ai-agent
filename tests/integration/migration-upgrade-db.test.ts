@@ -140,6 +140,9 @@ describe.skipIf(!runDbTests)("forward migration upgrades", () => {
         "029_remove_sandbox_leases",
         "030_run_feedback_regression_contract",
         "031_atomic_agent_event_sequences",
+        "032_bug_report_retry_outcomes",
+        "033_release_verifications",
+        "034_release_verification_instances",
       ]) {
         await client.query(await readFile(path.resolve(`migrations/${version}.sql`), "utf8"));
       }
@@ -158,6 +161,10 @@ describe.skipIf(!runDbTests)("forward migration upgrades", () => {
         })] }));
       await expect(client.query("SELECT event_sequence FROM agent_runtime_executions WHERE execution_id = 'execution'"))
         .resolves.toEqual(expect.objectContaining({ rows: [expect.objectContaining({ event_sequence: 1 })] }));
+      await expect(client.query("SELECT retry_status, retried_at FROM discord_bug_reports LIMIT 0"))
+        .resolves.toEqual(expect.objectContaining({ rows: [] }));
+      await expect(client.query("SELECT revision, deployment_id, verified_at FROM deployment_verifications LIMIT 0"))
+        .resolves.toEqual(expect.objectContaining({ rows: [] }));
     } finally {
       await client.query("RESET search_path").catch(() => undefined);
       await client.query(`DROP SCHEMA IF EXISTS ${schema} CASCADE`).catch(() => undefined);

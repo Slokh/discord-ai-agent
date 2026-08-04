@@ -46,6 +46,7 @@ describe("config", () => {
   it("loads only secrets, identity, and deployment-provided image/revision values", () => {
     withEnv({
       APP_REVISION: "abc123",
+      RELEASE_VERIFICATION_ID: "run-1",
       PREVIOUS_APP_REVISION: "def456",
       RELEASE_NOTES_CHANNEL_ID: "123",
       DISCORD_PREMIUM_SKU_IDS: "123456789012345678,111111111111111111",
@@ -57,7 +58,7 @@ describe("config", () => {
       PRIVY_APP_SECRET: "privy-secret"
     }, () => {
       const config = loadConfig();
-      expect(config.releaseNotes).toEqual({ previousRevision: "def456", channelId: "123" });
+      expect(config.releaseNotes).toEqual({ verificationId: "run-1", previousRevision: "def456", channelId: "123" });
       expect(config.discord.premiumSkuIds).toEqual(["123456789012345678", "111111111111111111"]);
       expect(config.execution.kubernetes).toEqual(expect.objectContaining({
         namespace: "test-namespace",

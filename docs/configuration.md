@@ -31,6 +31,7 @@ Production startup rejects retired variables so old deployment settings cannot s
 | `PRIVY_APP_SECRET` | wallets | yes | Privy application secret; supplying both Privy values enables wallets. |
 | `NODE_ENV` | runtime platform | no | Node runtime mode. |
 | `APP_REVISION` | release workflow | no | Immutable deployed git revision. |
+| `RELEASE_VERIFICATION_ID` | release workflow | no | Unique public identifier for this rollout's post-deploy promotion. |
 | `PREVIOUS_APP_REVISION` | release announcements | no | Previously deployed git revision. |
 | `RELEASE_NOTES_CHANNEL_ID` | release announcements | no | Discord channel receiving deployment announcements. |
 | `POD_NAMESPACE` | Kubernetes worker | no | Namespace where isolated code-update Jobs are created. |

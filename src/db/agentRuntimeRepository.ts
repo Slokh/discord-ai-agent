@@ -334,6 +334,64 @@ export class AgentRuntimeRepository {
     return result.rows[0] ? rowToAgentRuntimeExecution(result.rows[0]) : undefined;
   }
 
+  async listStaleExecutions(input: { before: Date; limit?: number }): Promise<AgentRuntimeExecutionRecord[]> {
+    const result = await this.pool.query(
+      `SELECT *
+       FROM agent_runtime_executions
+       WHERE task_id IS NULL
+         AND status IN ('queued', 'running')
+         AND updated_at < $1
+       ORDER BY updated_at ASC
+       LIMIT $2`,
+      [input.before, Math.max(1, Math.min(100, Math.trunc(input.limit ?? 20)))],
+    );
+    return result.rows.map(rowToAgentRuntimeExecution);
+  }
+
+  async failExecutionIfStale(input: {
+    executionId: string;
+    before: Date;
+    error: string;
+    metadata?: Record<string, unknown>;
+  }): Promise<AgentRuntimeExecutionRecord | undefined> {
+    const result = await this.pool.query(
+      `WITH updated AS (
+         UPDATE agent_runtime_executions
+         SET status = 'failed',
+             error = $3,
+             metadata = metadata || $4::jsonb,
+             completed_at = coalesce(completed_at, now()),
+             updated_at = now()
+         WHERE execution_id = $1
+           AND task_id IS NULL
+           AND status IN ('queued', 'running')
+           AND updated_at < $2
+         RETURNING *
+       ),
+       session_update AS (
+         UPDATE agent_runtime_sessions s
+         SET status = CASE WHEN NOT EXISTS (
+               SELECT 1 FROM agent_runtime_executions e
+               WHERE e.session_id = s.session_id
+                 AND e.execution_id <> $1
+                 AND e.status IN ('queued', 'running')
+             ) THEN 'failed' ELSE s.status END,
+             completed_at = CASE WHEN NOT EXISTS (
+               SELECT 1 FROM agent_runtime_executions e
+               WHERE e.session_id = s.session_id
+                 AND e.execution_id <> $1
+                 AND e.status IN ('queued', 'running')
+             ) THEN coalesce(s.completed_at, now()) ELSE s.completed_at END,
+             updated_at = now()
+         FROM updated
+         WHERE s.session_id = updated.session_id
+       )
+       SELECT * FROM updated`,
+      [input.executionId, input.before, input.error, JSON.stringify(stampAgentRuntimeMetadata(input.metadata))],
+    );
+    return result.rows[0] ? rowToAgentRuntimeExecution(result.rows[0]) : undefined;
+  }
+
   async updateExecution(input: {
     executionId: string;
     status?: AgentRuntimeStatus;

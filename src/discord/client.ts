@@ -24,6 +24,7 @@ import { handleDiscordRichInteraction } from "./components/interactionHandler.js
 import { DiscordInteractionResponder } from "./components/interactionResponder.js";
 import { DiscordTaskSupervisor } from "./taskSupervisor.js";
 import { retryDeployedDiscordBugReports } from "./deployedBugRetry.js";
+import { waitForDeploymentPromotion } from "./deploymentPromotion.js";
 
 export type DiscordAiAgentBotRuntime = {
   client: Client;
@@ -96,6 +97,15 @@ export function createDiscordAiAgentBot(input: {
     componentActionCleanupTimer = setInterval(expireComponentActions, 60 * 60_000);
     componentActionCleanupTimer.unref?.();
     void taskSupervisor.run({ kind: "maintenance", label: "deployment_startup", task: async () => {
+      const promoted = await waitForDeploymentPromotion({
+        repo: input.repo,
+        revision: input.config.appRevision,
+        deploymentId: input.config.releaseNotes.verificationId,
+      });
+      if (!promoted) {
+        logger.warn({ revision: input.config.appRevision }, "Skipping deployment announcements because release verification was not promoted");
+        return;
+      }
       let deliveredBugFix = null;
       if (input.agentRuntime) {
         try {

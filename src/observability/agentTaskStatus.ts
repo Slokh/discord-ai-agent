@@ -39,29 +39,30 @@ export type AgentTaskStatusSandboxRun = {
   updatedAt: Date;
 };
 
-export type AgentRuntimeStatusSession = {
+export type AgentRuntimeStatusExecution = {
   sessionId: string;
   traceId: string | null;
   threadKey: string | null;
   title: string;
   requestedBy: string | null;
-  status: string;
+  sessionStatus: string;
+  qualityCohort: string;
   harness: string | null;
   model: string | null;
   executionId: string | null;
-  executionStatus: string | null;
+  status: string;
   createdAt: Date;
   startedAt: Date | null;
   completedAt: Date | null;
   updatedAt: Date;
-  executionUpdatedAt: Date | null;
 };
 
 export type AgentTaskStatusSnapshot = {
   generatedAt: Date;
   staleAfterMs: number;
-  agentSessionCounts: AgentTaskStatusCount[];
-  activeAgentSessions: AgentRuntimeStatusSession[];
+  recentAfterMs: number;
+  agentExecutionCounts: AgentTaskStatusCount[];
+  activeAgentExecutions: AgentRuntimeStatusExecution[];
   taskCounts: AgentTaskStatusCount[];
   queueCounts: AgentTaskStatusCount[];
   activeTasks: AgentTaskStatusTask[];
@@ -73,14 +74,16 @@ export type AgentTaskStatusSnapshot = {
 export type AgentTaskStatusOptions = {
   limit?: number;
   staleAfterMs?: number;
+  recentAfterMs?: number;
 };
 
 export async function collectAgentTaskStatusSnapshot(pool: DbPool, options: AgentTaskStatusOptions = {}): Promise<AgentTaskStatusSnapshot> {
   const limit = clampInteger(options.limit ?? 10, 1, 100);
   const generatedAt = new Date();
+  const recentAfterMs = options.recentAfterMs ?? 24 * 60 * 60 * 1000;
   const [
-    agentSessionCounts,
-    activeAgentSessions,
+    agentExecutionCounts,
+    activeAgentExecutions,
     taskCounts,
     queueCounts,
     activeTasks,
@@ -90,7 +93,11 @@ export async function collectAgentTaskStatusSnapshot(pool: DbPool, options: Agen
   ] = await Promise.all([
     queryCounts(
       pool,
-      "SELECT status AS name, count(*)::int AS count FROM agent_runtime_sessions WHERE metadata->>'runtime' = 'agent' GROUP BY status ORDER BY status"
+      `SELECT execution.status AS name, count(*)::int AS count
+       FROM agent_runtime_executions execution
+       JOIN agent_runtime_sessions session ON session.session_id = execution.session_id
+       WHERE session.metadata->>'runtime' = 'agent' AND execution.task_id IS NULL
+       GROUP BY execution.status ORDER BY execution.status`
     ),
     queryAgentRuntimeSessions(pool, limit),
     queryCounts(pool, "SELECT status AS name, count(*)::int AS count FROM agent_tasks GROUP BY status ORDER BY status"),
@@ -112,10 +119,11 @@ export async function collectAgentTaskStatusSnapshot(pool: DbPool, options: Agen
         SELECT *
         FROM agent_tasks
         WHERE status IN ('succeeded', 'failed', 'no_changes', 'cancelled')
+          AND coalesce(completed_at, updated_at) >= $2
         ORDER BY coalesce(completed_at, updated_at) DESC
         LIMIT $1
       `,
-      [limit]
+      [limit, new Date(generatedAt.getTime() - recentAfterMs)]
     ),
     querySandboxRuns(
       pool,
@@ -152,8 +160,9 @@ export async function collectAgentTaskStatusSnapshot(pool: DbPool, options: Agen
   return {
     generatedAt,
     staleAfterMs: options.staleAfterMs ?? 15 * 60 * 1000,
-    agentSessionCounts,
-    activeAgentSessions,
+    recentAfterMs,
+    agentExecutionCounts,
+    activeAgentExecutions,
     taskCounts,
     queueCounts,
     activeTasks,
@@ -167,21 +176,23 @@ export function formatAgentTaskStatusSnapshot(snapshot: AgentTaskStatusSnapshot)
   const lines: string[] = [];
   const diagnostics = diagnoseAgentTaskStatus(snapshot);
   const activeStaleTasks = staleActiveTasks(snapshot);
+  const staleExecutions = staleActiveAgentExecutions(snapshot);
 
   lines.push("Agent task status");
-  lines.push(`Generated: ${formatDateTime(snapshot.generatedAt)} | stale threshold: ${formatSeconds(snapshot.staleAfterMs)}`);
+  lines.push(`Generated: ${formatDateTime(snapshot.generatedAt)} | stale threshold: ${formatSeconds(snapshot.staleAfterMs)} | recent task window: ${formatSeconds(snapshot.recentAfterMs)}`);
   lines.push(
     [
-      `active agent sessions: ${snapshot.activeAgentSessions.length}`,
+      `active agent executions: ${snapshot.activeAgentExecutions.length}`,
       `active tasks: ${snapshot.activeTasks.length}`,
-      `stale active: ${activeStaleTasks.length}`,
+      `stale executions: ${staleExecutions.length}`,
+      `stale tasks: ${activeStaleTasks.length}`,
       `active sandboxes: ${snapshot.activeSandboxRuns.length}`,
       `pending cleanup: ${snapshot.pendingSandboxCleanup.length}`
     ].join(" | ")
   );
 
-  appendCounts(lines, "Agent runtime session counts", snapshot.agentSessionCounts);
-  appendAgentRuntimeSessions(lines, "Active agent runtime sessions", snapshot.activeAgentSessions, snapshot);
+  appendCounts(lines, "Agent execution counts", snapshot.agentExecutionCounts);
+  appendAgentRuntimeExecutions(lines, "Active agent executions", snapshot.activeAgentExecutions, snapshot);
   appendCounts(lines, "Task counts", snapshot.taskCounts);
   appendCounts(lines, "pg-boss agent.task queue", snapshot.queueCounts);
   appendDiagnostics(lines, diagnostics);
@@ -196,12 +207,16 @@ export function formatAgentTaskStatusSnapshot(snapshot: AgentTaskStatusSnapshot)
 export function diagnoseAgentTaskStatus(snapshot: AgentTaskStatusSnapshot): string[] {
   const diagnostics: string[] = [];
   const activeStaleTasks = staleActiveTasks(snapshot);
+  const staleExecutions = staleActiveAgentExecutions(snapshot);
   const blockedQueueCount = snapshot.queueCounts
     .filter((row) => ["created", "retry", "active"].includes(row.name))
     .reduce((total, row) => total + row.count, 0);
   const recentFailures = snapshot.recentTerminalTasks.filter((task) => task.status === "failed");
 
   if (snapshot.activeTasks.length === 0) diagnostics.push("No active code-update tasks.");
+  if (staleExecutions.length > 0) {
+    diagnostics.push(`${staleExecutions.length} active agent ${plural(staleExecutions.length, "execution")} ${verb(staleExecutions.length, "has", "have")} not progressed within the stale threshold.`);
+  }
   if (activeStaleTasks.length > 0) {
     diagnostics.push(
       `${activeStaleTasks.length} active ${plural(activeStaleTasks.length, "task")} ${verb(activeStaleTasks.length, "has", "have")} not progressed within the stale threshold.`
@@ -224,6 +239,11 @@ export function staleActiveTasks(snapshot: AgentTaskStatusSnapshot): AgentTaskSt
     const progressedAt = task.progressUpdatedAt ?? task.updatedAt ?? task.startedAt ?? task.createdAt;
     return snapshot.generatedAt.getTime() - progressedAt.getTime() >= snapshot.staleAfterMs;
   });
+}
+
+export function staleActiveAgentExecutions(snapshot: AgentTaskStatusSnapshot): AgentRuntimeStatusExecution[] {
+  return snapshot.activeAgentExecutions.filter((execution) =>
+    snapshot.generatedAt.getTime() - execution.updatedAt.getTime() >= snapshot.staleAfterMs);
 }
 
 function appendCounts(lines: string[], title: string, counts: AgentTaskStatusCount[]) {
@@ -264,33 +284,29 @@ function appendTasks(lines: string[], title: string, tasks: AgentTaskStatusTask[
   }
 }
 
-function appendAgentRuntimeSessions(
+function appendAgentRuntimeExecutions(
   lines: string[],
   title: string,
-  sessions: AgentRuntimeStatusSession[],
+  executions: AgentRuntimeStatusExecution[],
   snapshot: AgentTaskStatusSnapshot
 ) {
   lines.push("");
-  lines.push(`${title}: ${sessions.length === 0 ? "none" : ""}`.trimEnd());
-  for (const session of sessions) {
-    const ageMs = snapshot.generatedAt.getTime() - session.createdAt.getTime();
-    const updatedMs = snapshot.generatedAt.getTime() - session.updatedAt.getTime();
-    const executionUpdatedMs = session.executionUpdatedAt ? snapshot.generatedAt.getTime() - session.executionUpdatedAt.getTime() : null;
+  lines.push(`${title}: ${executions.length === 0 ? "none" : ""}`.trimEnd());
+  for (const execution of executions) {
+    const ageMs = snapshot.generatedAt.getTime() - execution.createdAt.getTime();
+    const updatedMs = snapshot.generatedAt.getTime() - execution.updatedAt.getTime();
+    const stale = updatedMs >= snapshot.staleAfterMs;
     lines.push(
-      `- ${session.sessionId} ${session.status}${session.executionStatus ? ` | execution=${session.executionStatus}` : ""}${
-        session.harness ? ` | harness=${session.harness}` : ""
+      `- ${execution.executionId} ${execution.status}${stale ? " stale" : ""} | cohort=${execution.qualityCohort}${
+        execution.harness ? ` | harness=${execution.harness}` : ""
       }`
     );
-    lines.push(`  ${session.title}${session.requestedBy ? ` | by=${session.requestedBy}` : ""}`);
-    if (session.model) lines.push(`  model: ${session.model}`);
-    if (session.threadKey) lines.push(`  thread: ${session.threadKey}`);
-    if (session.executionId) lines.push(`  execution: ${session.executionId}`);
-    if (session.traceId) lines.push(`  trace: ${session.traceId}`);
-    lines.push(
-      `  created ${formatAge(ageMs)} | updated ${formatAge(updatedMs)}${
-        executionUpdatedMs == null ? "" : ` | execution updated ${formatAge(executionUpdatedMs)}`
-      }`
-    );
+    lines.push(`  ${execution.title}${execution.requestedBy ? ` | by=${execution.requestedBy}` : ""}`);
+    if (execution.model) lines.push(`  model: ${execution.model}`);
+    if (execution.threadKey) lines.push(`  thread: ${execution.threadKey}`);
+    lines.push(`  session: ${execution.sessionId} (${execution.sessionStatus})`);
+    if (execution.traceId) lines.push(`  trace: ${execution.traceId}`);
+    lines.push(`  created ${formatAge(ageMs)} | updated ${formatAge(updatedMs)}`);
   }
 }
 
@@ -341,26 +357,22 @@ async function querySandboxRuns(pool: DbPool, sql: string, params: unknown[]): P
   return rows.map(rowToSandboxRun);
 }
 
-async function queryAgentRuntimeSessions(pool: DbPool, limit: number): Promise<AgentRuntimeStatusSession[]> {
+async function queryAgentRuntimeSessions(pool: DbPool, limit: number): Promise<AgentRuntimeStatusExecution[]> {
   const rows = await optionalRows(
     pool,
     `
       SELECT
-        s.session_id, s.trace_id, s.thread_key, s.title, s.requested_by,
-        s.status, s.harness, s.model, s.created_at, s.started_at, s.completed_at,
-        s.updated_at,
-        e.execution_id, e.status AS execution_status, e.updated_at AS execution_updated_at
+        s.session_id, coalesce(e.trace_id, s.trace_id) AS trace_id, s.thread_key, s.title, s.requested_by,
+        s.status AS session_status,
+        coalesce(nullif(e.metadata->>'qualityCohort', ''), nullif(s.metadata->>'qualityCohort', ''), 'unknown') AS quality_cohort,
+        e.harness, e.model, e.execution_id, e.status,
+        e.created_at, e.started_at, e.completed_at, e.updated_at
       FROM agent_runtime_sessions s
-      LEFT JOIN LATERAL (
-        SELECT execution_id, status, updated_at
-        FROM agent_runtime_executions
-        WHERE session_id = s.session_id
-        ORDER BY created_at DESC, execution_id DESC
-        LIMIT 1
-      ) e ON true
+      JOIN agent_runtime_executions e ON e.session_id = s.session_id
       WHERE s.metadata->>'runtime' = 'agent'
-        AND s.status IN ('queued', 'running')
-      ORDER BY coalesce(e.updated_at, s.updated_at) ASC, s.created_at ASC
+        AND e.task_id IS NULL
+        AND e.status IN ('queued', 'running')
+      ORDER BY e.updated_at ASC, e.created_at ASC
       LIMIT $1
     `,
     [limit]
@@ -415,23 +427,23 @@ function rowToSandboxRun(row: Record<string, unknown>): AgentTaskStatusSandboxRu
   };
 }
 
-function rowToAgentRuntimeSession(row: Record<string, unknown>): AgentRuntimeStatusSession {
+function rowToAgentRuntimeSession(row: Record<string, unknown>): AgentRuntimeStatusExecution {
   return {
     sessionId: stringValue(row.session_id),
     traceId: nullableString(row.trace_id),
     threadKey: nullableString(row.thread_key),
     title: stringValue(row.title),
     requestedBy: nullableString(row.requested_by),
-    status: stringValue(row.status),
+    sessionStatus: stringValue(row.session_status),
+    qualityCohort: stringValue(row.quality_cohort) || "unknown",
     harness: nullableString(row.harness),
     model: nullableString(row.model),
     executionId: nullableString(row.execution_id),
-    executionStatus: nullableString(row.execution_status),
+    status: stringValue(row.status),
     createdAt: dateValue(row.created_at),
     startedAt: nullableDate(row.started_at),
     completedAt: nullableDate(row.completed_at),
     updatedAt: dateValue(row.updated_at),
-    executionUpdatedAt: nullableDate(row.execution_updated_at)
   };
 }
 

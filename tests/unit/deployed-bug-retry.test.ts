@@ -10,6 +10,7 @@ describe("deployed Discord bug retry", () => {
       retried: true,
     }));
     const claimDiscordBugReportDeployment = vi.fn(async () => true);
+    const recordDiscordBugReportRetry = vi.fn(async () => undefined);
     const fetchImpl = vi.fn(async (url: string | URL | Request) => {
       const value = String(url);
       if (value.endsWith("/pulls/314")) {
@@ -28,6 +29,7 @@ describe("deployed Discord bug retry", () => {
       repo: {
         listDiscordBugReportsAwaitingDeployment: vi.fn(async () => [report]),
         claimDiscordBugReportDeployment,
+        recordDiscordBugReportRetry,
       },
       agentRuntime: {},
       client: {},
@@ -48,6 +50,12 @@ describe("deployed Discord bug retry", () => {
       deployedRevision: "deployed-sha",
     });
     expect(processReport).toHaveBeenCalledWith(report, "deployed-sha", expect.objectContaining({ title: "Fix replies" }));
+    expect(recordDiscordBugReportRetry).toHaveBeenCalledWith({
+      reportId: "report-1",
+      status: "succeeded",
+      retryExecutionId: "bug-retry-report-1",
+      announcementMessageId: "update-1",
+    });
   });
 
   it("stays silent when the merged fix is not in this deployment", async () => {
@@ -70,6 +78,7 @@ describe("deployed Discord bug retry", () => {
       repo: {
         listDiscordBugReportsAwaitingDeployment: vi.fn(async () => [bugReport()]),
         claimDiscordBugReportDeployment,
+        recordDiscordBugReportRetry: vi.fn(async () => undefined),
       },
       agentRuntime: {},
       client: {},
@@ -90,6 +99,7 @@ describe("deployed Discord bug retry", () => {
       retried: false,
       error: new Error("provider unavailable"),
     }));
+    const recordDiscordBugReportRetry = vi.fn(async () => undefined);
     const result = await retryDeployedDiscordBugReports({
       config: {
         appRevision: "merge-sha",
@@ -98,6 +108,7 @@ describe("deployed Discord bug retry", () => {
       repo: {
         listDiscordBugReportsAwaitingDeployment: vi.fn(async () => [report]),
         claimDiscordBugReportDeployment: vi.fn(async () => true),
+        recordDiscordBugReportRetry,
       },
       agentRuntime: {},
       client: {},
@@ -116,6 +127,34 @@ describe("deployed Discord bug retry", () => {
       skipped: 1,
       bugFixAnnouncement: { content: "bug fix update", messageId: "update-1" },
     });
+    expect(recordDiscordBugReportRetry).toHaveBeenCalledWith(expect.objectContaining({ status: "failed", announcementMessageId: "update-1" }));
+  });
+
+  it("does not report a successful retry as failed when outcome persistence is transient", async () => {
+    const recordDiscordBugReportRetry = vi.fn()
+      .mockRejectedValueOnce(new Error("temporary database failure"))
+      .mockResolvedValueOnce(undefined);
+    const result = await retryDeployedDiscordBugReports({
+      config: { appRevision: "merge-sha", github: { repository: "example/discord-ai-agent" } },
+      repo: {
+        listDiscordBugReportsAwaitingDeployment: vi.fn(async () => [bugReport()]),
+        claimDiscordBugReportDeployment: vi.fn(async () => true),
+        recordDiscordBugReportRetry,
+      },
+      agentRuntime: {},
+      client: {},
+      githubToken: "test-token",
+      fetchImpl: vi.fn(async () => jsonResponse({
+        merged_at: "2026-08-01T20:00:00Z",
+        merge_commit_sha: "merge-sha",
+        title: "Fix replies",
+      })) as typeof fetch,
+      processReport: vi.fn(async () => ({ announcement: { content: "fixed", messageId: "update-1" }, retried: true })),
+    } as any);
+
+    expect(result).toMatchObject({ retried: 1, skipped: 0 });
+    expect(recordDiscordBugReportRetry).toHaveBeenCalledTimes(2);
+    expect(recordDiscordBugReportRetry).toHaveBeenLastCalledWith(expect.objectContaining({ status: "succeeded" }));
   });
 
   it("turns the marked reply into the persistent bug-fix update", async () => {
@@ -170,6 +209,10 @@ function bugReport(): DiscordBugReport {
     prUrl: "https://github.com/example/discord-ai-agent/pull/314",
     mergeCommitSha: null,
     deployedRevision: null,
+    retryStatus: null,
+    retryExecutionId: null,
+    announcementMessageId: null,
+    retriedAt: null,
     createdAt: now,
     updatedAt: now,
     completedAt: now,

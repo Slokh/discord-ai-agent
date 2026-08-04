@@ -25,7 +25,7 @@ Focused repositories under `src/db/` own persistence:
 | Conversation continuity and compaction | `conversationMemoryRepository.ts`, `conversationCompaction.ts` |
 | Human run review and private regression contracts | `agent_run_feedback` through `repositories.ts` |
 | Final Discord rendering obligations | `deliveryObligationsRepository.ts` |
-| Bug markers and automated reports | `discordBugMarkerRepository.ts`, `discordBugReportRepository.ts` |
+| Bug markers, automated reports, deployment, and retry outcomes | `discordBugMarkerRepository.ts`, `discordBugReportRepository.ts` |
 | Components V2 actions | `discordComponentActionRepository.ts` |
 | Code-update projections | `agentTaskRepository.ts` and focused read repositories |
 | Audits, costs, and process projections | `auditRepository.ts`, `processRunRepository.ts` |
@@ -108,6 +108,8 @@ Tracked files contain neutral behavior only. Private data lives in:
 Run feedback stores reviewer rating, failure classification, expected behavior, and optional observable assertions. Capture-enabled rows export to `.discord-ai-agent/evals/`; private prompts and requester/channel coordinates never enter tracked fixtures. The feedback table is the durable source, while exported JSON is a disposable local projection used by the eval runner.
 
 Confirmed automated bug validation may attach the same bounded regression contract: one supported failure class, an observable expected behavior, and at least one expected/forbidden tool or required/forbidden answer fragment. The control plane revalidates tool names and bounds before updating the original private feedback row. Cases without a machine-checkable assertion remain human-review candidates instead of becoming misleading automated tests. Revision-quality reports count good/bad classifications by revision without exporting the underlying prompt or note.
+
+Bug-report deployment processing durably records the deployed revision, contextual update message, and whether retrying the original prompt succeeded or failed. The authenticated operator projection is deliberately content-free and requester-keyed; current message content remains available only through the normal Discord permission-filtered tool path. A separate content-free deployment verification row keys promotion by revision and unique rollout ID only after post-deploy gates pass, preventing startup-time bug retries and announcements from racing verification, rollback, or a repeated rollout of the same commit.
 
 ## Migrations and consistency
 

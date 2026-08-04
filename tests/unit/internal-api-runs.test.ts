@@ -170,6 +170,32 @@ describe("internal API run endpoints", () => {
     );
   });
 
+  it("serves a content-free requester-scoped bug inbox lifecycle", async () => {
+    const requesterUserId = "123456789012345678";
+    runtime = await startInternalApi({
+      config: testConfig(),
+      repo: fakeRepo({
+        bugStatuses: [{
+          markedAt: new Date("2026-08-02T00:00:00Z"),
+          validationStatus: "completed",
+          disposition: "confirmed_fixed",
+          prUrl: "https://github.com/example/repo/pull/12",
+          deployedRevision: "revision-a",
+          retryStatus: "succeeded",
+          updatedAt: new Date("2026-08-03T00:00:00Z"),
+        }],
+      }),
+    });
+    const auth = { authorization: `Basic ${Buffer.from("admin:secret").toString("base64")}` };
+    const response = await fetch(`${runtime.url}/api/bugs/status?requesterUserId=${requesterUserId}`, { headers: auth });
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      requesterUserId,
+      counts: { total: 1, awaitingValidation: 0, awaitingDeployment: 0, retryFailed: 0 },
+      items: [{ validationStatus: "completed", retryStatus: "succeeded" }],
+    });
+  });
+
   it("serves a generic agent session control-plane API", async () => {
     const agentRuntimeRepo = fakeAgentRuntimeRepo();
     const enqueuedJobs: unknown[] = [];
@@ -340,7 +366,7 @@ function testConfig(): AppConfig {
   };
 }
 
-function fakeRepo(options: { onListProcessRuns?: (input: any) => void } = {}) {
+function fakeRepo(options: { onListProcessRuns?: (input: any) => void; bugStatuses?: any[] } = {}) {
   const run: ProcessRunRecord = {
     runId: "run-1",
     traceId: "trace-1",
@@ -434,7 +460,8 @@ function fakeRepo(options: { onListProcessRuns?: (input: any) => void } = {}) {
     getTraceEventsForTrace: async () => [],
     getAgentRuntimeEventsForTrace: async () => [],
     getAgentRuntimeMessagesForTrace: async () => [],
-    getToolAuditLogsForTrace: async () => []
+    getToolAuditLogsForTrace: async () => [],
+    listDiscordBugInboxStatus: async () => options.bugStatuses ?? []
   } as unknown as DiscordAiAgentRepository;
 }
 

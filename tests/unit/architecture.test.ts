@@ -40,14 +40,20 @@ describe("architecture guardrails", () => {
       path.join(process.cwd(), ".github/workflows/deploy-eks.yml"),
       "utf8",
     );
-    for (const workflow of [scheduled, deployment]) {
-      expect(workflow).toContain("--safe-summary");
-      expect(workflow).toContain("--private-only");
-    }
-    expect(deployment).toContain("scripts/deploymentHealth.ts");
-    expect(deployment).toContain("--stability-seconds 30");
+    const verification = await fs.readFile(
+      path.join(process.cwd(), "scripts/postDeployVerification.ts"),
+      "utf8",
+    );
+    expect(scheduled).toContain("--safe-summary");
+    expect(scheduled).toContain("--private-only");
+    expect(deployment).toContain("scripts/postDeployVerification.ts");
+    expect(verification).toContain("--safe-summary");
+    expect(verification).toContain("--private-only");
+    expect(verification).toContain("verifyDeploymentStability");
+    expect(verification).toContain("stabilitySeconds: 30");
     expect(deployment).toContain("--force-conflicts");
     expect(scheduled).not.toContain("upload-artifact");
+    expect(deployment).not.toContain("upload-artifact");
   });
 
   it("keeps the post-deploy canary invisible to Discord members", async () => {

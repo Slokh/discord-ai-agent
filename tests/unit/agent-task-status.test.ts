@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   diagnoseAgentTaskStatus,
   formatAgentTaskStatusSnapshot,
+  staleActiveAgentExecutions,
   staleActiveTasks,
   type AgentTaskStatusSnapshot
 } from "../../src/observability/agentTaskStatus.js";
@@ -11,6 +12,7 @@ describe("agent task status formatter", () => {
     const snapshot = snapshotFixture();
 
     expect(staleActiveTasks(snapshot).map((task) => task.taskId)).toEqual(["task-stale"]);
+    expect(staleActiveAgentExecutions(snapshot).map((execution) => execution.executionId)).toEqual([]);
     expect(diagnoseAgentTaskStatus(snapshot)).toEqual(
       expect.arrayContaining([
         "1 active task has not progressed within the stale threshold.",
@@ -23,9 +25,9 @@ describe("agent task status formatter", () => {
     const report = formatAgentTaskStatusSnapshot(snapshot);
 
     expect(report).toContain("Agent task status");
-    expect(report).toContain("active agent sessions: 1 | active tasks: 2 | stale active: 1");
-    expect(report).toContain("Agent runtime session counts: running=1");
-    expect(report).toContain("agent-session-active running | execution=running | harness=nanocodex-native-v1");
+    expect(report).toContain("active agent executions: 1 | active tasks: 2 | stale executions: 0 | stale tasks: 1");
+    expect(report).toContain("Agent execution counts: running=1");
+    expect(report).toContain("agent-execution-active running | cohort=member | harness=nanocodex-native-v1");
     expect(report).toContain("pg-boss agent.task queue: active=1, created=2");
     expect(report).toContain("task-stale running stale");
     expect(report).toContain("Sandbox cleanup backlog:");
@@ -37,8 +39,8 @@ describe("agent task status formatter", () => {
       ...snapshotFixture(),
       taskCounts: [],
       queueCounts: [],
-      agentSessionCounts: [],
-      activeAgentSessions: [],
+      agentExecutionCounts: [],
+      activeAgentExecutions: [],
       activeTasks: [],
       recentTerminalTasks: [],
       activeSandboxRuns: [],
@@ -55,24 +57,25 @@ function snapshotFixture(): AgentTaskStatusSnapshot {
   return {
     generatedAt,
     staleAfterMs: 15 * 60 * 1000,
-    agentSessionCounts: [{ name: "running", count: 1 }],
-    activeAgentSessions: [
+    recentAfterMs: 24 * 60 * 60 * 1000,
+    agentExecutionCounts: [{ name: "running", count: 1 }],
+    activeAgentExecutions: [
       {
         sessionId: "agent-session-active",
         traceId: "trace-agent",
         threadKey: "discord:guild:channel",
         title: "Discord prompt",
         requestedBy: "kartik",
-        status: "running",
+        sessionStatus: "running",
+        qualityCohort: "member",
         harness: "nanocodex-native-v1",
         model: "z-ai/glm-5.2",
         executionId: "agent-execution-active",
-        executionStatus: "running",
+        status: "running",
         createdAt: new Date("2026-07-01T12:20:00.000Z"),
         startedAt: new Date("2026-07-01T12:20:01.000Z"),
         completedAt: null,
-        updatedAt: new Date("2026-07-01T12:25:00.000Z"),
-        executionUpdatedAt: new Date("2026-07-01T12:25:00.000Z")
+        updatedAt: new Date("2026-07-01T12:25:00.000Z")
       }
     ],
     taskCounts: [

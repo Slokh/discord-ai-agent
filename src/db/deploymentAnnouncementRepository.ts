@@ -8,6 +8,23 @@ export type DeploymentAnnouncementClaim = {
   channelId: string;
 };
 
+export async function markDeploymentVerified(pool: DbPool, input: { revision: string; deploymentId: string }) {
+  await pool.query(
+    `INSERT INTO deployment_verifications(revision, deployment_id, verified_at)
+     VALUES ($1, $2, now())
+     ON CONFLICT(revision, deployment_id) DO UPDATE SET verified_at = EXCLUDED.verified_at`,
+    [input.revision, input.deploymentId],
+  );
+}
+
+export async function isDeploymentVerified(pool: DbPool, input: { revision: string; deploymentId: string }) {
+  const result = await pool.query(
+    "SELECT 1 FROM deployment_verifications WHERE revision = $1 AND deployment_id = $2",
+    [input.revision, input.deploymentId],
+  );
+  return (result.rowCount ?? 0) > 0;
+}
+
 export async function claimDeploymentAnnouncement(pool: DbPool, input: DeploymentAnnouncementClaim): Promise<boolean> {
   const result = await pool.query(
     `

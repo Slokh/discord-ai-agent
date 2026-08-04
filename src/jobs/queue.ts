@@ -1,5 +1,6 @@
 import { PgBoss } from "pg-boss";
 import { randomUUID } from "node:crypto";
+import { startAgentRuntimeReconciler } from "../agent/runtimeReconciler.js";
 import type { AppConfig } from "../config/env.js";
 import type { AgentRuntimeRepository } from "../db/agentRuntimeRepository.js";
 import type { AgentTaskJob, AgentTaskStartResult } from "../execution/types.js";
@@ -154,6 +155,9 @@ export async function startJobs(input: {
         config: { ...input.config.worker.memoryCompaction, utilityModel: input.config.openRouter.utilityModel }
       })
     : null;
+  const agentRuntimeReconciler = agentRuntimeWorkerEnabled
+    ? startAgentRuntimeReconciler({ repo: input.agentRuntimeRepo })
+    : null;
   const agentRuntimeRepo = input.agentRuntimeRepo;
   const runtime: JobRuntime = {
     boss,
@@ -220,6 +224,7 @@ export async function startJobs(input: {
       artifactRetentionMaintenance?.stop();
       dataRetentionMaintenance?.stop();
       conversationCompactionMaintenance?.stop();
+      agentRuntimeReconciler?.stop();
       await boss.stop({ graceful: true, timeout: 100_000 });
     }
   };

@@ -25,6 +25,7 @@ import {
   nanoCodexSessionResumeContract,
   storeNanoCodexSessionSnapshot,
 } from "./nanocodexSessionState.js";
+import { nanoCodexEstimatedCostUsd, normalizeNanoCodexUsage } from "./nanocodexUsage.js";
 
 export async function executeNanoCodexAgentRuntime(input: {
   toolContext: ToolContext;
@@ -324,7 +325,13 @@ async function runRetainedNanoCodexTurn(input: {
   await recordAgentEvent(ctx, {
     eventName: "agent.nanocodex.complete",
     summary: `NanoCodex completed with ${toolSequence} tool calls`,
-    metadata: { usage: result.usage, toolCalls: toolSequence, resumed: Boolean(resume) },
+    metadata: {
+      turnUsage: normalizeNanoCodexUsage(result.usage),
+      estimatedCostUsd: nanoCodexEstimatedCostUsd(result.usage),
+      model: ctx.config.openRouter.chatModel,
+      toolCalls: toolSequence,
+      resumed: Boolean(resume),
+    },
   });
   return response;
 }
@@ -413,6 +420,7 @@ async function recordNanoCodexEvent(ctx: ToolContext, event: NanoCodexRuntimeEve
   const callId = stringEventPayload(event.payload.call_id);
   const toolStatus = stringEventPayload(event.payload.status);
   const durationNs = numberEventPayload(event.payload.duration_ns);
+  const usage = normalizeNanoCodexUsage(event.payload.usage);
   await recordAgentEvent(ctx, {
     eventName: `agent.nanocodex.${event.type}`,
     summary: `NanoCodex ${event.type}${toolName ? `: ${toolName}` : ""}`,
@@ -422,6 +430,8 @@ async function recordNanoCodexEvent(ctx: ToolContext, event: NanoCodexRuntimeEve
       ...(toolName ? { toolName } : {}),
       ...(callId ? { callId } : {}),
       ...(toolStatus ? { status: toolStatus } : {}),
+      ...(stringEventPayload(event.payload.model) ? { model: stringEventPayload(event.payload.model) } : {}),
+      ...(usage ? { usage } : {}),
       ...(durationNs === undefined ? {} : { durationMs: Math.round(durationNs / 1_000_000) }),
     },
   });

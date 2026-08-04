@@ -8,7 +8,7 @@ The model selects `runCodingAgent` only for an explicit current request to modif
 
 Code-update admission is available to all guild members. Safety comes from isolated execution, scoped credentials, branch protection, verification, release scanning, and human review—not from trying to classify privileged language in chat.
 
-The sandbox never receives the Discord token or database URL. It receives only the task context, OpenRouter credential, scoped GitHub credential, and callback token required for its job.
+The sandbox supervisor never receives the Discord token or database URL. It receives the OpenRouter and scoped GitHub credentials needed to run the task, but child npm lifecycle scripts and NanoCodex workspace commands use an allowlisted environment without provider, publication, or callback credentials. NanoCodex receives its model credential through the private startup protocol, and only the verified runner retains GitHub publication authority.
 
 ## Durable lifecycle
 

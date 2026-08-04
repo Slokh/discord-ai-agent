@@ -113,7 +113,13 @@ export async function getAgentRuntimeMessagesForTrace(pool: DbPool, input: { tra
 
 
 
-export async function listAgentRuntimeChatExecutions(pool: DbPool, input: { limit?: number } = {}): Promise<AgentRuntimeChatExecution[]> {
+export async function listAgentRuntimeChatExecutions(pool: DbPool, input: {
+    limit?: number;
+    status?: string | null;
+    channelId?: string | null;
+    revision?: string | null;
+    since?: Date | null;
+  } = {}): Promise<AgentRuntimeChatExecution[]> {
     const limit = Math.max(1, Math.min(200, Math.trunc(input.limit ?? 100)));
     const result = await pool.query(
       `
@@ -123,10 +129,14 @@ export async function listAgentRuntimeChatExecutions(pool: DbPool, input: { limi
         ${AGENT_RUNTIME_CHAT_EXECUTION_JOINS}
         WHERE cex.task_id IS NULL
           AND cs.metadata->>'kind' = 'discord_channel'
+          AND ($2::text IS NULL OR cex.status = $2)
+          AND ($3::text IS NULL OR coalesce(nullif(cex.metadata->>'channelId', ''), discord_prompt.channel_id, cs.channel_id) = $3)
+          AND ($4::text IS NULL OR coalesce(nullif(cex.metadata->>'appRevision', ''), nullif(cs.metadata->>'appRevision', '')) = $4)
+          AND ($5::timestamptz IS NULL OR coalesce(cex.started_at, cex.created_at) >= $5)
         ORDER BY cex.updated_at DESC
         LIMIT $1
       `,
-      [limit]
+      [limit, input.status ?? null, input.channelId ?? null, input.revision ?? null, input.since ?? null]
     );
     return result.rows.map(rowToAgentRuntimeChatExecution);
   }

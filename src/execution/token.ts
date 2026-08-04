@@ -3,6 +3,15 @@ import { createHmac, timingSafeEqual } from "node:crypto";
 const DEFAULT_TOKEN_TTL_MS = 2 * 60 * 60 * 1000;
 const DEFAULT_SIGNATURE_SKEW_MS = 2 * 60 * 1000;
 
+export function taskCallbackSecret(input: { taskId: string; sandboxRunId: string; secret: string }) {
+  return createHmac("sha256", input.secret)
+    .update("agent-task-callback-v1\0")
+    .update(input.taskId)
+    .update("\0")
+    .update(input.sandboxRunId)
+    .digest("hex");
+}
+
 export function taskBearerToken(input: { taskId: string; sandboxRunId: string; secret: string; issuedAt?: number }) {
   const issuedAt = input.issuedAt ?? Date.now();
   const payload = `${input.taskId}.${input.sandboxRunId}.${issuedAt}`;

@@ -11,7 +11,7 @@ import type {
   WagerReservation
 } from "../payments/types.js";
 import { stableId } from "../payments/money.js";
-import { mapAccount, mapTransfer, mapWager } from "./paymentRowMappers.js";
+import { mapTransfer, mapWager } from "./paymentRowMappers.js";
 import { getTransferWithClient, insertTransfer, TRANSFER_COLUMNS } from "./paymentTransferPersistence.js";
 import { validateStarterTopUp } from "./paymentTransferValidation.js";
 import { validateSettlementEvidence, validateSettlementOutcome } from "./paymentWagerValidation.js";
@@ -20,18 +20,17 @@ import { listWagerHistory, type WagerHistoryQuery } from "./paymentWagerHistory.
 import { getActiveGameWager, getCurrentWager } from "./paymentWagerReadRepository.js";
 import { getPaymentsConsoleSnapshot, upsertPaymentRuntimeHealth } from "./paymentOperationsRepository.js";
 import {
+  claimWalletProvision,
+  ensureWalletPlaceholder,
+  getWallet,
   getWalletForOwner,
   getWalletGuildStarterTargetUsd,
   listConfirmedTransferTransactionHashes,
   listUserWallets,
+  markWalletActive,
+  markWalletError,
   setWalletGuildStarterTargetUsd,
 } from "./paymentWalletReadRepository.js";
-const ACCOUNT_COLUMNS = `
-  id, guild_id, owner_kind, discord_user_id, provider, provider_wallet_id,
-  external_id, address, chain_id, status, error_message,
-  initial_grant_transfer_id, created_at, updated_at
-`;
-
 const WAGER_COLUMNS = `
   id, request_id, guild_id, channel_id, thread_key, requested_by_user_id, user_wallet_id,
   bot_wallet_id, game, token, token_decimals, stake_atomic, max_payout_atomic,
@@ -79,63 +78,23 @@ export class PaymentRepository {
     externalId: string;
     chainId: number;
   }): Promise<WalletAccount> {
-    const identityParts = [input.guildId, input.ownerKind, input.discordUserId ?? "bot"];
-    if (input.chainId !== LEGACY_MODERATO_CHAIN_ID) identityParts.push(String(input.chainId));
-    const id = stableId("wallet", ...identityParts);
-    const result = await this.pool.query(
-      `
-        INSERT INTO wallet_accounts(id, guild_id, owner_kind, discord_user_id, external_id, chain_id)
-        VALUES ($1, $2, $3, $4, $5, $6)
-        ON CONFLICT (external_id) DO UPDATE SET updated_at = wallet_accounts.updated_at
-        RETURNING ${ACCOUNT_COLUMNS}
-      `,
-      [id, input.guildId, input.ownerKind, input.discordUserId ?? null, input.externalId, input.chainId]
-    );
-    return mapAccount(result.rows[0]);
+    return ensureWalletPlaceholder(this.pool, input);
   }
 
   async claimWalletProvision(accountId: string): Promise<boolean> {
-    const result = await this.pool.query(
-      `
-        UPDATE wallet_accounts
-        SET provision_attempts = provision_attempts + 1,
-            last_provision_attempt_at = now(), status = 'provisioning',
-            error_message = NULL, updated_at = now()
-        WHERE id = $1
-          AND provider_wallet_id IS NULL
-          AND status <> 'disabled'
-          AND (last_provision_attempt_at IS NULL OR last_provision_attempt_at < now() - interval '2 minutes')
-      `,
-      [accountId]
-    );
-    return result.rowCount === 1;
+    return claimWalletProvision(this.pool, accountId);
   }
 
   async markWalletActive(input: { accountId: string; providerWalletId: string; address: string }): Promise<WalletAccount> {
-    const result = await this.pool.query(
-      `
-        UPDATE wallet_accounts
-        SET provider_wallet_id = $2, address = $3, status = 'active',
-            error_message = NULL, updated_at = now()
-        WHERE id = $1
-        RETURNING ${ACCOUNT_COLUMNS}
-      `,
-      [input.accountId, input.providerWalletId, input.address]
-    );
-    if (!result.rows[0]) throw new Error(`Wallet account ${input.accountId} does not exist`);
-    return mapAccount(result.rows[0]);
+    return markWalletActive(this.pool, input);
   }
 
   async markWalletError(accountId: string, errorMessage: string): Promise<void> {
-    await this.pool.query(
-      `UPDATE wallet_accounts SET status = 'error', error_message = $2, updated_at = now() WHERE id = $1`,
-      [accountId, errorMessage.slice(0, 2_000)]
-    );
+    await markWalletError(this.pool, accountId, errorMessage);
   }
 
   async getWallet(accountId: string): Promise<WalletAccount | null> {
-    const result = await this.pool.query(`SELECT ${ACCOUNT_COLUMNS} FROM wallet_accounts WHERE id = $1`, [accountId]);
-    return result.rows[0] ? mapAccount(result.rows[0]) : null;
+    return getWallet(this.pool, accountId);
   }
 
   async createInitialGrant(input: {
@@ -728,5 +687,3 @@ export class PaymentRepository {
     await upsertPaymentRuntimeHealth(this.pool, input);
   }
 }
-
-const LEGACY_MODERATO_CHAIN_ID = 42431;

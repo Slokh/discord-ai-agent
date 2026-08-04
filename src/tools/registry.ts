@@ -91,8 +91,11 @@ export function toolByName(name: string): ToolRegistryEntry | undefined {
 }
 
 function toolDescriptionForModel(tool: ToolRegistryEntry): string {
-  return [
-    tool.description,
-    `Returns: ${tool.outputContract.join("; ")}.`,
-  ].filter(Boolean).join("\n");
+  // Retrieval, resolver, memory, stats, summary, and image descriptions already
+  // name their evidence shape. Repeating generic output taxonomies on every
+  // model call adds thousands of static prompt bytes without changing schema.
+  const needsExplicitOutput = tool.mutates || ["coding", "generation", "external"].includes(tool.toolClass);
+  return needsExplicitOutput
+    ? `${tool.description}\nReturns: ${tool.outputContract.join("; ")}.`
+    : tool.description;
 }

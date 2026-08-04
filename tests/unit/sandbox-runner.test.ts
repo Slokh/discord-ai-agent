@@ -82,7 +82,7 @@ describe("sandboxRunner", () => {
     expect(() => nanoCodexModel("openrouter/openai/gpt-5.6-luna")).toThrow(/supports OpenRouter model/);
     expect(() => nanoCodexModel("z-ai/glm-5.2")).toThrow(/supports OpenRouter model/);
     const env = nanoCodexProcessEnv(
-      { PATH: "/usr/bin" },
+      { PATH: "/usr/bin", GITHUB_TOKEN: "ghp-test", OPENROUTER_API_KEY: "sk-test", AGENT_TASK_CALLBACK_SECRET: "callback-secret" },
       "/tmp/tool-shims"
     );
     expect(env).toEqual(
@@ -92,6 +92,9 @@ describe("sandboxRunner", () => {
       })
     );
     expect(env).not.toHaveProperty("OPENAI_API_KEY");
+    expect(env).not.toHaveProperty("GITHUB_TOKEN");
+    expect(env).not.toHaveProperty("OPENROUTER_API_KEY");
+    expect(env).not.toHaveProperty("AGENT_TASK_CALLBACK_SECRET");
   });
 
   it("treats question-plus-change codegen prompts as implementation requests", () => {
@@ -556,6 +559,24 @@ describe("sandboxRunner", () => {
     expect(env.TASK_REQUEST).toBeUndefined();
     expect(env.SANDBOX_RUN_ID).toBeUndefined();
     expect(env.DISCORD_AI_AGENT_PROCESS_ROLE).toBeUndefined();
+  });
+
+  it("strips publication and provider credentials from dependency installs", () => {
+    const env = codegenNpmInstallEnv({
+      PATH: "/usr/bin",
+      HOME: "/tmp/home",
+      OPENROUTER_API_KEY: "sk-test",
+      GITHUB_TOKEN: "ghp-test",
+      AGENT_TASK_CALLBACK_SECRET: "callback-secret",
+      NODE_ENV: "production"
+    });
+
+    expect(env.PATH).toBe("/usr/bin");
+    expect(env.HOME).toBe("/tmp/home");
+    expect(env.NODE_ENV).toBe("development");
+    expect(env.OPENROUTER_API_KEY).toBeUndefined();
+    expect(env.GITHUB_TOKEN).toBeUndefined();
+    expect(env.AGENT_TASK_CALLBACK_SECRET).toBeUndefined();
   });
 
   it("includes dev dependency mode in the dependency cache key", async () => {

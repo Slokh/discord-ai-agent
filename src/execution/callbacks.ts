@@ -27,7 +27,7 @@ export async function postJson(env: SandboxEnv, pathName: string, body: Record<s
       "content-type": "application/json",
       authorization: `Bearer ${env.taskToken}`,
       "x-agent-task-timestamp": timestamp,
-      "x-agent-task-signature": callbackBodySignature({ secret: env.taskSigningSecret, timestamp, rawBody })
+      "x-agent-task-signature": callbackBodySignature({ secret: env.taskCallbackSecret, timestamp, rawBody })
     },
     body: rawBody
   });

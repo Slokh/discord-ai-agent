@@ -59,7 +59,7 @@ export type SandboxEnv = {
   targetPullRequestUrl: string | null;
   controlPlaneInternalUrl: string;
   taskToken: string;
-  taskSigningSecret: string;
+  taskCallbackSecret: string;
   githubToken: string;
   githubRepository: string;
   githubBaseBranch: string;

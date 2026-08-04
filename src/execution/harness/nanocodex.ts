@@ -1,6 +1,7 @@
 import path from "node:path";
 import { nanoCodexSessionId, runNanoCodexRuntime, type NanoCodexRuntimeEvent } from "../../agent/nanocodexRuntime.js";
 import { CODEGEN_REASONING } from "../codegenSelection.js";
+import { codegenNpmScriptEnv } from "../dependencyCache.js";
 import { progress, recordArtifact } from "../callbacks.js";
 import { codeUpdatePrompt } from "../codegenPrompts.js";
 import { gitChangeStateMetadata, readGitChangeState } from "../repoWorkspace.js";
@@ -23,7 +24,7 @@ export function nanoCodexProcessEnv(
   toolShimDir: string,
 ): NodeJS.ProcessEnv {
   return {
-    ...baseEnv,
+    ...codegenNpmScriptEnv(baseEnv),
     PATH: `${toolShimDir}${path.delimiter}${baseEnv.PATH ?? process.env.PATH ?? ""}`,
     AGENT_TOOL_SHIM_DIR: toolShimDir,
   };

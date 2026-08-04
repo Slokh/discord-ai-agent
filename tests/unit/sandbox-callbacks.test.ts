@@ -2,7 +2,7 @@ import { createServer, type IncomingHttpHeaders } from "node:http";
 import { afterEach, describe, expect, it } from "vitest";
 import { complete, progress, recordArtifact, recordCommand } from "../../src/execution/callbacks.js";
 import type { SandboxEnv } from "../../src/execution/sandboxEnv.js";
-import { taskBearerToken, verifyCallbackBodySignature, verifyTaskBearerToken } from "../../src/execution/token.js";
+import { taskBearerToken, taskCallbackSecret, verifyCallbackBodySignature, verifyTaskBearerToken } from "../../src/execution/token.js";
 
 type CapturedRequest = {
   path: string;
@@ -77,11 +77,11 @@ describe("sandbox callbacks", () => {
       expect(verifyTaskBearerToken({
         taskId: env.taskId,
         sandboxRunId: env.sandboxRunId,
-        secret: env.taskSigningSecret,
+        secret: "task-secret",
         token: request.headers.authorization?.replace(/^Bearer /, "")
       })).toBe(true);
       expect(verifyCallbackBodySignature({
-        secret: env.taskSigningSecret,
+        secret: env.taskCallbackSecret,
         timestamp,
         signature,
         rawBody: request.rawBody
@@ -116,7 +116,7 @@ function sandboxEnv(controlPlaneInternalUrl: string): SandboxEnv {
     targetPullRequestUrl: null,
     controlPlaneInternalUrl,
     taskToken: taskBearerToken({ taskId, sandboxRunId, secret: taskSigningSecret }),
-    taskSigningSecret,
+    taskCallbackSecret: taskCallbackSecret({ taskId, sandboxRunId, secret: taskSigningSecret }),
     githubToken: "github-token",
     githubRepository: "example/repo",
     githubBaseBranch: "main",

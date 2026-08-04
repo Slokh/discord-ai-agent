@@ -130,7 +130,7 @@ export async function markAgentTaskRunning(pool: DbPool, input: {
                 metadata = metadata || $2::jsonb,
                 started_at = coalesce(started_at, now()),
                 updated_at = now()
-            WHERE task_id = $1
+            WHERE execution_id = 'agent-task-execution-' || $1
               AND status NOT IN ('succeeded', 'failed', 'no_changes', 'cancelled')
             RETURNING session_id, execution_id, trace_id, event_sequence AS sequence
           ),
@@ -191,7 +191,7 @@ export async function markAgentTaskProgress(pool: DbPool, input: {
           WITH target AS (
             UPDATE agent_runtime_executions
             SET event_sequence = event_sequence + 1
-            WHERE task_id = $1
+            WHERE execution_id = 'agent-task-execution-' || $1
             RETURNING
               session_id,
               execution_id,
@@ -292,7 +292,7 @@ export async function recordSandboxRun(pool: DbPool, input: {
             SET sandbox_run_id = coalesce($2::text, sandbox_run_id),
                 metadata = metadata || $3::jsonb,
                 updated_at = now()
-            WHERE task_id = $1
+            WHERE execution_id = 'agent-task-execution-' || $1
             RETURNING session_id
           )
           UPDATE agent_runtime_sessions
@@ -354,7 +354,7 @@ export async function markAgentTaskSucceeded(pool: DbPool, input: {
                 metadata = metadata || $6::jsonb,
                 completed_at = coalesce(completed_at, now()),
                 updated_at = now()
-            WHERE task_id = $1
+            WHERE execution_id = 'agent-task-execution-' || $1
             RETURNING session_id, execution_id, trace_id, event_sequence AS sequence
           ),
           session_update AS (
@@ -423,7 +423,7 @@ export async function markAgentTaskFailed(pool: DbPool, input: {
                 metadata = metadata || $4::jsonb,
                 completed_at = coalesce(completed_at, now()),
                 updated_at = now()
-            WHERE task_id = $1
+            WHERE execution_id = 'agent-task-execution-' || $1
             RETURNING session_id, execution_id, trace_id, event_sequence AS sequence
           ),
           session_update AS (

@@ -864,8 +864,6 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
 
   it("mirrors agent task callbacks into durable codegen executions", async () => {
     const taskId = `task-${randomUUID()}`;
-    const sessionId = `codegen-session-${taskId}`;
-    const executionId = `codegen-execution-${taskId}`;
     const agentSessionId = `agent-session-${taskId}`;
     const agentExecutionId = `agent-task-execution-${taskId}`;
     const traceId = `trace-${randomUUID()}`;
@@ -886,18 +884,6 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
       requestedBy: "tester",
       backend: "kubernetes-sandbox"
     });
-    await agentRuntimeRepo.upsertSession({
-      sessionId,
-      traceId,
-      threadKey: `discord:${guildId}:${channelId}`,
-      guildId,
-      channelId,
-      userId,
-      title: "Bridge test",
-      request: "change a file",
-      requestedBy: "tester"
-    });
-    await agentRuntimeRepo.createExecution({ executionId, sessionId, taskId, traceId, status: "queued" });
     await agentRuntimeRepo.upsertSession({
       sessionId: agentSessionId,
       traceId,
@@ -936,24 +922,6 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
       metadata: { command: "npm test" }
     });
 
-    const progress = await pool.query(
-      "SELECT kind, event_name, summary, metadata FROM agent_runtime_events WHERE execution_id = $1 ORDER BY sequence",
-      [executionId]
-    );
-    expect(progress.rows).toEqual([
-      expect.objectContaining({
-        kind: "status",
-        event_name: "agent.task.started",
-        summary: "Starting Kubernetes sandbox."
-      }),
-      expect.objectContaining({
-        kind: "command",
-        event_name: "agent.task.progress",
-        summary: "Running tests."
-      })
-    ]);
-    expect(progress.rows[0].metadata).toEqual(expect.objectContaining({ taskId, step: "sandbox_start", pgbossJobId: "pgboss-job-1" }));
-    expect(progress.rows[1].metadata).toEqual(expect.objectContaining({ step: "verify", command: "npm test" }));
     const agentProgress = await pool.query(
       "SELECT kind, event_name, summary, metadata FROM agent_runtime_events WHERE execution_id = $1 ORDER BY sequence",
       [agentExecutionId]
@@ -982,20 +950,10 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
     });
     const attachedExecutions = await pool.query(
       "SELECT execution_id, sandbox_run_id, sandbox_id, metadata FROM agent_runtime_executions WHERE execution_id = ANY($1::text[]) ORDER BY execution_id",
-      [[executionId, agentExecutionId]]
+      [[agentExecutionId]]
     );
     expect(attachedExecutions.rows).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({
-          execution_id: executionId,
-          sandbox_run_id: "sandbox-run-1",
-          sandbox_id: null,
-          metadata: expect.objectContaining({
-            backend: "kubernetes-sandbox",
-            backendJobName: "agent-task-test",
-            sandboxRunId: "sandbox-run-1"
-          })
-        }),
         expect.objectContaining({
           execution_id: agentExecutionId,
           sandbox_run_id: "sandbox-run-1",
@@ -1073,17 +1031,6 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
       metadata: { changedFiles: 1 }
     });
 
-    const terminal = await pool.query("SELECT status, branch_name, pr_url, verify_passed FROM agent_runtime_executions WHERE execution_id = $1", [
-      executionId
-    ]);
-    expect(terminal.rows[0]).toEqual(
-      expect.objectContaining({
-        status: "succeeded",
-        branch_name: "kartik/bridge-test",
-        pr_url: "https://github.com/example/discord-ai-agent/pull/999",
-        verify_passed: true
-      })
-    );
     const terminalAgent = await pool.query("SELECT status, branch_name, pr_url, verify_passed FROM agent_runtime_executions WHERE execution_id = $1", [
       agentExecutionId
     ]);
@@ -1097,11 +1044,10 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
     );
     const terminalEvents = await pool.query(
       "SELECT execution_id, event_name, summary, metadata FROM agent_runtime_events WHERE execution_id = ANY($1::text[]) ORDER BY execution_id, sequence",
-      [[executionId, agentExecutionId]]
+      [[agentExecutionId]]
     );
     expect(terminalEvents.rows).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ execution_id: executionId, event_name: "agent.task.completed", summary: "Opened pull request." }),
         expect.objectContaining({ execution_id: agentExecutionId, event_name: "agent.task.completed", summary: "Opened pull request." })
       ])
     );
@@ -1114,8 +1060,6 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
 
   it("fans terminal task failures into executions and releases warm leases", async () => {
     const taskId = `task-${randomUUID()}`;
-    const sessionId = `codegen-session-${taskId}`;
-    const executionId = `codegen-execution-${taskId}`;
     const agentSessionId = `agent-session-${taskId}`;
     const agentExecutionId = `agent-task-execution-${taskId}`;
     const traceId = `trace-${randomUUID()}`;
@@ -1137,19 +1081,6 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
       requestedBy: "tester",
       backend: "local-process-sandbox"
     });
-    await agentRuntimeRepo.upsertSession({
-      sessionId,
-      traceId,
-      threadKey: `discord:${guildId}:${channelId}`,
-      guildId,
-      channelId,
-      userId,
-      title: "Failure fanout test",
-      request: "fail before sandbox callback",
-      requestedBy: "tester",
-      status: "running"
-    });
-    await agentRuntimeRepo.createExecution({ executionId, sessionId, taskId, traceId, status: "running", sandboxId });
     await agentRuntimeRepo.upsertSession({
       sessionId: agentSessionId,
       traceId,
@@ -1182,16 +1113,10 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
 
     const terminalExecutions = await pool.query(
       "SELECT execution_id, status, error, metadata FROM agent_runtime_executions WHERE execution_id = ANY($1::text[]) ORDER BY execution_id",
-      [[executionId, agentExecutionId]]
+      [[agentExecutionId]]
     );
     expect(terminalExecutions.rows).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({
-          execution_id: executionId,
-          status: "failed",
-          error: "Sandbox failed to start.",
-          metadata: expect.objectContaining({ failedStep: "sandbox_start" })
-        }),
         expect.objectContaining({
           execution_id: agentExecutionId,
           status: "failed",
@@ -1202,16 +1127,10 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
     );
     const terminalEvents = await pool.query(
       "SELECT execution_id, event_name, summary, metadata FROM agent_runtime_events WHERE execution_id = ANY($1::text[]) ORDER BY execution_id, sequence",
-      [[executionId, agentExecutionId]]
+      [[agentExecutionId]]
     );
     expect(terminalEvents.rows).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({
-          execution_id: executionId,
-          event_name: "agent.task.completed",
-          summary: "Sandbox failed to start.",
-          metadata: expect.objectContaining({ status: "failed", failedStep: "sandbox_start" })
-        }),
         expect.objectContaining({
           execution_id: agentExecutionId,
           event_name: "agent.task.completed",
@@ -1721,26 +1640,8 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
       statusMessage: "nanocodex is still running.",
       metadata: { command: "nanocodex run", stderrTail: "live stderr tail", durationMs: 30_000 }
     });
-    await repo.recordSandboxCommandEvent({
-      taskId,
-      sandboxRunId,
-      step: "scan",
-      command: "npm run scan:release",
-      exitCode: 1,
-      outputTail: "stdout tail",
-      errorTail: "stderr tail",
-      durationMs: 123
-    });
-
-    await expect(repo.getSandboxCommandEvents({ guildId, visibleChannelIds: [channelId], taskId, limit: 10 })).resolves.toEqual([
-      expect.objectContaining({ taskId, sandboxRunId, step: "scan", exitCode: 1, errorTail: "stderr tail" })
-    ]);
     await expect(repo.listRecentAgentTasks(5)).resolves.toEqual(expect.arrayContaining([expect.objectContaining({ taskId })]));
-    // Tasks without a registered runtime execution have no runtime events.
     await expect(repo.getAgentRuntimeTaskEventsForTask({ taskId, limit: 10 })).resolves.toEqual([]);
-    await expect(repo.getSandboxCommandEventsForTask({ taskId, limit: 10 })).resolves.toEqual([
-      expect.objectContaining({ taskId, sandboxRunId, step: "scan", exitCode: 1, errorTail: "stderr tail" })
-    ]);
     await expect(repo.getSandboxRunsForTask(taskId)).resolves.toEqual([
       expect.objectContaining({ taskId, sandboxRunId, backendJobName: "agent-task-cancel-test" })
     ]);

@@ -287,7 +287,7 @@ export async function cancelAgentTask(pool: DbPool, input: { taskId: string; rea
                   error = $2,
                   completed_at = coalesce(completed_at, now()),
                   updated_at = now()
-              WHERE task_id = $1
+              WHERE execution_id = 'agent-task-execution-' || $1
               RETURNING session_id, execution_id, trace_id, event_sequence AS sequence
             ),
             session_update AS (
@@ -318,38 +318,6 @@ export async function cancelAgentTask(pool: DbPool, input: { taskId: string; rea
   }
 
 
-export async function recordSandboxCommandEvent(pool: DbPool, input: {
-    taskId: string;
-    sandboxRunId?: string | null;
-    step: string;
-    command?: string | null;
-    exitCode?: number | null;
-    outputTail?: string | null;
-    errorTail?: string | null;
-    durationMs?: number | null;
-    metadata?: Record<string, unknown>;
-  }) {
-    await pool.query(
-      `
-        INSERT INTO sandbox_command_events(
-          task_id, sandbox_run_id, step, command, exit_code, output_tail, error_tail, duration_ms
-        )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-      `,
-      [
-        input.taskId,
-        input.sandboxRunId ?? null,
-        input.step,
-        input.command ?? null,
-        input.exitCode == null ? null : Math.trunc(input.exitCode),
-        input.outputTail ?? "",
-        input.errorTail ?? "",
-        input.durationMs == null ? null : Math.trunc(input.durationMs)
-      ]
-    );
-  }
-
-
 export async function getSandboxCommandEvents(pool: DbPool, input: {
     guildId: string;
     visibleChannelIds?: string[];
@@ -361,15 +329,23 @@ export async function getSandboxCommandEvents(pool: DbPool, input: {
     const result = await pool.query(
       `
         SELECT
-          sce.id, sce.task_id, sce.sandbox_run_id, sce.step, sce.command, sce.exit_code,
-          sce.output_tail, sce.error_tail, sce.duration_ms, sce.created_at
-        FROM sandbox_command_events sce
-        JOIN agent_tasks at ON at.task_id = sce.task_id
+          ce.id, cex.task_id, ce.metadata->>'sandboxRunId' AS sandbox_run_id,
+          coalesce(ce.metadata->>'step', 'command') AS step,
+          ce.metadata->>'command' AS command,
+          nullif(ce.metadata->>'exitCode', '')::int AS exit_code,
+          coalesce(artifact.preview, '') AS output_tail,
+          ''::text AS error_tail,
+          ce.duration_ms, ce.created_at
+        FROM agent_runtime_events ce
+        JOIN agent_runtime_executions cex ON cex.execution_id = ce.execution_id
+        JOIN agent_tasks at ON at.task_id = cex.task_id
+        LEFT JOIN agent_runtime_artifacts artifact ON artifact.artifact_id = ce.metadata->>'artifactId'
         WHERE at.guild_id = $1
           AND ($2::text[] IS NULL OR at.channel_id IS NULL OR at.channel_id = ANY($2::text[]))
-          AND ($3::text IS NULL OR sce.task_id = $3)
-          AND ($4::text IS NULL OR at.trace_id = $4 OR sce.task_id = $4)
-        ORDER BY sce.created_at DESC, sce.id DESC
+          AND ($3::text IS NULL OR cex.execution_id = 'agent-task-execution-' || $3)
+          AND ($4::text IS NULL OR at.trace_id = $4 OR cex.task_id = $4)
+          AND ce.event_name = 'agent.task.command'
+        ORDER BY ce.created_at DESC, ce.id DESC
         LIMIT $5
       `,
       [input.guildId, input.visibleChannelIds ?? null, input.taskId ?? null, input.traceId ?? null, limit]
@@ -385,11 +361,19 @@ export async function getSandboxCommandEventsForTask(pool: DbPool, input: { task
         SELECT *
         FROM (
           SELECT
-            id, task_id, sandbox_run_id, step, command, exit_code,
-            output_tail, error_tail, duration_ms, created_at
-          FROM sandbox_command_events
-          WHERE task_id = $1
-          ORDER BY created_at DESC, id DESC
+            ce.id, cex.task_id, ce.metadata->>'sandboxRunId' AS sandbox_run_id,
+            coalesce(ce.metadata->>'step', 'command') AS step,
+            ce.metadata->>'command' AS command,
+            nullif(ce.metadata->>'exitCode', '')::int AS exit_code,
+            coalesce(artifact.preview, '') AS output_tail,
+            ''::text AS error_tail,
+            ce.duration_ms, ce.created_at
+          FROM agent_runtime_events ce
+          JOIN agent_runtime_executions cex ON cex.execution_id = ce.execution_id
+          LEFT JOIN agent_runtime_artifacts artifact ON artifact.artifact_id = ce.metadata->>'artifactId'
+          WHERE cex.execution_id = 'agent-task-execution-' || $1
+            AND ce.event_name = 'agent.task.command'
+          ORDER BY ce.created_at DESC, ce.id DESC
           LIMIT $2
         ) recent
         ORDER BY created_at ASC, id ASC

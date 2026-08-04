@@ -103,6 +103,40 @@ describe("sandbox callback server", () => {
       name: "Verification failure",
     }));
   });
+
+  it("stores sandbox command output as a runtime artifact and event", async () => {
+    const agentRuntime = {
+      getExecution: vi.fn(async () => ({ sessionId: "session-1", executionId: "agent-task-execution-task-1", traceId: "trace-1" })),
+      storeArtifact: vi.fn(async () => ({ artifactId: "artifact-1" })),
+      recordEvent: vi.fn(async () => undefined),
+    };
+    runtime = await startSandboxCallbackServer({ config: testConfig(), repo: {} as never, agentRuntime: agentRuntime as never });
+
+    const response = await signedPost(runtime.url, "task-1", "sandbox-1", "/internal/tasks/task-1/commands", {
+      step: "verify",
+      command: "npm run verify",
+      exitCode: 1,
+      outputTail: "stdout tail",
+      errorTail: "stderr tail",
+      durationMs: 123,
+      metadata: { sandboxRunId: "sandbox-1" },
+    });
+
+    expect(response.status).toBe(200);
+    expect(agentRuntime.storeArtifact).toHaveBeenCalledWith(expect.objectContaining({
+      sessionId: "session-1",
+      executionId: "agent-task-execution-task-1",
+      kind: "command_log",
+      name: "verify command output",
+    }));
+    expect(agentRuntime.recordEvent).toHaveBeenCalledWith(expect.objectContaining({
+      eventName: "agent.task.command",
+      kind: "command",
+      level: "error",
+      durationMs: 123,
+      metadata: expect.objectContaining({ taskId: "task-1", sandboxRunId: "sandbox-1", artifactId: "artifact-1" }),
+    }));
+  });
 });
 
 async function signedPost(baseUrl: string, taskId: string, sandboxRunId: string, path: string, body: Record<string, unknown>) {

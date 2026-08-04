@@ -570,7 +570,11 @@ export class AgentRuntimeRepository {
     return this.artifacts.getBinaryArtifact(input);
   }
 
-  getLatestBinaryArtifactForSession(input: { sessionId: string; kind: string }): Promise<AgentRuntimeBinaryArtifactContent | undefined> {
+  getLatestBinaryArtifactForSession(input: {
+    sessionId: string;
+    kind: string;
+    metadataMatch?: Record<string, unknown>;
+  }): Promise<AgentRuntimeBinaryArtifactContent | undefined> {
     return this.artifacts.getLatestBinaryArtifactForSession(input);
   }
 

@@ -1,9 +1,29 @@
 import { describe, expect, it, vi } from "vitest";
-import { executeNanoCodexAgentRuntime } from "../../src/agent/nanocodexAgentRuntime.js";
+import { executeNanoCodexAgentRuntime, nanoCodexSnapshotContinuityKey } from "../../src/agent/nanocodexAgentRuntime.js";
 import { loadConfig } from "../../src/config/env.js";
 import { localToolDefinitionsForModel } from "../../src/tools/registry.js";
 
 describe("NanoCodex agent runtime executor", () => {
+  it("keys retained checkpoints to the reply root and current requester", () => {
+    expect(nanoCodexSnapshotContinuityKey({
+      threadKey: "discord:guild:channel",
+      requestMessageId: "current-message",
+      userId: "member-1",
+      replyContext: { rootMessageId: "root-message" },
+    } as never)).toBe("root-message:member-1");
+    expect(nanoCodexSnapshotContinuityKey({
+      threadKey: "discord:guild:channel",
+      requestMessageId: "current-message",
+      userId: "member-2",
+      replyContext: { rootMessageId: "root-message" },
+    } as never)).toBe("root-message:member-2");
+    expect(nanoCodexSnapshotContinuityKey({
+      threadKey: "local-prompt:guild:channel:member-1",
+      requestMessageId: "local-message",
+      userId: "member-1",
+    } as never)).toBeNull();
+  });
+
   it("keeps the canonical nested tool contract visible to the model", () => {
     const definitions = localToolDefinitionsForModel();
     const presentation = definitions.find((tool) => tool.function.name === "composeDiscordResponse");
@@ -93,7 +113,7 @@ describe("NanoCodex agent runtime executor", () => {
     });
   });
 
-  it("resumes a realistic follow-up when only per-turn Discord context changed", async () => {
+  it("resumes only the checkpoint anchored to an explicit Discord reply chain", async () => {
     const runtime = agentRuntime();
     let firstInstructions = "";
     const firstRun = vi.fn(async (input: any) => {
@@ -102,6 +122,8 @@ describe("NanoCodex agent runtime executor", () => {
       return result("first answer");
     });
     const firstContext = toolContext(runtime);
+    firstContext.requestId = "root-1";
+    firstContext.requestMessageId = "root-1";
     firstContext.sessionMessages = [{ role: "user", content: "first request", authorDisplayName: "Kartik", metadata: {} } as never];
     await executeNanoCodexAgentRuntime({
       toolContext: firstContext,
@@ -152,6 +174,37 @@ describe("NanoCodex agent runtime executor", () => {
       timeoutMs: 1_000,
       runRuntime: secondRun as never,
     });
+    expect(runtime.getLatestBinaryArtifactForSession).toHaveBeenLastCalledWith(expect.objectContaining({
+      metadataMatch: { continuityKey: "root-1:user-1" },
+    }));
+  });
+
+  it("starts a standalone Discord message fresh instead of resuming a channel checkpoint", async () => {
+    const runtime = agentRuntime();
+    runtime.getLatestBinaryArtifactForSession.mockResolvedValue({
+      data: Buffer.from(JSON.stringify(snapshot()), "utf8"),
+      metadata: { continuityKey: "older-root" },
+    });
+    const runRuntime = vi.fn(async (input: any) => {
+      expect(input.resume).toBeUndefined();
+      expect(input.prompt).toContain("USER: standalone request");
+      return result("fresh answer");
+    });
+    const ctx = toolContext(runtime);
+    ctx.requestId = "new-root";
+    ctx.requestMessageId = "new-root";
+
+    await executeNanoCodexAgentRuntime({
+      toolContext: ctx,
+      text: "standalone request",
+      timeoutMs: 1_000,
+      runRuntime: runRuntime as never,
+    });
+
+    expect(runtime.getLatestBinaryArtifactForSession).not.toHaveBeenCalled();
+    expect(runtime.storeBinaryArtifact).toHaveBeenCalledWith(expect.objectContaining({
+      metadata: expect.objectContaining({ continuityKey: "new-root:user-1" }),
+    }));
   });
 
   it("returns a successful mutating tool result when NanoCodex exits before its final message", async () => {
@@ -376,6 +429,7 @@ function toolContext(runtime: ReturnType<typeof agentRuntime>) {
     userId: "user-1",
     userDisplayName: "Kartik",
     visibleChannelIds: ["channel-1"],
+    threadKey: "discord:guild-1:channel-1",
     requestId: "request-1",
     requestMessageId: "request-1",
     requestAttachments: [],

@@ -25,6 +25,7 @@ export async function ensureAgentRuntimePromptExecution(input: {
   status: Extract<AgentRuntimeStatus, "queued" | "running">;
   source: string;
   qualityCohort: AgentQualityCohort;
+  sessionKind?: "discord_channel" | "local_prompt";
   executorName?: string | null;
   appRevision?: string | null;
   config?: AppConfig | null;
@@ -50,7 +51,7 @@ export async function ensureAgentRuntimePromptExecution(input: {
     status: input.status,
     harness: executorName,
     metadata: {
-      kind: "discord_channel",
+      kind: input.sessionKind ?? "discord_channel",
       source: input.source,
       qualityCohort: input.qualityCohort,
       executor: executorName,

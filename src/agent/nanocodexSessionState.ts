@@ -33,11 +33,13 @@ export function nanoCodexSessionResumeContract(input: {
 export async function loadNanoCodexSessionSnapshot(input: {
   agentRuntime: AgentRuntimeRepository;
   sessionId: string;
+  continuityKey: string;
   resumeContract?: NanoCodexSessionResumeContract;
 }): Promise<NanoCodexSessionSnapshot | undefined> {
   const artifact = await input.agentRuntime.getLatestBinaryArtifactForSession({
     sessionId: input.sessionId,
     kind: NANOCODEX_SESSION_SNAPSHOT_ARTIFACT_KIND,
+    metadataMatch: { continuityKey: input.continuityKey },
   });
   if (!artifact) return undefined;
   if (input.resumeContract && !sameResumeContract(artifact.metadata?.resumeContract, input.resumeContract)) return undefined;
@@ -49,6 +51,7 @@ export async function storeNanoCodexSessionSnapshot(input: {
   agentRuntime: AgentRuntimeRepository;
   sessionId: string;
   executionId: string;
+  continuityKey: string;
   result: NanoCodexRuntimeResult;
   resumeContract?: NanoCodexSessionResumeContract;
 }): Promise<void> {
@@ -66,6 +69,7 @@ export async function storeNanoCodexSessionSnapshot(input: {
       model: snapshot.model,
       lineageId: snapshot.lineage_id,
       promptCacheKey: snapshot.prompt_cache_key,
+      continuityKey: input.continuityKey,
       ...(input.resumeContract ? { resumeContract: input.resumeContract } : {}),
       sensitive: true,
       canonical: true,

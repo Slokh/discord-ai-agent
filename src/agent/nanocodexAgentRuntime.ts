@@ -141,11 +141,15 @@ async function runRetainedNanoCodexTurn(input: {
     tools: toolDefinitions,
     model,
   });
-  const resume = await loadNanoCodexSessionSnapshot({
-    agentRuntime: ctx.agentRuntime,
-    sessionId: session.sessionId,
-    resumeContract,
-  });
+  const continuityKey = nanoCodexSnapshotContinuityKey(ctx);
+  const resume = continuityKey && ctx.replyContext
+    ? await loadNanoCodexSessionSnapshot({
+        agentRuntime: ctx.agentRuntime,
+        sessionId: session.sessionId,
+        continuityKey,
+        resumeContract,
+      })
+    : undefined;
   const prompt = resume
     ? await buildNanoCodexPrompt(ctx, text, true, input.capabilities.promptContributions)
     : initialPrompt;
@@ -338,13 +342,16 @@ async function runRetainedNanoCodexTurn(input: {
     };
   }
 
-  await storeNanoCodexSessionSnapshot({
-    agentRuntime: ctx.agentRuntime,
-    sessionId: session.sessionId,
-    executionId,
-    result,
-    resumeContract,
-  });
+  if (continuityKey) {
+    await storeNanoCodexSessionSnapshot({
+      agentRuntime: ctx.agentRuntime,
+      sessionId: session.sessionId,
+      executionId,
+      continuityKey,
+      result,
+      resumeContract,
+    });
+  }
   const output = turnOutput.snapshot();
   const response: AgentResponse = {
     content: result.finalMessage.trim() || "Done.",
@@ -423,6 +430,16 @@ async function buildNanoCodexPrompt(
       ...promptMessages.map((message) => `${message.role.toUpperCase()}: ${textContent(message.content)}`),
     ].join("\n\n"),
   };
+}
+
+/**
+ * A retained model checkpoint is stronger than ordinary prompt memory, so it
+ * must be bounded to one explicit Discord reply chain. New channel messages
+ * start fresh even when they share a channel-memory thread.
+ */
+export function nanoCodexSnapshotContinuityKey(ctx: Pick<ToolContext, "threadKey" | "requestMessageId" | "replyContext" | "userId">) {
+  if (!ctx.threadKey?.startsWith("discord:") || !ctx.requestMessageId || !ctx.userId) return null;
+  return `${ctx.replyContext?.rootMessageId ?? ctx.requestMessageId}:${ctx.userId}`;
 }
 
 function isStableNanoCodexInstruction(message: ChatMessage, _index: number) {

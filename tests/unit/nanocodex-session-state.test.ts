@@ -15,6 +15,7 @@ const snapshot = {
   canonical_context: { type: "message" },
   history: [{ type: "message", role: "user" }],
 };
+const continuityKey = "discord-root-message:user";
 
 describe("NanoCodex retained session checkpoints", () => {
   it("stores the lossless checkpoint in the canonical runtime ledger", async () => {
@@ -24,6 +25,7 @@ describe("NanoCodex retained session checkpoints", () => {
       agentRuntime: { storeBinaryArtifact } as never,
       sessionId: "session-1",
       executionId: "execution-1",
+      continuityKey,
       result: { finalMessage: "done", usage: {}, snapshot },
       resumeContract,
     });
@@ -33,22 +35,26 @@ describe("NanoCodex retained session checkpoints", () => {
       kind: NANOCODEX_SESSION_SNAPSHOT_ARTIFACT_KIND,
       contentType: "application/json",
       data: Buffer.from(JSON.stringify(snapshot), "utf8"),
-      metadata: expect.objectContaining({ canonical: true, sensitive: true, lineageId: "lineage-1", resumeContract }),
+      metadata: expect.objectContaining({ canonical: true, sensitive: true, lineageId: "lineage-1", continuityKey, resumeContract }),
     }));
   });
 
   it("loads only a structurally valid checkpoint", async () => {
+    const getLatestBinaryArtifactForSession = vi.fn(async () => ({ data: Buffer.from(JSON.stringify(snapshot), "utf8") }));
     const agentRuntime = {
-      getLatestBinaryArtifactForSession: vi.fn(async () => ({ data: Buffer.from(JSON.stringify(snapshot), "utf8") })),
+      getLatestBinaryArtifactForSession,
     } as never;
-    await expect(loadNanoCodexSessionSnapshot({ agentRuntime, sessionId: "session-1" })).resolves.toEqual(snapshot);
+    await expect(loadNanoCodexSessionSnapshot({ agentRuntime, sessionId: "session-1", continuityKey })).resolves.toEqual(snapshot);
+    expect(getLatestBinaryArtifactForSession).toHaveBeenCalledWith(expect.objectContaining({
+      metadataMatch: { continuityKey },
+    }));
   });
 
   it("rejects corrupted checkpoints instead of silently starting a divergent session", async () => {
     const agentRuntime = {
       getLatestBinaryArtifactForSession: vi.fn(async () => ({ data: Buffer.from('{"version":2}', "utf8") })),
     } as never;
-    await expect(loadNanoCodexSessionSnapshot({ agentRuntime, sessionId: "session-1" })).rejects.toThrow(/malformed or unsupported/);
+    await expect(loadNanoCodexSessionSnapshot({ agentRuntime, sessionId: "session-1", continuityKey })).rejects.toThrow(/malformed or unsupported/);
   });
 
   it("does not resume a checkpoint when its instructions or tool contract changed", async () => {
@@ -64,6 +70,7 @@ describe("NanoCodex retained session checkpoints", () => {
     await expect(loadNanoCodexSessionSnapshot({
       agentRuntime,
       sessionId: "session-1",
+      continuityKey,
       resumeContract: nanoCodexSessionResumeContract({ instructions: "new instructions", tools: [], model: "gpt-5.6-luna" }),
     })).resolves.toBeUndefined();
   });
@@ -80,6 +87,7 @@ describe("NanoCodex retained session checkpoints", () => {
     await expect(loadNanoCodexSessionSnapshot({
       agentRuntime,
       sessionId: "session-1",
+      continuityKey,
       resumeContract,
     })).resolves.toEqual(snapshot);
   });

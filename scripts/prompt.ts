@@ -82,19 +82,25 @@ async function main() {
     const guildId = args.guildId ?? config.discord.guildId;
     const currentChannel = await resolveCurrentChannel(pool, guildId, args);
     const visibleChannelIds = args.visibleChannelIds ?? (await allIndexedChannelIds(pool, guildId));
-    const threadKey = args.useDiscordMemory ? discordChannelThreadKey(guildId, currentChannel.id) : localPromptThreadKey(guildId, currentChannel.id, args.userId);
+    const runtimeThreadKey = localPromptThreadKey(guildId, currentChannel.id, args.userId);
+    const memoryThreadKey = args.useDiscordMemory ? discordChannelThreadKey(guildId, currentChannel.id) : runtimeThreadKey;
+    if (args.memory) {
+      await repo.ensureConversationSession({
+        threadKey: runtimeThreadKey,
+        guildId,
+        channelId: currentChannel.id,
+        metadata: { kind: "local_prompt", source: "scripts/prompt.ts" },
+      });
+    }
     const priorSessionMessages = args.memory
       ? await loadPromptMemory(repo, {
-          threadKey,
-          guildId,
-          channelId: currentChannel.id,
-          useDiscordMemory: args.useDiscordMemory
+          threadKey: memoryThreadKey,
         })
       : [];
 
     if (args.memory) {
       await repo.appendConversationMessage({
-        threadKey,
+        threadKey: runtimeThreadKey,
         role: "user",
         authorId: args.userId,
         authorDisplayName: args.userName,
@@ -114,7 +120,7 @@ async function main() {
       channelId: currentChannel.id,
       userId: args.userId,
       userDisplayName: args.userName,
-      threadKey,
+      threadKey: runtimeThreadKey,
       requestId,
       text: args.prompt,
       rawContent: args.prompt,
@@ -122,6 +128,7 @@ async function main() {
       status: "running",
       source: "cli.prompt",
       qualityCohort: "synthetic",
+      sessionKind: "local_prompt",
       executorName: "nanocodex",
       appRevision: config.appRevision,
       config,
@@ -156,7 +163,7 @@ async function main() {
               visibleChannelIds: uniqueStrings([currentChannel.id, ...visibleChannelIds]),
               mentionedUserIds: explicitUserMentionIds(args.prompt, config.discord.clientId),
               mentionedChannelIds: explicitChannelMentionIds(args.prompt),
-              threadKey,
+              threadKey: runtimeThreadKey,
               sessionMessages: priorSessionMessages,
               requestId,
               requestMessageId: requestId,
@@ -202,7 +209,7 @@ async function main() {
     if (args.memory) {
       for (const memoryEvent of response.memoryEvents ?? []) {
         await repo.appendConversationMessage({
-          threadKey,
+          threadKey: runtimeThreadKey,
           role: memoryEvent.role,
           authorId: config.discord.clientId,
           authorDisplayName: config.discord.botName,
@@ -215,7 +222,7 @@ async function main() {
       }
 
       await repo.appendConversationMessage({
-        threadKey,
+        threadKey: runtimeThreadKey,
         role: "assistant",
         authorId: config.discord.clientId,
         authorDisplayName: config.discord.botName,
@@ -237,7 +244,7 @@ async function main() {
             channelId: currentChannel.id,
             channelName: currentChannel.name,
             visibleChannelCount: visibleChannelIds.length,
-            threadKey: args.memory ? threadKey : null,
+            threadKey: args.memory ? runtimeThreadKey : null,
             durationMs: Date.now() - agentStartedAt,
             content: response.content,
             files: savedFiles
@@ -416,17 +423,8 @@ async function allIndexedChannelIds(pool: DbPool, guildId: string) {
 
 async function loadPromptMemory(
   repo: DiscordAiAgentRepository,
-  input: { threadKey: string; guildId: string; channelId: string; useDiscordMemory: boolean }
+  input: { threadKey: string }
 ) {
-  await repo.ensureConversationSession({
-    threadKey: input.threadKey,
-    guildId: input.guildId,
-    channelId: input.channelId,
-    metadata: {
-      kind: input.useDiscordMemory ? "discord_channel" : "local_prompt",
-      source: "scripts/prompt.ts"
-    }
-  });
   return repo.recentConversationMessages({
     threadKey: input.threadKey,
     limit: SESSION_CONTEXT_MESSAGE_LIMIT
@@ -513,7 +511,7 @@ Options:
   --user-id <id>                Local requester ID. Defaults to local-cli.
   --user-name <name>            Local requester display name. Defaults to Local CLI.
   --no-memory                   Do not load or store CLI conversation memory.
-  --use-discord-memory          Use the real Discord channel memory thread. Default uses separate CLI memory.
+  --use-discord-memory          Read the real Discord channel memory without writing a CLI run into it. Default uses separate CLI memory.
   --verbose                     Show normal Discord AI Agent debug/info logs.
   --json                        Print structured JSON.
   --save-files-dir <path>       Directory for generated files. Defaults to .discord-ai-agent/prompt-files.

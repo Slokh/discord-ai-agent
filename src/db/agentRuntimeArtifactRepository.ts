@@ -167,7 +167,11 @@ export class AgentRuntimeArtifactRepository {
     return { ...rowToAgentRuntimeArtifact(row), data: Buffer.isBuffer(row.content) ? row.content : Buffer.from(row.content) };
   }
 
-  async getLatestBinaryArtifactForSession(input: { sessionId: string; kind: string }): Promise<AgentRuntimeBinaryArtifactContent | undefined> {
+  async getLatestBinaryArtifactForSession(input: {
+    sessionId: string;
+    kind: string;
+    metadataMatch?: Record<string, unknown>;
+  }): Promise<AgentRuntimeBinaryArtifactContent | undefined> {
     const result = await this.pool.query(
       `
         SELECT artifact.*, blob.content
@@ -175,11 +179,12 @@ export class AgentRuntimeArtifactRepository {
         JOIN agent_runtime_artifact_blobs blob USING (artifact_id)
         WHERE artifact.session_id = $1
           AND artifact.kind = $2
+          AND ($3::jsonb IS NULL OR artifact.metadata @> $3::jsonb)
           AND (artifact.expires_at IS NULL OR artifact.expires_at > now())
         ORDER BY artifact.created_at DESC, artifact.artifact_id DESC
         LIMIT 1
       `,
-      [input.sessionId, input.kind],
+      [input.sessionId, input.kind, input.metadataMatch ? JSON.stringify(input.metadataMatch) : null],
     );
     const row = result.rows[0];
     if (!row) return undefined;

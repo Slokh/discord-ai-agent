@@ -668,6 +668,27 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
       sessionId,
       kind: "discord_delivery_file",
     })).resolves.toEqual(expect.objectContaining({ artifactId: binaryArtifact.artifactId, data: binaryData }));
+    const firstReplyCheckpoint = await agentRuntimeRepo.storeBinaryArtifact({
+      sessionId,
+      executionId,
+      kind: "nanocodex_session_snapshot",
+      name: "First reply checkpoint",
+      data: Buffer.from("first"),
+      metadata: { continuityKey: "reply-root-1" },
+    });
+    await agentRuntimeRepo.storeBinaryArtifact({
+      sessionId,
+      executionId,
+      kind: "nanocodex_session_snapshot",
+      name: "Second reply checkpoint",
+      data: Buffer.from("second"),
+      metadata: { continuityKey: "reply-root-2" },
+    });
+    await expect(agentRuntimeRepo.getLatestBinaryArtifactForSession({
+      sessionId,
+      kind: "nanocodex_session_snapshot",
+      metadataMatch: { continuityKey: "reply-root-1" },
+    })).resolves.toEqual(expect.objectContaining({ artifactId: firstReplyCheckpoint.artifactId, data: Buffer.from("first") }));
     const expiredArtifact = await agentRuntimeRepo.storeArtifact({
       sessionId,
       executionId,

@@ -449,16 +449,36 @@ jobs:
         run: |
           echo "No candidate images matched the merged Git tree; refusing an unverified production rebuild."
           exit 1
-      - name: Build and publish images when no verified candidate exists
+      # BuildKit probes the remote manifest before it publishes. Older deploy
+      # roles may not yet have ecr:BatchGetImage, so publish through Docker's
+      # direct push path after loading each image locally.
+      - name: Build runtime image when no verified candidate exists
         if: vars.CANDIDATE_IMAGE_PUBLISHING_ENABLED != 'true'
-        uses: docker/bake-action@v6
+        uses: docker/build-push-action@v7
         with:
-          push: true
+          context: .
+          target: final
+          load: true
           provenance: false
-          files: docker-bake.hcl
-          set: |
-            runtime.tags=${{ steps.ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ env.IMAGE_TAG }}
-            codegen.tags=${{ steps.ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}-sandbox:${{ env.IMAGE_TAG }}
-            *.cache-from=type=gha,scope=runtime
-            runtime.cache-to=type=gha,mode=max,scope=runtime,ignore-error=true
-            codegen.cache-to=type=gha,mode=max,scope=codegen,ignore-error=true
+          tags: ${{ steps.ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ env.IMAGE_TAG }}
+          cache-from: type=gha,scope=runtime
+          cache-to: type=gha,mode=max,scope=runtime,ignore-error=true
+      - name: Push runtime image when no verified candidate exists
+        if: vars.CANDIDATE_IMAGE_PUBLISHING_ENABLED != 'true'
+        run: docker push "${{ steps.ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ env.IMAGE_TAG }}"
+      - name: Build codegen image when no verified candidate exists
+        if: vars.CANDIDATE_IMAGE_PUBLISHING_ENABLED != 'true'
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          target: codegen
+          load: true
+          provenance: false
+          tags: ${{ steps.ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}-sandbox:${{ env.IMAGE_TAG }}
+          cache-from: |
+            type=gha,scope=runtime
+            type=gha,scope=codegen
+          cache-to: type=gha,mode=max,scope=codegen,ignore-error=true
+      - name: Push codegen image when no verified candidate exists
+        if: vars.CANDIDATE_IMAGE_PUBLISHING_ENABLED != 'true'
+        run: docker push "${{ steps.ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}-sandbox:${{ env.IMAGE_TAG }}"

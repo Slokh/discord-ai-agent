@@ -1,14 +1,14 @@
 import { collectAgentTaskStatusSnapshot } from "../observability/agentTaskStatus.js";
 import { buildRunListAggregate } from "../observability/runAggregates.js";
 import { listRunSummaries } from "../observability/runs.js";
-import { authorizedUi } from "./internalApiAuth.js";
+import { authorizedControl } from "./internalApiAuth.js";
 import { sendJson } from "./internalApiHttp.js";
 import { parseBoolean, parseLimit, parseStaleAfterMs } from "./internalApiParsers.js";
 import type { InternalApiInput } from "./internalApiTypes.js";
 
 export async function handleInternalOperatorRoute(input: InternalApiInput, method: string, url: URL): Promise<boolean> {
   if (method === "GET" && url.pathname === "/api/friction") {
-    if (!authorizedUi(input.config, input.request, input.response, url)) return true;
+    if (!authorizedControl(input.config, input.request, input.response, url)) return true;
     const records = await input.repo.listAgentFriction({ limit: parseLimit(url.searchParams.get("limit"), 100, 100) });
     const items = records.map(({ body: _body, sessionId: _sessionId, title: _title, ...record }) => record);
     const counts = (field: "category" | "severity") => Object.entries(items.reduce<Record<string, number>>((result, item) => {
@@ -21,7 +21,7 @@ export async function handleInternalOperatorRoute(input: InternalApiInput, metho
   }
 
   if (method === "GET" && url.pathname === "/api/runs") {
-    if (!authorizedUi(input.config, input.request, input.response, url)) return true;
+    if (!authorizedControl(input.config, input.request, input.response, url)) return true;
     const sinceRaw = url.searchParams.get("since");
     const since = sinceRaw ? new Date(sinceRaw) : undefined;
     if (since && Number.isNaN(since.getTime())) {
@@ -42,7 +42,7 @@ export async function handleInternalOperatorRoute(input: InternalApiInput, metho
   }
 
   if (method === "GET" && url.pathname === "/api/payments") {
-    if (!authorizedUi(input.config, input.request, input.response, url)) return true;
+    if (!authorizedControl(input.config, input.request, input.response, url)) return true;
     if (!input.paymentRepo) {
       sendJson(input.response, 503, { error: "payment_repository_unavailable" });
       return true;
@@ -56,7 +56,7 @@ export async function handleInternalOperatorRoute(input: InternalApiInput, metho
   }
 
   if (method === "GET" && url.pathname === "/api/tasks/status") {
-    if (!authorizedUi(input.config, input.request, input.response, url)) return true;
+    if (!authorizedControl(input.config, input.request, input.response, url)) return true;
     if (!input.db) {
       sendJson(input.response, 503, { error: "database_unavailable" });
       return true;
@@ -69,7 +69,7 @@ export async function handleInternalOperatorRoute(input: InternalApiInput, metho
   }
 
   if (method === "GET" && url.pathname === "/api/bugs/status") {
-    if (!authorizedUi(input.config, input.request, input.response, url)) return true;
+    if (!authorizedControl(input.config, input.request, input.response, url)) return true;
     const requesterUserId = url.searchParams.get("requesterUserId")?.trim();
     if (!requesterUserId || !/^\d{10,}$/.test(requesterUserId)) {
       sendJson(input.response, 400, { error: "invalid_requester_user_id" });

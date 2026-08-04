@@ -65,7 +65,7 @@ const outputContractByToolClass: Record<ToolClass, string[]> = {
   summary: ["question or focus", "sample window", "grounded summary", "coverage limits"],
   image: ["image URLs or attachment IDs", "visual observations", "uncertainty when the image is unclear"],
   generation: ["generation prompt", "reference image count", "attached output file or URL"],
-  coding: ["task ID and status", "run-console link when available", "PR link or failure reason", "progress summary"],
+  coding: ["task ID and status", "PR link or failure reason", "progress summary"],
   ops: ["requested diagnostic", "current status", "recent failures or next action"],
   external: ["external request", "returned source data", "source URLs when available"]
 };

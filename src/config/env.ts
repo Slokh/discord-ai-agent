@@ -80,8 +80,8 @@ const envSchema = z.object({
   GITHUB_APP_PRIVATE_KEY: z.string().default(""),
   GITHUB_APP_INSTALLATION_ID: z.string().trim().default(""),
   TASK_SIGNING_SECRET: z.string().default(""),
-  CONTROL_UI_AUTH_PASSWORD: z.string().default(""),
-  CONTROL_UI_PUBLIC_URL: z.preprocess((value) => value === "" ? undefined : value, z.string().url().optional()),
+  CONTROL_API_AUTH_PASSWORD: z.string().default(""),
+  CONTROL_API_PUBLIC_URL: z.preprocess((value) => value === "" ? undefined : value, z.string().url().optional()),
 
   BOT_OWNER_USER_ID: z.string().trim().default(""),
   OPS_ALLOWLIST_USER_IDS: z.string().default(""),
@@ -118,7 +118,7 @@ export function loadConfig(argv = process.argv) {
   }
   const env = parsed.data;
   const processRole = processRoleFromArgs(argv);
-  assertControlUiConfig(env.CONTROL_UI_PUBLIC_URL, env.CONTROL_UI_AUTH_PASSWORD, processRole, env.NODE_ENV);
+  assertControlApiConfig(env.CONTROL_API_PUBLIC_URL, env.CONTROL_API_AUTH_PASSWORD, processRole, env.NODE_ENV);
   const walletEnabled = Boolean(env.PRIVY_APP_ID?.trim() && env.PRIVY_APP_SECRET?.trim());
 
   return {
@@ -163,7 +163,7 @@ export function loadConfig(argv = process.argv) {
       appInstallationId: env.GITHUB_APP_INSTALLATION_ID
     },
     internalApi: { host: productConfig.control.host, port: productConfig.control.port },
-    controlUi: { authPassword: env.CONTROL_UI_AUTH_PASSWORD, publicUrl: env.CONTROL_UI_PUBLIC_URL?.replace(/\/$/, "") || null },
+    controlApi: { authPassword: env.CONTROL_API_AUTH_PASSWORD, publicUrl: env.CONTROL_API_PUBLIC_URL?.replace(/\/$/, "") || null },
     execution: {
       taskSigningSecret: env.TASK_SIGNING_SECRET,
       sandbox: { taskTimeoutSeconds: productConfig.sandbox.taskTimeoutSeconds },
@@ -237,15 +237,15 @@ function defaultLogLevel(nodeEnv: string) {
   return "debug";
 }
 
-function assertControlUiConfig(publicUrl: string | undefined, password: string, processRole: ProcessRole, nodeEnv: string) {
+function assertControlApiConfig(publicUrl: string | undefined, password: string, processRole: ProcessRole, nodeEnv: string) {
   if (publicUrl) {
     const url = new URL(publicUrl);
     const local = url.hostname === "localhost" || url.hostname === "127.0.0.1" || url.hostname === "::1";
-    if (url.protocol !== "https:" && !local) throw new Error("CONTROL_UI_PUBLIC_URL must use HTTPS outside localhost.");
+    if (url.protocol !== "https:" && !local) throw new Error("CONTROL_API_PUBLIC_URL must use HTTPS outside localhost.");
   }
   const servesApi = processRole === "api" || processRole === "all";
   if (servesApi && !password && (Boolean(publicUrl) || nodeEnv === "production")) {
-    throw new Error("CONTROL_UI_AUTH_PASSWORD is required when the API serves production or publicly routed control endpoints.");
+    throw new Error("CONTROL_API_AUTH_PASSWORD is required when the API serves production or publicly routed control endpoints.");
   }
 }
 

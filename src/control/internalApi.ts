@@ -8,7 +8,7 @@ import {
   getRunSnapshot,
   resolveRunReference,
 } from "../observability/runs.js";
-import { authorized, authorizedUi } from "./internalApiAuth.js";
+import { authorized, authorizedControl } from "./internalApiAuth.js";
 import { automatedBugRegression, discordBugDisposition } from "./bugRegression.js";
 import {
   parseJsonBody,
@@ -35,7 +35,6 @@ import {
   sandboxRunIdFromMetadata,
 } from "./internalApiParsers.js";
 import { streamAgentEvents, streamRunSnapshots } from "./internalApiStreams.js";
-import { handleInternalUiRoute } from "./internalApiUiRoutes.js";
 import { handleInternalOperatorRoute } from "./internalApiOperatorRoutes.js";
 import type { InternalApiInput } from "./internalApiTypes.js";
 
@@ -43,14 +42,17 @@ export async function handleInternalApiRequest(input: InternalApiInput) {
   const method = input.request.method ?? "GET";
   const url = new URL(input.request.url ?? "/", "http://internal");
 
-  if (await handleInternalUiRoute(input, method, url)) return;
+  if (method === "GET" && url.pathname === "/healthz") {
+    sendJson(input.response, 200, { status: "ok" });
+    return;
+  }
   if (await handleInternalOperatorRoute(input, method, url)) return;
 
   const agentMessagesMatch = url.pathname.match(
     /^\/api\/agent\/sessions\/([^/]+)\/messages$/,
   );
   if ((method === "GET" || method === "POST") && agentMessagesMatch) {
-    if (!authorizedUi(input.config, input.request, input.response, url)) return;
+    if (!authorizedControl(input.config, input.request, input.response, url)) return;
     const agentRepo = agentRuntimeRepo(input.agentRuntimeRepo);
     if (!agentRepo) {
       sendJson(input.response, 503, {
@@ -108,7 +110,7 @@ export async function handleInternalApiRequest(input: InternalApiInput) {
     /^\/api\/agent\/sessions\/([^/]+)\/execute$/,
   );
   if (method === "POST" && agentExecuteMatch) {
-    if (!authorizedUi(input.config, input.request, input.response, url)) return;
+    if (!authorizedControl(input.config, input.request, input.response, url)) return;
     const agentRepo = agentRuntimeRepo(input.agentRuntimeRepo);
     if (!agentRepo) {
       sendJson(input.response, 503, {
@@ -218,7 +220,7 @@ export async function handleInternalApiRequest(input: InternalApiInput) {
     /^\/api\/agent\/sessions\/([^/]+)\/events$/,
   );
   if (method === "GET" && agentEventsMatch) {
-    if (!authorizedUi(input.config, input.request, input.response, url)) return;
+    if (!authorizedControl(input.config, input.request, input.response, url)) return;
     const agentRepo = agentRuntimeRepo(input.agentRuntimeRepo);
     if (!agentRepo) {
       sendJson(input.response, 503, {
@@ -250,7 +252,7 @@ export async function handleInternalApiRequest(input: InternalApiInput) {
     /^\/api\/agent\/sessions\/([^/]+)\/artifacts\/([^/]+)$/,
   );
   if (method === "GET" && agentArtifactMatch) {
-    if (!authorizedUi(input.config, input.request, input.response, url)) return;
+    if (!authorizedControl(input.config, input.request, input.response, url)) return;
     const agentRepo = agentRuntimeRepo(input.agentRuntimeRepo);
     if (!agentRepo) {
       sendJson(input.response, 503, {
@@ -278,7 +280,7 @@ export async function handleInternalApiRequest(input: InternalApiInput) {
     /^\/api\/agent\/sessions\/([^/]+)\/stream$/,
   );
   if (method === "GET" && agentStreamMatch) {
-    if (!authorizedUi(input.config, input.request, input.response, url)) return;
+    if (!authorizedControl(input.config, input.request, input.response, url)) return;
     const agentRepo = agentRuntimeRepo(input.agentRuntimeRepo);
     if (!agentRepo) {
       sendJson(input.response, 503, {
@@ -301,7 +303,7 @@ export async function handleInternalApiRequest(input: InternalApiInput) {
     /^\/api\/agent\/sessions\/([^/]+)$/,
   );
   if ((method === "GET" || method === "POST") && agentSessionMatch) {
-    if (!authorizedUi(input.config, input.request, input.response, url)) return;
+    if (!authorizedControl(input.config, input.request, input.response, url)) return;
     const agentRepo = agentRuntimeRepo(input.agentRuntimeRepo);
     if (!agentRepo) {
       sendJson(input.response, 503, {
@@ -375,7 +377,7 @@ export async function handleInternalApiRequest(input: InternalApiInput) {
   }
 
   if (method === "GET" && url.pathname === "/api/runs/resolve") {
-    if (!authorizedUi(input.config, input.request, input.response, url)) return;
+    if (!authorizedControl(input.config, input.request, input.response, url)) return;
     const query =
       url.searchParams.get("query") ?? url.searchParams.get("messageId") ?? "";
     const resolution = await resolveRunReference(input.repo, query);
@@ -392,7 +394,7 @@ export async function handleInternalApiRequest(input: InternalApiInput) {
 
   const runSnapshotMatch = url.pathname.match(/^\/api\/runs\/([^/]+)$/);
   if (method === "GET" && runSnapshotMatch) {
-    if (!authorizedUi(input.config, input.request, input.response, url)) return;
+    if (!authorizedControl(input.config, input.request, input.response, url)) return;
     const runId = decodeURIComponent(runSnapshotMatch[1] ?? "");
     const snapshot = await getRunSnapshot(input.repo, runId);
     if (!snapshot) {
@@ -409,7 +411,7 @@ export async function handleInternalApiRequest(input: InternalApiInput) {
 
   const runEventsMatch = url.pathname.match(/^\/api\/runs\/([^/]+)\/events$/);
   if (method === "GET" && runEventsMatch) {
-    if (!authorizedUi(input.config, input.request, input.response, url)) return;
+    if (!authorizedControl(input.config, input.request, input.response, url)) return;
     const runId = decodeURIComponent(runEventsMatch[1] ?? "");
     const snapshot = await getRunSnapshot(input.repo, runId);
     if (!snapshot) {
@@ -427,7 +429,7 @@ export async function handleInternalApiRequest(input: InternalApiInput) {
     /^\/api\/runs\/([^/]+)\/feedback$/,
   );
   if ((method === "GET" || method === "POST") && runFeedbackMatch) {
-    if (!authorizedUi(input.config, input.request, input.response, url)) return;
+    if (!authorizedControl(input.config, input.request, input.response, url)) return;
     const runId = decodeURIComponent(runFeedbackMatch[1] ?? "");
     if (method === "GET") {
       const feedback = await input.repo.getRunFeedback(runId);
@@ -444,7 +446,7 @@ export async function handleInternalApiRequest(input: InternalApiInput) {
     /^\/api\/runs\/([^/]+)\/artifacts\/([^/]+)$/,
   );
   if (method === "GET" && runArtifactMatch) {
-    if (!authorizedUi(input.config, input.request, input.response, url)) return;
+    if (!authorizedControl(input.config, input.request, input.response, url)) return;
     const runId = decodeURIComponent(runArtifactMatch[1] ?? "");
     const artifactId = decodeURIComponent(runArtifactMatch[2] ?? "");
     const artifact =
@@ -462,7 +464,7 @@ export async function handleInternalApiRequest(input: InternalApiInput) {
 
   const runStreamMatch = url.pathname.match(/^\/api\/runs\/([^/]+)\/stream$/);
   if (method === "GET" && runStreamMatch) {
-    if (!authorizedUi(input.config, input.request, input.response, url)) return;
+    if (!authorizedControl(input.config, input.request, input.response, url)) return;
     await streamRunSnapshots({
       repo: input.repo,
       request: input.request,
@@ -473,7 +475,7 @@ export async function handleInternalApiRequest(input: InternalApiInput) {
   }
 
   if (method === "GET" && url.pathname === "/metrics") {
-    if (!authorizedUi(input.config, input.request, input.response, url)) return;
+    if (!authorizedControl(input.config, input.request, input.response, url)) return;
     sendText(input.response, 200, await renderMetrics(input.repo));
     return;
   }

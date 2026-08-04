@@ -40,10 +40,10 @@ helm.sh/chart: {{ .Chart.Name }}-{{ .Chart.Version | replace "+" "_" }}
   valueFrom: { secretKeyRef: { name: {{ .Values.secret.existingSecretName }}, key: OPS_ALLOWLIST_USER_IDS, optional: true } }
 {{- end -}}
 
-{{- define "discord-ai-agent.controlUiPublicEnv" -}}
-{{- if .Values.config.controlUiPublicUrl }}
-- name: CONTROL_UI_PUBLIC_URL
-  value: {{ .Values.config.controlUiPublicUrl | quote }}
+{{- define "discord-ai-agent.controlApiPublicEnv" -}}
+{{- if .Values.config.controlApiPublicUrl }}
+- name: CONTROL_API_PUBLIC_URL
+  value: {{ .Values.config.controlApiPublicUrl | quote }}
 {{- end }}
 {{- end -}}
 
@@ -55,8 +55,8 @@ helm.sh/chart: {{ .Chart.Name }}-{{ .Chart.Version | replace "+" "_" }}
 {{- define "discord-ai-agent.internalApiEnv" -}}
 - name: TASK_SIGNING_SECRET
   valueFrom: { secretKeyRef: { name: {{ .Values.secret.existingSecretName }}, key: TASK_SIGNING_SECRET } }
-- name: CONTROL_UI_AUTH_PASSWORD
-  valueFrom: { secretKeyRef: { name: {{ .Values.secret.existingSecretName }}, key: CONTROL_UI_AUTH_PASSWORD, optional: true } }
+- name: CONTROL_API_AUTH_PASSWORD
+  valueFrom: { secretKeyRef: { name: {{ .Values.secret.existingSecretName }}, key: CONTROL_API_AUTH_PASSWORD, optional: true } }
 {{- end -}}
 
 {{- define "discord-ai-agent.sandboxLauncherEnv" -}}

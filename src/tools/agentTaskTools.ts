@@ -7,7 +7,6 @@ import { missingCodeUpdateConfig } from "../capabilities/codeUpdates.js";
 import type { AgentResponse, ToolContext } from "./types.js";
 import {
   agentTaskAuditSummary,
-  agentTaskRunConsoleUrl,
   agentUpdateTitleFromRequest,
   formatActiveAgentTaskLine,
   formatAgentTaskLine,
@@ -38,8 +37,7 @@ export async function createAgentUpdateFromRequest(
 
   const requestedBy = `${ctx.userDisplayName} (${ctx.userId})`;
   const result = await enqueueAgentCodeUpdateTask(ctx, { request, updateName, requestedBy, ...target });
-  const runConsoleUrl = agentTaskRunConsoleUrl(ctx.config, result.taskId);
-  const response = formatAgentTaskResult({ ...result, runConsoleUrl });
+  const response = formatAgentTaskResult(result);
   await ctx.updateStatus?.(response).catch(() => undefined);
 
   await ctx.repo.auditTool({

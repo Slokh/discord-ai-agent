@@ -99,10 +99,10 @@ export async function buildCodegenContextPack(checkoutDir: string, taskRequest =
       checks: ["tests/unit/tool-registry.test.ts", "tests/unit/tool-contract-validation.test.ts", "tests/unit/tool-handler-conformance.test.ts", "tests/integration/agent.test.ts"]
     },
     {
-      area: "Observability console",
-      purpose: "Runs, spans, events, artifacts, and the React console explain what happened and where latency went.",
-      files: ["src/observability/runs.ts", "src/observability/runtimeEventSchema.ts", "src/control/internalApiServer.ts", "src/control/console/App.tsx", "docs/operations.md"],
-      checks: ["tests/unit/observability.test.ts", "tests/unit/internal-api-runs.test.ts", "tests/unit/run-console-timeline.test.ts"]
+      area: "Observability control plane",
+      purpose: "Runs, spans, events, artifacts, and the control API explain what happened and where latency went.",
+      files: ["src/observability/runs.ts", "src/observability/runtimeEventSchema.ts", "src/control/internalApiServer.ts", "docs/operations.md"],
+      checks: ["tests/unit/observability.test.ts", "tests/unit/internal-api-runs.test.ts"]
     },
     {
       area: "Architecture guides",

@@ -42,7 +42,7 @@ config:
   previousAppRevision: ""
   # Optional Discord channel for automatic plain-English deployment notes.
   releaseNotesChannelId: ""
-  controlUiPublicUrl: ""
+  controlApiPublicUrl: ""
 
 api:
   replicas: 1

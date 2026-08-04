@@ -18,8 +18,6 @@ export type DiscordResponseResult = {
 };
 
 export type DiscordResponseFooter = {
-  traceUrl?: string | null;
-  durationMs?: number | null;
   /** Extra subtext lines (e.g. RNG fairness proofs), each rendered as its own `-#` line. */
   extraLines?: string[];
 };
@@ -348,14 +346,6 @@ export function formatDiscordResponseFooter(footer?: DiscordResponseFooter | nul
     const trimmed = suppressDiscordFooterEmbeds(extraLine.trim());
     if (trimmed) lines.push(`-# ${trimmed}`);
   }
-  const traceUrl = footer?.traceUrl?.trim();
-  if (traceUrl) {
-    const parts = [`[trace](<${traceUrl.replace(/^<|>$/g, "")}>)`];
-    if (typeof footer?.durationMs === "number" && Number.isFinite(footer.durationMs)) {
-      parts.push(formatFooterDuration(footer.durationMs));
-    }
-    lines.push(`-# ${parts.join(" · ")}`);
-  }
   return lines.length > 0 ? lines.join("\n") : null;
 }
 
@@ -363,10 +353,6 @@ function suppressDiscordFooterEmbeds(value: string) {
   return value
     .replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, "$1 <$2>")
     .replace(/(?<!<)https?:\/\/[^\s<>]+/g, "<$&>");
-}
-
-function formatFooterDuration(ms: number) {
-  return `${(Math.max(0, ms) / 1000).toFixed(3)}s`;
 }
 
 type DiscordReactionMatch = {

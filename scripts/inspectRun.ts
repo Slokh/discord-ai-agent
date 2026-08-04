@@ -42,8 +42,8 @@ async function main() {
   const source = args.source;
   if (source === "api") {
     const { apiUrl, auth } = resolveProductionControlPlane({
-      apiUrl: args.apiUrl ?? config.controlUi.publicUrl,
-      auth: args.auth ?? config.controlUi.authPassword,
+      apiUrl: args.apiUrl ?? config.controlApi.publicUrl,
+      auth: args.auth ?? config.controlApi.authPassword,
       namespace: config.execution.kubernetes.namespace,
     });
     if (args.list) {

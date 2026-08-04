@@ -35,8 +35,8 @@ async function main() {
   const token = config.discord.token;
   if (!token) throw new Error("DISCORD_TOKEN is required.");
   const { apiUrl, auth } = resolveProductionControlPlane({
-    apiUrl: args.apiUrl ?? config.controlUi.publicUrl,
-    auth: args.auth ?? config.controlUi.authPassword,
+    apiUrl: args.apiUrl ?? config.controlApi.publicUrl,
+    auth: args.auth ?? config.controlApi.authPassword,
     namespace: config.execution.kubernetes.namespace,
   });
   const discord = new DiscordReader(token);

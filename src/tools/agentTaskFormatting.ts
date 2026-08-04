@@ -1,4 +1,3 @@
-import type { AppConfig } from "../config/env.js";
 import type { AgentTaskRecord, SandboxCommandEvent, TaskEvent } from "../db/repositories.js";
 import { truncateForDiscord } from "../util/text.js";
 
@@ -40,38 +39,36 @@ export function formatAgentTaskResult(input: {
   timedOut?: boolean;
   taskEvents?: TaskEvent[];
   commandEvents?: SandboxCommandEvent[];
-  runConsoleUrl?: string | null;
 }) {
-  const withRunConsole = (content: string) => appendAgentTaskRunConsoleLink(content, input.runConsoleUrl);
   if (input.timedOut) {
     const status = input.job?.status ? ` Current status: \`${input.job.status}\`.` : "";
-    return withRunConsole(`I’m still working on that code change and do not have the final result yet.${status} Task ID: \`${input.taskId}\`.`);
+    return `I’m still working on that code change and do not have the final result yet.${status} Task ID: \`${input.taskId}\`.`;
   }
 
   const job = input.job;
   if (!job) {
-    return withRunConsole(`Working on it...\n\nI’ll update this message with progress and the PR link when it’s ready.\nTask ID: \`${input.taskId}\`.`);
+    return `Working on it...\n\nI’ll update this message with progress and the PR link when it’s ready.\nTask ID: \`${input.taskId}\`.`;
   }
 
   if (job.status === "succeeded" && job.taskType === "diagnosis") {
     const result = agentTaskDiagnosisResult(input.taskEvents);
-    return withRunConsole(result || `Repository diagnosis completed. Task ID: \`${input.taskId}\`.`);
+    return result || `Repository diagnosis completed. Task ID: \`${input.taskId}\`.`;
   }
 
   if (job.status === "succeeded" && job.prUrl) {
     if (job.taskType === "bug_report") {
-      return withRunConsole(`🐛 Confirmed and fixed: ${job.prUrl}\nRequired checks will auto-merge it, then the normal production deployment will start.`);
+      return `🐛 Confirmed and fixed: ${job.prUrl}\nRequired checks will auto-merge it, then the normal production deployment will start.`;
     }
     const draftNote = job.draft ? " It opened as a draft." : "";
-    return withRunConsole([`Done: ${job.prUrl}${draftNote}`, formatAgentTaskTimingSummary(input.taskEvents)].filter(Boolean).join("\n"));
+    return [`Done: ${job.prUrl}${draftNote}`, formatAgentTaskTimingSummary(input.taskEvents)].filter(Boolean).join("\n");
   }
 
   if (job.status === "no_changes") {
     if (job.taskType === "bug_report") {
-      return withRunConsole(`🐛 Validation finished: ${truncateForDiscord(job.error ?? "I couldn’t confirm a product bug, so I left the code unchanged.", 700)}`);
+      return `🐛 Validation finished: ${truncateForDiscord(job.error ?? "I couldn’t confirm a product bug, so I left the code unchanged.", 700)}`;
     }
     const diagnosis = agentTaskFailureDiagnosis(input.taskEvents);
-    return withRunConsole([
+    return [
       diagnosis
         ? `No PR opened: ${diagnosis.summary} Task ID: \`${input.taskId}\`.`
         : `No PR opened: the coding agent did not produce a code diff. Task ID: \`${input.taskId}\`.`,
@@ -80,22 +77,22 @@ export function formatAgentTaskResult(input: {
       diagnosis?.finalResponse ? "" : formatLastCommandFailure(input.commandEvents)
     ]
       .filter(Boolean)
-      .join("\n"));
+      .join("\n");
   }
 
   if (job.status === "cancelled") {
-    return withRunConsole([
+    return [
       `That code change task was cancelled. Task ID: \`${input.taskId}\`.`,
       job.error ? truncateForDiscord(job.error, 500) : "",
       formatLastCommandFailure(input.commandEvents)
     ]
       .filter(Boolean)
-      .join("\n"));
+      .join("\n");
   }
 
   if (job.status === "failed") {
     const diagnosis = agentTaskFailureDiagnosis(input.taskEvents);
-    return withRunConsole([
+    return [
       diagnosis
         ? `No PR opened: ${diagnosis.summary}`
         : `No PR opened: the sandbox failed. ${truncateForDiscord(job.error ?? "unknown error", 900)}`,
@@ -103,10 +100,10 @@ export function formatAgentTaskResult(input: {
       formatLastCommandFailure(input.commandEvents)
     ]
       .filter(Boolean)
-      .join("\n"));
+      .join("\n");
   }
 
-  return withRunConsole(`I’m still working on that code change. Current status: \`${job.status}\`. Task ID: \`${input.taskId}\`.`);
+  return `I’m still working on that code change. Current status: \`${job.status}\`. Task ID: \`${input.taskId}\`.`;
 }
 
 function agentTaskDiagnosisResult(taskEvents: TaskEvent[] | undefined) {
@@ -116,12 +113,6 @@ function agentTaskDiagnosisResult(taskEvents: TaskEvent[] | undefined) {
     if (summary) return truncateForDiscord(summary, 1_800);
   }
   return "";
-}
-
-export function agentTaskRunConsoleUrl(config: Pick<AppConfig, "controlUi">, taskId: string) {
-  const publicUrl = config.controlUi?.publicUrl;
-  if (!publicUrl) return null;
-  return `${publicUrl}/runs/${encodeURIComponent(taskId)}`;
 }
 
 export function agentTaskAuditSummary(result: unknown) {
@@ -174,11 +165,6 @@ function agentTaskFailureDiagnosis(taskEvents: TaskEvent[] | undefined) {
     };
   }
   return null;
-}
-
-function appendAgentTaskRunConsoleLink(content: string, runConsoleUrl: string | null | undefined) {
-  if (!runConsoleUrl) return content;
-  return [content, "", `Run console: ${runConsoleUrl}`].join("\n");
 }
 
 function formatLastCommandFailure(events: SandboxCommandEvent[] | undefined) {

@@ -211,17 +211,6 @@ describe("formatAgentTaskResult", () => {
     expect(response).toContain("refreshed deps after NanoCodex");
   });
 
-  it("includes a run-console link when one is provided", () => {
-    const response = formatAgentTaskResult({
-      taskId: "task-1",
-      jobId: "job-1",
-      runConsoleUrl: "https://tasks.example/runs/task-1"
-    });
-
-    expect(response).toContain("Working on it...");
-    expect(response).toContain("Run console: https://tasks.example/runs/task-1");
-  });
-
   it("uses failure diagnosis details for no-change code-update results", () => {
     const response = formatAgentTaskResult({
       taskId: "task-1",

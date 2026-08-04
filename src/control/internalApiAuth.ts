@@ -54,25 +54,25 @@ export function authorized(
   );
 }
 
-export function authorizedUi(
+export function authorizedControl(
   config: AppConfig,
   request: http.IncomingMessage,
   response: http.ServerResponse,
   _url: URL,
 ) {
-  const password = config.controlUi.authPassword;
+  const password = config.controlApi.authPassword;
   if (!password) return true;
 
-  const allowed = verifyUiAuthorization({
+  const allowed = verifyControlAuthorization({
     password,
     authorization: request.headers.authorization,
   });
   if (allowed) return true;
-  sendUiUnauthorized(response);
+  sendControlUnauthorized(response);
   return false;
 }
 
-export function verifyUiAuthorization(input: {
+export function verifyControlAuthorization(input: {
   password: string;
   authorization?: string | string[];
 }) {
@@ -107,7 +107,7 @@ function safeEqual(left: string, right: string) {
   );
 }
 
-function sendUiUnauthorized(response: http.ServerResponse) {
+function sendControlUnauthorized(response: http.ServerResponse) {
   if (response.headersSent) return;
   response.writeHead(401, {
     "content-type": "text/plain; charset=utf-8",

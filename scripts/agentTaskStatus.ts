@@ -20,8 +20,8 @@ async function main() {
     args.source === "api"
       ? await loadFromApi({
           ...resolveProductionControlPlane({
-            apiUrl: args.apiUrl ?? config.controlUi.publicUrl,
-            auth: args.auth ?? config.controlUi.authPassword,
+            apiUrl: args.apiUrl ?? config.controlApi.publicUrl,
+            auth: args.auth ?? config.controlApi.authPassword,
             namespace: config.execution.kubernetes.namespace,
           }),
           args

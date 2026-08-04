@@ -14,7 +14,7 @@ async function main() {
   const config = loadConfig();
   const control = resolveProductionControlPlane({
     apiUrl: args.apiUrl,
-    auth: args.auth ?? config.controlUi.authPassword,
+    auth: args.auth ?? config.controlApi.authPassword,
     namespace: config.execution.kubernetes.namespace,
   });
   const url = new URL("/api/bugs/status", control.apiUrl);

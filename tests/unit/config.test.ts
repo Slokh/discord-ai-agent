@@ -12,7 +12,7 @@ describe("config", () => {
         embeddingDimensions: 1536,
         github: expect.objectContaining({ repository: productConfig.github.repository, baseBranch: "main" }),
         internalApi: { host: "0.0.0.0", port: 8080 },
-        controlUi: { authPassword: "", publicUrl: null },
+        controlApi: { authPassword: "", publicUrl: null },
         discordAgentResponseTimeoutMs: 1_800_000,
         agentPromptMaxConcurrency: 4
       }));
@@ -90,26 +90,26 @@ describe("config", () => {
     });
   });
 
-  it("requires authenticated HTTPS for a public run console", () => {
-    withEnv({ CONTROL_UI_PUBLIC_URL: "http://console.example.test", CONTROL_UI_AUTH_PASSWORD: "secret" }, () => {
+  it("requires authenticated HTTPS for a public control API", () => {
+    withEnv({ CONTROL_API_PUBLIC_URL: "http://control.example.test", CONTROL_API_AUTH_PASSWORD: "secret" }, () => {
       expect(() => loadConfig()).toThrow(/must use HTTPS/i);
     });
-    withEnv({ CONTROL_UI_PUBLIC_URL: "https://console.example.test", CONTROL_UI_AUTH_PASSWORD: "" }, () => {
+    withEnv({ CONTROL_API_PUBLIC_URL: "https://control.example.test", CONTROL_API_AUTH_PASSWORD: "" }, () => {
       expect(() => loadConfig(["node", "index.js", "api"])).toThrow(/AUTH_PASSWORD is required/i);
       expect(() => loadConfig(["node", "index.js", "all"])).toThrow(/AUTH_PASSWORD is required/i);
-      expect(loadConfig(["node", "index.js", "bot"]).controlUi.publicUrl).toBe("https://console.example.test");
-      expect(loadConfig(["node", "index.js", "worker"]).controlUi.publicUrl).toBe("https://console.example.test");
+      expect(loadConfig(["node", "index.js", "bot"]).controlApi.publicUrl).toBe("https://control.example.test");
+      expect(loadConfig(["node", "index.js", "worker"]).controlApi.publicUrl).toBe("https://control.example.test");
     });
-    withEnv({ CONTROL_UI_PUBLIC_URL: "https://console.example.test", CONTROL_UI_AUTH_PASSWORD: "secret" }, () => {
-      expect(loadConfig().controlUi.publicUrl).toBe("https://console.example.test");
+    withEnv({ CONTROL_API_PUBLIC_URL: "https://control.example.test", CONTROL_API_AUTH_PASSWORD: "secret" }, () => {
+      expect(loadConfig().controlApi.publicUrl).toBe("https://control.example.test");
     });
   });
 
   it("requires authentication for the production API even without a configured public URL", () => {
     withEnv({
       NODE_ENV: "production",
-      CONTROL_UI_PUBLIC_URL: "",
-      CONTROL_UI_AUTH_PASSWORD: "",
+      CONTROL_API_PUBLIC_URL: "",
+      CONTROL_API_AUTH_PASSWORD: "",
       OPENROUTER_CHAT_MODEL: undefined,
       OPENROUTER_UTILITY_MODEL: undefined,
       GITHUB_REPOSITORY: undefined,
@@ -148,7 +148,7 @@ function withCleanEnv(callback: () => void) {
     PRIVY_APP_SECRET: "",
     POD_NAMESPACE: "",
     SANDBOX_IMAGE: "",
-    CONTROL_UI_PUBLIC_URL: "",
+    CONTROL_API_PUBLIC_URL: "",
     OPENROUTER_API_KEY: "",
     TASK_SIGNING_SECRET: "",
     GITHUB_TOKEN: "",

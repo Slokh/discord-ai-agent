@@ -60,7 +60,7 @@ describe("DiscordResponseSink", () => {
     });
   });
 
-  it("appends a Discord subtext trace footer to final replies", async () => {
+  it("appends Discord subtext footer lines to final replies", async () => {
     const sourceMessage = fakeMessage();
     const sink = new DiscordResponseSink({
       client: fakeClient(),
@@ -72,14 +72,12 @@ describe("DiscordResponseSink", () => {
     await sink.sendFinal({
       content: "done",
       footer: {
-        traceUrl: "https://tasks.example/runs/run-1",
-        durationMs: 42_183,
         extraLines: ["💸 [transfer](<https://explore.tempo.xyz/tx/abc>)"]
       }
     });
 
     expect(sourceMessage.reply).toHaveBeenCalledWith({
-      content: "done\n\n-# 💸 [transfer](<https://explore.tempo.xyz/tx/abc>)\n-# [trace](<https://tasks.example/runs/run-1>) · 42.183s",
+      content: "done\n\n-# 💸 [transfer](<https://explore.tempo.xyz/tx/abc>)",
       allowedMentions: suppressedMentions
     });
   });
@@ -114,7 +112,7 @@ describe("DiscordResponseSink", () => {
     });
   });
 
-  it("splits long final content into replied messages and keeps the trace footer on the last chunk", async () => {
+  it("splits long final content into replied messages and keeps footer lines on the last chunk", async () => {
     const channel = {
       send: vi.fn(async (_options: { content: string }) => fakeMessage({ id: "followup-1" }))
     };
@@ -132,12 +130,12 @@ describe("DiscordResponseSink", () => {
     const content = "x".repeat(200);
     await sink.sendFinal({
       content,
-      footer: { traceUrl: "https://tasks.example/runs/run-1", durationMs: 42 }
+      footer: { extraLines: ["verified"] }
     });
 
     const replyPayload = (sourceMessage.reply as any).mock.calls[0]?.[0] as { content: string };
     expect(replyPayload.content.length).toBeLessThanOrEqual(96);
-    expect(replyPayload.content).not.toContain("-# [trace]");
+    expect(replyPayload.content).not.toContain("-# verified");
     expect(channel.send.mock.calls.length).toBeGreaterThanOrEqual(1);
     const followups = channel.send.mock.calls.map((call) => call[0] as unknown as { content: string; reply?: { messageReference?: string } });
     // Each followup should reply to the previous message in the chain.
@@ -146,14 +144,14 @@ describe("DiscordResponseSink", () => {
       expect(followup.reply?.messageReference).toBe(previousIds[Math.min(index, previousIds.length - 1)]);
     });
     const lastFollowup = followups.at(-1)?.content ?? "";
-    expect(lastFollowup).toContain("-# [trace](<https://tasks.example/runs/run-1>) · 0.042s");
+    expect(lastFollowup).toContain("-# verified");
     expect(lastFollowup.length).toBeLessThanOrEqual(96);
     const allContents = [replyPayload.content, ...followups.map((followup) => followup.content)];
     for (const chunk of allContents) {
       expect(chunk.length).toBeLessThanOrEqual(96);
     }
     const rejoined = allContents.join("").replace(/\n+/g, "");
-    expect(rejoined.replace(/-# \[trace\]\(<[^>]+>\) · 0\.042s/, "").length).toBe(200);
+    expect(rejoined.replace(/-# verified/, "").length).toBe(200);
   });
 
   it("never collapses body chunks to one character when audit footers exceed a Discord message", async () => {

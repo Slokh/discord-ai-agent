@@ -39,7 +39,7 @@ npm run dev
 npm run worker
 ```
 
-The bot handles gateway ingress and delivery. The worker executes queued chat requests. Start `npm run api` when using the run console or sandbox callbacks. `npm run start:all` is intended only for a fully configured built environment.
+The bot handles gateway ingress and delivery. The worker executes queued chat requests. Start `npm run api` for control-plane inspection or sandbox callbacks. `npm run start:all` is intended only for a fully configured built environment.
 
 ## Configuration ownership
 
@@ -53,7 +53,7 @@ Important feature gates:
 | Code updates | GitHub PAT or App credentials, task-signing secret, worker; API for callbacks |
 | Spotify | Client ID and client secret |
 | Wallets, transfers, and wagers | Both Privy credentials |
-| Public run console | API role, password, HTTPS/public URL when exposed |
+| Public control API | API role, password, HTTPS/public URL when exposed |
 
 Administrative mutations use `BOT_OWNER_USER_ID` and `OPS_ALLOWLIST_USER_IDS`. Code-update requests remain available to members when the feature is deployed.
 
@@ -79,7 +79,6 @@ npm run runs:inspect -- --list --limit 20
 npm run runs:inspect -- --list --channel <channel-id> --revision <sha> --since <ISO> --triage
 npm run tasks:status
 npm run bugs:status -- --requester <discord-user-id>
-npm run console:dev:live
 npm run release:status -- --pr <number>
 ```
 
@@ -100,17 +99,17 @@ kubectl -n discord-ai-agent exec deploy/discord-ai-agent-worker -- node dist/scr
 kubectl -n discord-ai-agent exec deploy/discord-ai-agent-worker -- node dist/scripts/frogAgent.js resolve <entry-id>
 ```
 
-The authenticated `/friction` console shows only category, severity, affected capability, occurrence count, revision, and a canonical run link. Titles, bodies, and session identifiers remain available only through the private operator command.
+The authenticated friction API returns only category, severity, affected capability, occurrence count, revision, and a canonical run identifier. Titles, bodies, and session identifiers remain available only through the private operator command.
 
 List filters for kind, status, channel, revision, and start time are applied by the control plane before the result limit. This keeps older matching failures visible even when unrelated recent executions are numerous.
 
-The API role serves authenticated run-console routes and Prometheus metrics. Keep the service private when possible. If public, require HTTPS and `CONTROL_UI_AUTH_PASSWORD`.
+The API role serves authenticated control-plane routes and Prometheus metrics. Keep the service private when possible. If public, require HTTPS and `CONTROL_API_AUTH_PASSWORD`.
 
 `release:status` is the single safe release view. It combines an explicitly requested PR (or the current non-main branch), Helm release state, role images/readiness/revisions, current-pod restart counts, the matching deployment workflow, and the deployed revision-quality assessment. Running it from `main` intentionally omits PR evidence without producing a warning. It uses the same typed deployment-health evaluator as CI and exits nonzero for failed checks, deployment failure, role drift, incomplete rollout, restarted current pods, stale active execution/task work, or a failed quality gate; unavailable evidence is reported explicitly rather than guessed.
 
 `tasks:status` reports executions rather than treating durable conversation sessions as active work. It separates member and synthetic cohorts, marks nonterminal executions stale after 15 minutes, and limits “recent terminal tasks” to the last 24 hours. The worker reconciles stale non-task executions into an explicit failed terminal result so crashed probes or lost queue workers cannot remain running forever.
 
-Production API startup requires a control password even when no public URL is declared, preventing a private-service or load-balancer change from exposing a passwordless console. Configuration also rejects a non-HTTPS public console URL. Browsers use standard Basic authentication and scripts use a bearer header. Credentials in cookies, `?auth=`, or `?token=` query strings are not accepted, so proxies, browser history, Discord embeds, and access logs do not capture them.
+Production API startup requires a control password even when no public URL is declared, preventing a private-service or load-balancer change from exposing a passwordless control plane. Configuration also rejects a non-HTTPS public control API URL. Clients may use standard Basic authentication and scripts use a bearer header. Credentials in cookies, `?auth=`, or `?token=` query strings are not accepted, so proxies and access logs do not capture them.
 
 The metrics surface reports runtime event latency/cost/tokens, answer status/latency/cost by model and application revision, tool outcomes, reviewed run ratings and failure modes, delivery recoveries, and code-update backlog/phase timing. These are observable outcomes rather than guesses derived from answer wording; for example, unnecessary refusals are counted only when a reviewer classifies them.
 
@@ -152,7 +151,7 @@ Unqualified requests such as “show my bug reports” or “fix my bugs” refe
 
 The repair workflow reproduces the linked run, adds a general regression test, opens a focused PR when requested, and deploys after normal review. Once live, the marked reply becomes a persistent `Bug fix` update and its successful posting triggers the original prompt again into a fresh reply; that revision is not duplicated in the release-notes channel. Never copy private marker content into Frog, a public issue, PR metadata, or tracked fixtures.
 
-Every bug-marked execution is also captured as private negative feedback. In the run console, classify the failure and add expected/forbidden tools or required/forbidden answer text, then run:
+Every bug-marked execution is also captured as private negative feedback. Add expected/forbidden tools or required/forbidden answer text to the private regression suite, then run:
 
 ```bash
 npm run eval:regressions
@@ -179,7 +178,7 @@ npm run verify:db
 npm run eval -- --dry-run
 ```
 
-CI classifies the changed paths and starts lint, tests, production build, repository-policy checks, and relevant DB or infrastructure verification in parallel. Documentation-only and console-only changes do not start the DB service; application and high-consequence lifecycle changes still do. The production build performs the TypeScript compilation, so CI does not repeat a separate no-emit compilation. CodeQL remains an independent PR and scheduled analysis.
+CI classifies the changed paths and starts lint, tests, production build, repository-policy checks, and relevant DB or infrastructure verification in parallel. Documentation-only and control-plane-only changes do not start the DB service; application and high-consequence lifecycle changes still do. The production build performs the TypeScript compilation, so CI does not repeat a separate no-emit compilation. CodeQL remains an independent PR and scheduled analysis.
 
 For same-repository PRs, the optional candidate-image path waits for the cheaper verification jobs to pass, then publishes runtime and codegen images to separate ECR repositories under the checked-out Git tree hash. Its OIDC role has no production-repository or Kubernetes access. Dependency, Docker, or native-manifest changes scan those exact remote images on one shared runner. After merge, CI calculates the merged tree hash, promotes only the matching candidates to commit-tagged production references, and deletes the temporary tags; a one-day lifecycle is the cleanup fallback. Candidate repositories disable redundant ECR scanning because CI scans affected candidates and the production repositories scan the promoted release. Exact-tree promotion lets main omit repeated tests and rebuilding. Once candidate publication is enabled, a missing candidate fails closed rather than rebuilding an unverified release. Before enablement, main retains the existing full verification and builds and pushes both images through one Docker Bake graph. PR builds restore trusted default-branch BuildKit caches but do not fill one-use PR cache scopes. Nested Rust targets, Terraform providers, coverage, and other local build state are excluded from the Docker context.
 
@@ -191,7 +190,7 @@ The bot does not retry bug reports or publish a deployment announcement merely b
 
 Each capability attempt uses a fresh session, and one isolated retry absorbs ordinary model-call variance without retrying a tool inside an attempt. Retrieval passes only with exactly one successful stats result; randomness passes only with exactly one successful `drawRandom` completion and no runtime error event; web passes only with exactly one successful non-empty result plus provider-recorded hosted execution. Completion markers alone are insufficient evidence. A persistently failed boundary fails the rollout instead of treating configured tool metadata as readiness. After all canaries and private regressions, the typed deployment-health gate requires API, bot, and worker to remain aligned, fully ready, generation-current, and restart-free for 30 seconds. Build, migration, rollout, readiness, capability verification, and Discord delivery remain distinct stages. Durable delivery behavior is exercised by the reliability and database suites, while production observation reports failures and pending delivery obligations from real traffic without generating synthetic member-visible messages.
 
-The production-observation workflow samples the deployed revision every six hours and retains a 48-hour aggregate containing answer status/latency by model, terminal per-run capability outcomes, raw tool attempts, recovered validation retries, warning/error counts, and delivery states. Only explicitly member-originated Discord executions enter this quality cohort; CLI prompts, evals, and deployment canaries remain observable but do not count as member answers or baselines. Pending delivery obligations become incidents after five minutes, avoiding false alerts for replies actively being delivered, while abandoned obligations fail immediately. The workflow reads the canonical runtime ledger inside the cluster and publishes only safe counts—never prompts, replies, member identities, or private Discord content. The run console also groups loaded executions by `appRevision`; use `npm run quality:revision -- --revision <sha> --hours 48` for the same safe operator view inside a configured runtime.
+The production-observation workflow samples the deployed revision every six hours and retains a 48-hour aggregate containing answer status/latency by model, terminal per-run capability outcomes, raw tool attempts, recovered validation retries, warning/error counts, and delivery states. Only explicitly member-originated Discord executions enter this quality cohort; CLI prompts, evals, and deployment canaries remain observable but do not count as member answers or baselines. Pending delivery obligations become incidents after five minutes, avoiding false alerts for replies actively being delivered, while abandoned obligations fail immediately. The workflow reads the canonical runtime ledger inside the cluster and publishes only safe counts—never prompts, replies, member identities, or private Discord content. Use `npm run quality:revision -- --revision <sha> --hours 48` for the same safe operator view inside a configured runtime.
 
 Repeated attempts of the same capability in one execution count once toward terminal capability health, using the final result; attempts and recovered schema retries remain separate efficiency signals. This prevents a recovered malformed call from masquerading as several independent member-facing failures without hiding its latency and cost. The observation compares the deployed revision with the most recently active prior revision. Hard delivery/error evidence fails immediately; rate and latency thresholds enforce only after a useful sample. A failed scheduled run is the operator alert. `rollback_candidate` means the current revision failed while its sufficiently sampled baseline passed; it is evidence to inspect and roll back, not permission for an unrelated mutation. A revision with no member answers reports `awaiting_traffic`. After traffic begins but before ten member answers it reports `insufficient_data`; the assessment includes remaining answer and tool-call sample counts. Both remain observable without generating a false incident.
 

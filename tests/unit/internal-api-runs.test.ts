@@ -26,11 +26,19 @@ describe("internal API run endpoints", () => {
     runtime = undefined;
   });
 
-  it("rejects console passwords in query strings", async () => {
+  it("rejects control API passwords in query strings", async () => {
     runtime = await startInternalApi({ config: testConfig(), repo: fakeRepo() });
-    const response = await fetch(`${runtime.url}/runs?auth=secret`, { redirect: "manual" });
+    const response = await fetch(`${runtime.url}/api/runs?auth=secret`, { redirect: "manual" });
     expect(response.status).toBe(401);
     expect(response.headers.get("set-cookie")).toBeNull();
+  });
+
+  it("keeps health checks while removing the browser console routes", async () => {
+    runtime = await startInternalApi({ config: testConfig(), repo: fakeRepo() });
+
+    await expect(fetch(`${runtime.url}/healthz`).then((response) => response.json())).resolves.toEqual({ status: "ok" });
+    await expect(fetch(`${runtime.url}/runs`).then((response) => response.status)).resolves.toBe(404);
+    await expect(fetch(`${runtime.url}/console/`)).resolves.toMatchObject({ status: 404 });
   });
 
   it("serves run list, detail, events, artifacts, and SSE snapshots", async () => {
@@ -375,7 +383,7 @@ function testConfig(): AppConfig {
   return {
     ...config,
     internalApi: { host: "127.0.0.1", port: 0 },
-    controlUi: { authPassword: "secret", publicUrl: null },
+    controlApi: { authPassword: "secret", publicUrl: null },
     execution: { ...config.execution, taskSigningSecret: "task-secret" }
   };
 }

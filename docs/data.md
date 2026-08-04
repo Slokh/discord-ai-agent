@@ -79,7 +79,7 @@ The `agent_runtime_*` tables explain both chat and code-update attempts:
 - artifacts and chunks store replay inputs, redacted model I/O, snapshots, files, and larger diagnostics;
 - task-linked executions record isolated code-update lifecycle and outcomes.
 
-Chat does not create a parallel process-run record. Code-update task rows are projections linked to the task runtime execution. The console and CLI inspectors normalize these sources for display without creating another history.
+Chat does not create a parallel process-run record. Code-update task rows are projections linked to the task runtime execution. The control API and CLI inspectors normalize these sources without creating another history.
 
 Artifacts have explicit content type, size, checksum, sensitivity, and retention behavior. Binary delivery artifacts are stored once and referenced by the delivery manifest.
 

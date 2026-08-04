@@ -23,7 +23,6 @@ export default [
   {
     files: [
       "src/control/internalApi*.ts",
-      "src/control/console/**/*.{ts,tsx}",
       "src/observability/*.ts",
       "src/db/runtimeMappers.ts",
       "src/db/agentRuntimeArtifactRepository.ts",

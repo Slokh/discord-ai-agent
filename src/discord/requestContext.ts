@@ -11,8 +11,7 @@ import type { JobRuntime } from "../jobs/queue.js";
 import type { AgentRuntimePromptExecutor } from "../agent/runtimeExecutor.js";
 import type { AgentRuntimeTurnEnvelope } from "../agent/runtimeEnvelope.js";
 import type { AgentPromptExecutionRef } from "../agent/runtimeLedger.js";
-import type { DiscordResponseFooter } from "./responseSink.js";
-import { durationMs, logger } from "../util/logger.js";
+import { logger } from "../util/logger.js";
 import type { TraceContext } from "../util/trace.js";
 import type { WalletService } from "../payments/walletService.js";
 
@@ -188,20 +187,6 @@ export async function storeAgentRuntimeResponseArtifact(input: {
     metadata: { artifactId: artifact.artifactId, kind: artifact.kind }
   });
   return artifact;
-}
-
-export function discordTraceFooter(config: AppConfig, runId: string, startedAt: number): DiscordResponseFooter | null {
-  const traceUrl = discordRunConsoleUrl(config, runId);
-  if (!traceUrl) return null;
-  return {
-    traceUrl,
-    durationMs: durationMs(startedAt)
-  };
-}
-
-export function discordRunConsoleUrl(config: AppConfig, runId: string) {
-  if (!config.controlUi.publicUrl) return null;
-  return `${config.controlUi.publicUrl}/runs/${encodeURIComponent(runId)}`;
 }
 
 export async function waitForDiscordClientReady(client: Client, timeoutMs = 30_000) {

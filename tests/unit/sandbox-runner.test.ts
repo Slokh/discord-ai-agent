@@ -710,7 +710,7 @@ describe("sandboxRunner", () => {
         "utf8"
       );
       await fs.writeFile(
-        path.join(tempDir, "tests", "unit", "run-console-timeline.test.ts"),
+        path.join(tempDir, "tests", "unit", "response-sink.test.ts"),
         [
           'expect(timelineSummaryText("Sent Thinking reply")).toBe("");',
           'expect(timelineTitleText({ title: "Thinking reply sent" } as any)).toBe("Acknowledgement sent");',
@@ -724,7 +724,7 @@ describe("sandboxRunner", () => {
 
       expect(contextPack.anchorTargetFiles?.map((file) => file.path).slice(0, 2)).toEqual([
         "src/discord/client.ts",
-        "tests/unit/run-console-timeline.test.ts"
+        "tests/unit/response-sink.test.ts"
       ]);
       expect(contextPack.suggestedFiles?.[0]?.path).toBe("src/discord/client.ts");
     } finally {

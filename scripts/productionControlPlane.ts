@@ -21,18 +21,18 @@ export function resolveProductionControlPlane(input: {
   const namespace = input.namespace || env.KUBERNETES_NAMESPACE || DEFAULT_NAMESPACE;
   const secretName = input.secretName || env.KUBERNETES_APP_SECRET_NAME || DEFAULT_SECRET_NAME;
   const explicitApiUrl = input.apiUrl?.trim() || env.CONSOLE_API_TARGET?.trim();
-  const environmentApiUrl = env.CONTROL_UI_PUBLIC_URL?.trim();
+  const environmentApiUrl = env.CONTROL_API_PUBLIC_URL?.trim();
   const kubernetesApiUrl = explicitApiUrl || environmentApiUrl
     ? undefined
-    : readKubernetesControlUiPublicUrl(namespace);
+    : readKubernetesControlApiPublicUrl(namespace);
   const apiUrl = explicitApiUrl || environmentApiUrl || kubernetesApiUrl;
   if (!apiUrl) {
     throw new Error(
-      "Could not resolve the production control-plane URL. Configure CONTROL_UI_PUBLIC_URL, pass --api-url, or connect kubectl to the production cluster. Use --source db only for intentional isolated local inspection.",
+      "Could not resolve the production control-plane URL. Configure CONTROL_API_PUBLIC_URL, pass --api-url, or connect kubectl to the production cluster. Use --source db only for intentional isolated local inspection.",
     );
   }
-  const auth = input.auth?.trim() || env.CONSOLE_API_AUTH_PASSWORD?.trim() || env.CONTROL_UI_AUTH_PASSWORD?.trim() ||
-    readKubernetesSecretValue(namespace, secretName, "CONTROL_UI_AUTH_PASSWORD");
+  const auth = input.auth?.trim() || env.CONTROL_API_AUTH_PASSWORD?.trim() ||
+    readKubernetesSecretValue(namespace, secretName, "CONTROL_API_AUTH_PASSWORD");
   return {
     apiUrl: apiUrl.replace(/\/$/, ""),
     auth: auth || undefined,
@@ -40,7 +40,7 @@ export function resolveProductionControlPlane(input: {
   };
 }
 
-function readKubernetesControlUiPublicUrl(namespace: string) {
+function readKubernetesControlApiPublicUrl(namespace: string) {
   const deploymentsJson = runOptional("kubectl", [
     "-n", namespace, "get", "deployments",
     "-l", "app.kubernetes.io/name=discord-ai-agent",
@@ -53,7 +53,7 @@ function readKubernetesControlUiPublicUrl(namespace: string) {
     };
     for (const deployment of deployments.items ?? []) {
       for (const container of deployment.spec?.template?.spec?.containers ?? []) {
-        const value = container.env?.find((entry) => entry.name === "CONTROL_UI_PUBLIC_URL")?.value?.trim();
+        const value = container.env?.find((entry) => entry.name === "CONTROL_API_PUBLIC_URL")?.value?.trim();
         if (value) return value;
       }
     }

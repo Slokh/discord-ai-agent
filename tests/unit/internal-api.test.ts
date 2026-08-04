@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { authorized, verifyUiAuthorization } from "../../src/control/internalApiAuth.js";
+import { authorized, verifyControlAuthorization } from "../../src/control/internalApiAuth.js";
 import { renderMetrics } from "../../src/control/internalApiMetrics.js";
 import { parseRunFeedbackBody } from "../../src/control/internalApiParsers.js";
 import { automatedBugRegression } from "../../src/control/bugRegression.js";
@@ -44,25 +44,25 @@ describe("run feedback parsing", () => {
 
 describe("internal API UI authorization", () => {
   it("allows passwordless access only when deployment validation intentionally permits it", () => {
-    expect(verifyUiAuthorization({ password: "" })).toBe(true);
+    expect(verifyControlAuthorization({ password: "" })).toBe(true);
   });
 
   it("accepts the configured password through browser Basic auth", () => {
     const authorization = `Basic ${Buffer.from("admin:secret-password").toString("base64")}`;
 
-    expect(verifyUiAuthorization({ password: "secret-password", authorization })).toBe(true);
+    expect(verifyControlAuthorization({ password: "secret-password", authorization })).toBe(true);
   });
 
   it("accepts the configured password through bearer auth for scripts", () => {
-    expect(verifyUiAuthorization({ password: "secret-password", authorization: "Bearer secret-password" })).toBe(true);
+    expect(verifyControlAuthorization({ password: "secret-password", authorization: "Bearer secret-password" })).toBe(true);
   });
 
   it("rejects missing, wrong, or malformed credentials", () => {
-    expect(verifyUiAuthorization({ password: "secret-password" })).toBe(false);
-    expect(verifyUiAuthorization({ password: "secret-password", authorization: "Bearer wrong" })).toBe(false);
-    expect(verifyUiAuthorization({ password: "secret-password", authorization: "Basic nope" })).toBe(false);
+    expect(verifyControlAuthorization({ password: "secret-password" })).toBe(false);
+    expect(verifyControlAuthorization({ password: "secret-password", authorization: "Bearer wrong" })).toBe(false);
+    expect(verifyControlAuthorization({ password: "secret-password", authorization: "Basic nope" })).toBe(false);
     expect(
-      verifyUiAuthorization({
+      verifyControlAuthorization({
         password: "secret-password",
         authorization: `Basic ${Buffer.from("not-admin:secret-password").toString("base64")}`
       })

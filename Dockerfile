@@ -5,7 +5,7 @@ COPY package.json package-lock.json* ./
 RUN --mount=type=cache,target=/root/.npm npm ci
 
 FROM deps AS build
-COPY tsconfig.json eslint.config.js vitest.config.ts vite.console.config.ts ./
+COPY tsconfig.json eslint.config.js vitest.config.ts ./
 COPY src ./src
 COPY scripts ./scripts
 COPY migrations ./migrations

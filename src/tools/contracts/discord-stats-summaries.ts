@@ -7,7 +7,7 @@ export const discordStatsSummaryToolContracts = [
     toolClass: "stats",
     examples: ["@ai rank channels by messages per day"],
     description:
-      "Compute permission-filtered Discord analytics over indexed visible messages. Use this for counts, rankings, lowest/highest rankings, activity over time, messages by channel/user, normalized messages-per-day comparisons, attachment stats, reaction totals, and active-day summaries. Time buckets use UTC. Hour-of-day and day-of-week results describe observed message timing only; they do not establish sleep, location, work schedule, or availability. Keep a simple named-person activity follow-up to the requested peak or comparison instead of dumping every bucket.",
+      "Compute permission-filtered Discord analytics over indexed visible messages. Use this for message, character, and word counts; rankings; lowest/highest rankings; activity over time; messages by channel/user; normalized messages-per-day comparisons; attachment stats; reaction totals; and active-day summaries. Character and word counts use stored normalized message text. Time buckets use UTC. Hour-of-day and day-of-week results describe observed message timing only; they do not establish sleep, location, work schedule, or availability. Keep a simple named-person activity follow-up to the requested peak or comparison instead of dumping every bucket.",
     mutates: false,
     group: "discord-retrieval",
     parameters: {
@@ -49,9 +49,9 @@ export const discordStatsSummaryToolContracts = [
         },
         metric: {
           type: "string",
-          enum: ["messages", "attachments", "reactions", "uniqueActiveDays", "messagesPerActiveDay", "messagesPerChannelDay"],
+          enum: ["messages", "characters", "words", "attachments", "reactions", "uniqueActiveDays", "messagesPerActiveDay", "messagesPerChannelDay"],
           description:
-            "Metric to calculate. Defaults to messages. Use messagesPerChannelDay to normalize channel popularity by days since channel creation. Use messagesPerActiveDay to normalize by days with messages."
+            "Metric to calculate. Defaults to messages. Use characters or words to count stored normalized message text. Use messagesPerChannelDay to normalize channel popularity by days since channel creation. Use messagesPerActiveDay to normalize by days with messages."
         },
         includeBots: {
           type: "boolean",

@@ -96,7 +96,8 @@ export function formatDiscordStats(stats: DiscordStats, options: DiscordStatsFor
     ...(isCyclicActivityGrouping
       ? ["- Interpretation: Observed message timing only; it does not establish sleep, location, work schedule, or availability."]
       : []),
-    `- Messages: ${stats.totalMessages}`
+    `- ${metric[0]?.toUpperCase()}${metric.slice(1)}: ${formatStatNumber(stats.totalValue ?? stats.totalMessages)}`,
+    ...(stats.metric === "messages" ? [] : [`- Messages: ${formatStatNumber(stats.totalMessages)}`])
   ];
   if (stats.groupBy === "overall" || stats.metric === "attachments") {
     lines.push(`- Attachments: ${stats.totalAttachments}`);
@@ -117,13 +118,13 @@ export function formatDiscordStats(stats: DiscordStats, options: DiscordStatsFor
   }
 
   lines.push(
-    "- Top users:",
+    `- Top users by ${metric}:`,
     ...(stats.topUsers.length
-      ? stats.topUsers.map((user, index) => `  ${index + 1}. ${user.authorUsername ? `@${user.authorUsername}` : user.authorId}: ${user.messageCount}`)
+      ? stats.topUsers.map((user, index) => `  ${index + 1}. ${user.authorUsername ? `@${user.authorUsername}` : user.authorId}: ${formatStatNumber(stats.metric === "messages" ? user.messageCount : user.value ?? user.messageCount)}`)
       : ["  none"]),
-    "- Top channels:",
+    `- Top channels by ${metric}:`,
     ...(stats.topChannels.length
-      ? stats.topChannels.map((channel, index) => `  ${index + 1}. ${channel.channelName ? `#${channel.channelName}` : channel.channelId}: ${channel.messageCount}`)
+      ? stats.topChannels.map((channel, index) => `  ${index + 1}. ${channel.channelName ? `#${channel.channelName}` : channel.channelId}: ${formatStatNumber(stats.metric === "messages" ? channel.messageCount : channel.value ?? channel.messageCount)}`)
       : ["  none"])
   );
   return lines.join("\n");
@@ -157,6 +158,8 @@ export function discordStatsMetric(value: string | undefined): DiscordStats["met
   if (normalized && aliases[normalized]) return aliases[normalized];
   const allowed: DiscordStats["metric"][] = [
     "messages",
+    "characters",
+    "words",
     "attachments",
     "reactions",
     "uniqueActiveDays",
@@ -299,6 +302,8 @@ function formatDiscordStatsRowLabel(row: DiscordStats["rows"][number]) {
 }
 
 function discordStatsMetricLabel(metric: DiscordStats["metric"]) {
+  if (metric === "characters") return "characters";
+  if (metric === "words") return "words";
   if (metric === "attachments") return "attachments";
   if (metric === "reactions") return "reactions";
   if (metric === "uniqueActiveDays") return "unique active days";

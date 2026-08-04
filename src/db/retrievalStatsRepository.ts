@@ -80,8 +80,8 @@ export async function discordStats(pool: DbPool, input: {
       includeReactionStats: metric === "reactions"
     });
     const topBase = buildDiscordStatsBaseQuery(input, {
-      includeAttachmentStats: false,
-      includeReactionStats: false
+      includeAttachmentStats: metric === "attachments",
+      includeReactionStats: metric === "reactions"
     });
     const grouping = discordStatsGrouping(groupBy);
     const metricSql = discordStatsMetricSql(metric);
@@ -100,7 +100,8 @@ export async function discordStats(pool: DbPool, input: {
             coalesce(sum(reaction_stats.reaction_count), 0)::int AS reactions,
             count(DISTINCT m.author_id)::int AS users,
             count(DISTINCT m.channel_id)::int AS channels,
-            count(DISTINCT date_trunc('day', m.created_at))::int AS active_days
+            count(DISTINCT date_trunc('day', m.created_at))::int AS active_days,
+            ${metricSql} AS value
           ${totalsBase.fromSql}
           ${totalsBase.whereSql}
         `,
@@ -136,11 +137,11 @@ export async function discordStats(pool: DbPool, input: {
       includeOverallBreakdowns
         ? pool.query(
             `
-              SELECT m.author_id, u.username AS author_username, count(*)::int AS message_count
+              SELECT m.author_id, u.username AS author_username, count(*)::int AS message_count, ${metricSql} AS value
               ${topBase.fromSql}
               ${topBase.whereSql}
               GROUP BY m.author_id, u.username
-              ORDER BY message_count DESC, m.author_id
+              ORDER BY value DESC, m.author_id
               LIMIT ${topLimitPlaceholder}
             `,
             topParams
@@ -152,11 +153,12 @@ export async function discordStats(pool: DbPool, input: {
               SELECT
                 ${discordStatsEffectiveChannelIdSql()} AS channel_id,
                 ${discordStatsEffectiveChannelNameSql()} AS channel_name,
-                count(*)::int AS message_count
+                count(*)::int AS message_count,
+                ${metricSql} AS value
               ${topBase.fromSql}
               ${topBase.whereSql}
               GROUP BY ${discordStatsEffectiveChannelIdSql()}, ${discordStatsEffectiveChannelNameSql()}
-              ORDER BY message_count DESC, channel_id
+              ORDER BY value DESC, channel_id
               LIMIT ${topLimitPlaceholder}
             `,
             topParams
@@ -166,6 +168,7 @@ export async function discordStats(pool: DbPool, input: {
 
     return {
       totalMessages: Number(totals.rows[0]?.messages ?? 0),
+      totalValue: Number(totals.rows[0]?.value ?? 0),
       totalAttachments: Number(totals.rows[0]?.attachments ?? 0),
       totalReactions: Number(totals.rows[0]?.reactions ?? 0),
       userCount: Number(totals.rows[0]?.users ?? 0),
@@ -177,12 +180,14 @@ export async function discordStats(pool: DbPool, input: {
       topUsers: users.rows.map((row) => ({
         authorId: String(row.author_id),
         authorUsername: row.author_username == null ? null : String(row.author_username),
-        messageCount: Number(row.message_count ?? 0)
+        messageCount: Number(row.message_count ?? 0),
+        value: Number(row.value ?? 0)
       })),
       topChannels: channels.rows.map((row) => ({
         channelId: String(row.channel_id),
         channelName: row.channel_name == null ? null : String(row.channel_name),
-        messageCount: Number(row.message_count ?? 0)
+        messageCount: Number(row.message_count ?? 0),
+        value: Number(row.value ?? 0)
       }))
     };
   }

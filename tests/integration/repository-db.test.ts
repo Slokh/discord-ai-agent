@@ -2128,6 +2128,29 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
       topUsers: [{ authorId: userId, authorUsername: "riverrunner", messageCount: 2 }],
       topChannels: [{ channelId, channelName: "general-chat", messageCount: 2 }]
     });
+    await expect(repo.discordStats({
+      guildId,
+      visibleChannelIds: [channelId],
+      authorIds: [userId],
+      groupBy: "user",
+      metric: "words",
+      limit: 5
+    })).resolves.toMatchObject({
+      totalMessages: 2,
+      totalValue: 8,
+      rows: [{ authorId: userId, value: 8 }]
+    });
+    await expect(repo.discordStats({
+      guildId,
+      visibleChannelIds: [channelId],
+      authorIds: [userId],
+      groupBy: "user",
+      metric: "characters",
+      limit: 5
+    })).resolves.toMatchObject({
+      totalValue: 49,
+      rows: [{ authorId: userId, value: 49 }]
+    });
     await expect(
       repo.discordStats({
         guildId,

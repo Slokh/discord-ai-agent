@@ -175,6 +175,7 @@ export type DiscordAttachmentSearchResult = {
 
 export type DiscordStats = {
   totalMessages: number;
+  totalValue: number;
   totalAttachments: number;
   totalReactions: number;
   userCount: number;
@@ -183,12 +184,14 @@ export type DiscordStats = {
   metric: DiscordStatsMetric;
   groupBy: DiscordStatsGroupBy;
   rows: DiscordStatsRow[];
-  topUsers: Array<{ authorId: string; authorUsername: string | null; messageCount: number }>;
-  topChannels: Array<{ channelId: string; channelName: string | null; messageCount: number }>;
+  topUsers: Array<{ authorId: string; authorUsername: string | null; messageCount: number; value: number }>;
+  topChannels: Array<{ channelId: string; channelName: string | null; messageCount: number; value: number }>;
 };
 
 export type DiscordStatsMetric =
   | "messages"
+  | "characters"
+  | "words"
   | "attachments"
   | "reactions"
   | "uniqueActiveDays"

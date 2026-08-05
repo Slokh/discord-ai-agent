@@ -225,6 +225,7 @@ export function improvementTriageApplication(
     classification?: ImprovementClassification;
     severity?: ImprovementSeverity;
     owningDomain?: string | null;
+    assessmentKind?: "operator_assessment" | "agent_assessment";
   } = {},
 ): ImprovementTriageApplication {
   const verdict = decision.verdict ?? dossier.verdict;
@@ -236,7 +237,7 @@ export function improvementTriageApplication(
   const evidence = [...dossier.evidence];
   if (evidenceSummary) {
     evidence.push({
-      kind: "operator_assessment",
+      kind: decision.assessmentKind ?? "operator_assessment",
       disposition: verdict === "confirmed" ? "supports" : verdict === "not_reproduced" ? "contradicts" : "inconclusive",
       summary: evidenceSummary,
       referenceType: "improvement_case",

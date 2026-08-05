@@ -24,7 +24,7 @@ contains the implementation and verification workflow.
 | --- | --- | --- |
 | A Discord reply is wrong, slow, missing, or confusing | Canonical production ledger evidence and [`docs/operations.md`](docs/operations.md) | Compare ingress, reply chain, operative request, tool calls/results, guards, model I/O, and delivery. Do not blame a model or use browser scraping first. |
 | Many replies regressed after a deploy | Canonical production ledger evidence | Audit the whole channel, including role-triggered requests and chains; cluster failures by deployed revision before editing. |
-| A member marked a message with `🐛` or any bug/friction/report stream changes | `listMyImprovementSignals`, [`docs/improvements.md`](docs/improvements.md), and the linked run | This creates a private improvement signal, not a defect verdict or repair authorization. Gather evidence, accept an executable contract, and start linked work only when explicitly asked. Never make it a public GitHub issue by default. |
+| A member marked a message with `🐛` or any bug/friction/report stream changes | `listMyImprovementSignals`, [`docs/improvements.md`](docs/improvements.md), and the linked run | This creates a private improvement signal and authorizes autonomous evidence assessment. Reject unsupported reports, or accept an executable contract and repair confirmed defects. Request human review only when a specific ambiguity or blocker prevents both outcomes. Never make it a public GitHub issue. |
 | Model conversation, prompt, or tool use is poor | [`docs/agent-system.md`](docs/agent-system.md), `src/agent/`, and the run's prompt/debug artifacts | Improve general prompt/tool/result contracts and traceability. Do not add regex routes or canned replies for one wording; preserve the current request as authoritative. |
 | Model, reasoning level, fallback, or token-cost change | live config/deployment evidence, [`src/models/`](src/models/), and observed run cost | Verify the actually deployed primary/fallback configuration before changing it. Compare provider pricing and observed usage, preserve a fallback, and validate conversational/tool behavior with focused traces or evals. |
 | A new or changed model-facing tool | [`docs/agent-system.md`](docs/agent-system.md) | Define the contract, schema, examples, audit, output promise, handler, and focused coverage in the owning tool family. Prefer a generic capability to a prompt-specific branch. |
@@ -65,9 +65,10 @@ Exact source keys are idempotent and deterministic fingerprints may coalesce
 high-confidence matches. Semantic similarity may suggest a merge but never
 performs one automatically.
 
-A report is not a verdict. Cases become `actionable` only after supporting
-evidence and an accepted contract whose every check has a registered proof
-adapter with its required inputs available.
+A report is not a verdict, but it authorizes autonomous assessment and repair.
+The evidence-only phase must keep the checkout clean. It rejects unsupported
+reports, requests human review only for an exact ambiguity or blocker, or accepts
+an executable contract before repairing. Confirmed repairs open auto-merge PRs.
 Linked work moves through `in_progress` and `verifying`; only successful deployed
 evidence can resolve it. Use `npm run improve -- --target local ...` locally and
 add `--target production --confirm-production` only in the configured production

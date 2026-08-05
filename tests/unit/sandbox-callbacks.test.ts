@@ -109,6 +109,7 @@ function sandboxEnv(callbackServerUrl: string): SandboxEnv {
     sandboxRunId,
     taskTitle: "Test callbacks",
     taskRequest: "Verify callback authentication.",
+    improvementAssessmentResultPath: "/tmp/improvement-assessment.json",
     requestedBy: "test",
     targetBranch: null,
     targetPullRequestNumber: null,

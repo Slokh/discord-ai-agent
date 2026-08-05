@@ -89,6 +89,7 @@ export type JobRuntime = {
   enqueueMessageEmbedding: (messageId: string, options?: MessageEmbeddingEnqueueOptions) => Promise<string | null>;
   enqueueAgentRuntimeExecution: (job: AgentRuntimeExecutionJob) => Promise<string | null>;
   enqueueAgentTask: (job: AgentTaskEnqueueInput) => Promise<AgentTaskEnqueueResult>;
+  enqueueImprovementReconciliation: () => Promise<string | null>;
   stop: () => Promise<void>;
 };
 
@@ -235,6 +236,8 @@ export async function startJobs(input: {
         backendName: agentTaskBackendName,
         job
       }),
+    enqueueImprovementReconciliation: async () =>
+      (await boss.send(IMPROVEMENT_RECONCILIATION_JOB, {})) ?? null,
     stop: async () => {
       artifactRetentionMaintenance?.stop();
       dataRetentionMaintenance?.stop();
@@ -269,6 +272,15 @@ export async function startJobs(input: {
         config: input.config,
         runtime: input.agentRuntimeRepo!,
         deliveries: input.deliveryObligations!,
+        enqueueAssessment: (job) => enqueueAgentTaskJob({
+          boss,
+          queueName: AGENT_TASK_JOB,
+          config: input.config,
+          repo: input.repo,
+          agentRuntimeRepo: input.agentRuntimeRepo,
+          backendName: agentTaskBackendName,
+          job,
+        }),
       });
       logger.info(improvementReconciliationLog(result), "Improvement reconciliation complete");
     });

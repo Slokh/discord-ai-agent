@@ -140,7 +140,7 @@ export function acceptsCleanNanoCodexResult(
   exitCode: number,
   finalResponse?: string,
 ) {
-  return taskType === "diagnosis" && exitCode === 0 && Boolean(finalResponse?.trim());
+  return (taskType === "diagnosis" || taskType === "improvement_report") && exitCode === 0 && Boolean(finalResponse?.trim());
 }
 
 function createNanoCodexProgressObserver(input: { env: SandboxEnv; attempt: number; totalAttempts: number }) {

@@ -3,7 +3,7 @@ export type AgentTaskStatus = "queued" | "running" | "succeeded" | "failed" | "n
 export type AgentTaskJob = {
   taskId: string;
   traceId?: string;
-  taskType: "code_update" | "diagnosis";
+  taskType: "code_update" | "improvement_report" | "diagnosis";
   request: string;
   title: string;
   requestedBy: string;
@@ -53,6 +53,7 @@ export type SandboxEnv = {
   sandboxRunId: string;
   taskTitle: string;
   taskRequest: string;
+  improvementAssessmentResultPath: string;
   requestedBy: string;
   targetBranch: string | null;
   targetPullRequestNumber: number | null;

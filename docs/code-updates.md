@@ -20,7 +20,7 @@ The sandbox supervisor never receives the Discord token or database URL. It rece
 6. Sandbox progress, commands, timings, cache state, and terminal callbacks become `agent.task.*` events in the canonical runtime ledger. Command output is retained as a redacted runtime artifact referenced by its event.
 7. The task ends as succeeded, failed, cancelled, or no-change, with a PR link or concrete reason.
 
-When the original requester marks a reply, the sandbox first performs evidence-only triage and code enforces a clean checkout. The marker is not proof: expected behavior, non-reproduction, an already-fixed source, or insufficient evidence finishes without a PR. Insufficient evidence produces a reply on the marked message that pings only the reporter and asks for concrete missing context. Only `confirmed_unfixed` with a machine-checkable regression contract starts a separate mutation-capable repair phase. When that confirmed repair reaches production, the marked bot reply becomes a persistent `Bug fix` update using the same format as ordinary deployment notes. Posting that contextual update triggers a retry of the original request into a fresh reply. A different member's marker remains available in that member's private inbox but cannot start or replay the original request. Contextual updates remain separate from the release-wide announcement, so every verified revision still receives its complete release-notes entry.
+Report signals enter the unified improvement worker rather than a reaction-specific execution path. Each signal snapshot gets one deterministic assessment task. The sandbox first performs evidence-only triage and code enforces a clean checkout. Expected behavior, non-reproduction, or an already-fixed source dismisses the report without GitHub work. A specific ambiguity moves the case to `needs_evidence` with the exact clarification required. Only `confirmed_unfixed` with a registered machine-executable contract starts the mutation-capable repair phase; it never replays the original Discord request or publishes private report content.
 
 ## Sandbox pipeline
 
@@ -81,6 +81,8 @@ Reconcilers handle:
 Recovery produces an explicit terminal reason. It never silently publishes an unverified diff or marks a task successful only because a process exited.
 
 Members can add `🔄` or `🔃` to a terminal task update to queue a fresh retry. The reaction is durably deduplicated per member and target message, and the new task links back to the failed task. Tasks linked to an improvement case create a new source-independent work attempt while retaining the case projection; the case remains `in_progress` during the retry and still requires explicit deployed verification before resolution.
+
+Report-authorized `improvement_report` tasks are two-phase. The first phase is evidence-only and must leave the checkout clean. Unsupported reports finish without GitHub work; insufficient evidence names the exact human clarification needed. A confirmed defect must include registered machine-executable checks before the second phase may edit. A successfully verified repair opens a diff-described PR and enables auto-merge after required checks; private report evidence never enters the branch, commit, or PR metadata.
 
 ## Operations and verification
 

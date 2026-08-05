@@ -1,8 +1,10 @@
+import { createHash } from "node:crypto";
 import type { AppConfig } from "../config/env.js";
 import type { AgentRuntimeRepository } from "../db/agentRuntimeRepository.js";
 import type { DeliveryObligationsRepository } from "../db/deliveryObligationsRepository.js";
 import type { DiscordAiAgentRepository } from "../db/repositories.js";
 import type { ImprovementCaseStatus, ImprovementSignalSource } from "../db/types.js";
+import type { AgentTaskEnqueueInput } from "../jobs/agentTaskEnqueue.js";
 import {
   buildImprovementTriageDossier,
   collectImprovementRuntimeObservations,
@@ -25,6 +27,7 @@ type ImprovementReconciliationRepository = Pick<
   DiscordAiAgentRepository,
   | "listImprovementCasesForReconciliation"
   | "getImprovementCase"
+  | "getAgentTask"
   | "applyImprovementTriage"
   | "recordImprovementReconciliationDecision"
   | "listActiveImprovementPullRequestWork"
@@ -33,14 +36,14 @@ type ImprovementReconciliationRepository = Pick<
   | "verifyImprovementCasesForDeployment"
 >;
 
-type RuntimeReader = Pick<AgentRuntimeRepository, "getExecution" | "listEvents">;
+type RuntimeReader = Pick<AgentRuntimeRepository, "getExecution" | "getSession" | "listMessages" | "listEvents">;
 type DeliveryReader = Pick<DeliveryObligationsRepository, "getByExecutionId">;
 
 export type ImprovementReconciliationResult = {
   triage: Array<{
     caseId: string;
     status: "applied" | "unchanged" | "deferred" | "error";
-    reason?: "operator_judgment" | "unregistered_contract" | "concurrent_change";
+    reason?: "assessment_running" | "operator_judgment" | "unregistered_contract" | "concurrent_change";
     error?: string;
   }>;
   pullRequests: Awaited<ReturnType<typeof reconcileImprovementPullRequestWork>>;
@@ -51,12 +54,13 @@ export type ImprovementReconciliationResult = {
   stalled: Array<{ caseId: string; status: "in_progress" | "verifying"; ageMs: number; eventRecorded: boolean }>;
 };
 
-/** Advances only source-owned deterministic cases; subjective reports remain operator decisions. */
+/** Advances deterministic cases and autonomously assesses report-backed cases before requesting human input. */
 export async function runImprovementReconciliationOnce(input: {
   repo: ImprovementReconciliationRepository;
   config: AppConfig;
   runtime: RuntimeReader;
   deliveries: DeliveryReader;
+  enqueueAssessment?: (job: AgentTaskEnqueueInput) => Promise<{ taskId: string }>;
   now?: Date;
 }): Promise<ImprovementReconciliationResult> {
   const triage = await reconcileTriage(input);
@@ -92,20 +96,17 @@ async function reconcileTriage(input: {
       const record = await input.repo.getImprovementCase(candidate.caseId);
       if (!record || !TRIAGE_STATUSES.includes(record.case.status)) continue;
       const activeSignals = record.signals.filter((signal) => signal.active);
-      if (!activeSignals.some((signal) => AUTOMATED_SOURCES.has(signal.source))) {
-        await input.repo.recordImprovementReconciliationDecision({
-          caseId: candidate.caseId,
-          eventName: "reconciliation.awaiting_operator",
-          reason: "subjective_source_requires_operator_judgment",
-        });
-        results.push({ caseId: candidate.caseId, status: "deferred", reason: "operator_judgment" });
-        continue;
-      }
       const runtime = await collectImprovementRuntimeObservations(activeSignals, {
         runtime: input.runtime,
         deliveries: input.deliveries,
       });
       const dossier = buildImprovementTriageDossier(record, runtime);
+      const hasReportSource = activeSignals.some((signal) => !AUTOMATED_SOURCES.has(signal.source));
+      if (hasReportSource) {
+        const result = await reconcileAutonomousAssessment(input, record, dossier.snapshotKey);
+        results.push({ caseId: candidate.caseId, ...result });
+        continue;
+      }
       if (dossier.verdict !== "confirmed" || !dossier.proposedContract) {
         await input.repo.recordImprovementReconciliationDecision({
           caseId: candidate.caseId,
@@ -132,6 +133,107 @@ async function reconcileTriage(input: {
     }
   }
   return results;
+}
+
+export function improvementAssessmentTaskId(caseId: string, snapshotKey: string) {
+  const digest = createHash("sha256").update(`${caseId}:${snapshotKey}`).digest("hex").slice(0, 24);
+  return `improvement-${digest}`;
+}
+
+async function reconcileAutonomousAssessment(
+  input: Pick<Parameters<typeof runImprovementReconciliationOnce>[0], "repo" | "runtime" | "enqueueAssessment">,
+  record: NonNullable<Awaited<ReturnType<ImprovementReconciliationRepository["getImprovementCase"]>>>,
+  snapshotKey: string,
+): Promise<Pick<ImprovementReconciliationResult["triage"][number], "status" | "reason">> {
+  const taskId = improvementAssessmentTaskId(record.case.caseId, snapshotKey);
+  const existing = await input.repo.getAgentTask(taskId);
+  if (existing) {
+    if (existing.status === "queued" || existing.status === "running") return { status: "deferred", reason: "assessment_running" };
+    if (existing.status !== "no_changes") {
+      await input.repo.recordImprovementReconciliationDecision({
+        caseId: record.case.caseId,
+        eventName: "reconciliation.awaiting_operator",
+        reason: "autonomous_assessment_did_not_resolve_case",
+        metadata: { taskId, taskStatus: existing.status },
+      });
+    }
+    return { status: "deferred", reason: "operator_judgment" };
+  }
+  if (!input.enqueueAssessment) {
+    await input.repo.recordImprovementReconciliationDecision({
+      caseId: record.case.caseId,
+      eventName: "reconciliation.awaiting_operator",
+      reason: "autonomous_assessment_worker_unavailable",
+    });
+    return { status: "deferred", reason: "operator_judgment" };
+  }
+  const signals = record.signals.filter((signal) => signal.active);
+  const request = await renderPrivateAssessmentEvidence(record.case.caseId, signals, input.runtime);
+  const first = signals[0];
+  await input.enqueueAssessment({
+    taskId,
+    taskType: "improvement_report",
+    improvementCaseId: record.case.caseId,
+    title: `Assess improvement case ${record.case.caseId}`,
+    request,
+    requestedBy: ACTOR_ID,
+    traceId: first?.executionId ?? taskId,
+    guildId: first?.guildId ?? undefined,
+    channelId: first?.channelId ?? undefined,
+    userId: first?.reporterId ?? undefined,
+  });
+  await input.repo.recordImprovementReconciliationDecision({
+    caseId: record.case.caseId,
+    eventName: "reconciliation.assessment_queued",
+    reason: "report_authorized_autonomous_assessment",
+    metadata: { taskId, snapshotKey },
+  });
+  return { status: "deferred", reason: "assessment_running" };
+}
+
+async function renderPrivateAssessmentEvidence(
+  caseId: string,
+  signals: Array<{ signalId: string; source: string; summary: string; details: string | null; executionId: string | null; messageId: string | null; appRevision: string | null }>,
+  runtime: RuntimeReader,
+) {
+  const runs = [];
+  for (const executionId of [...new Set(signals.flatMap((signal) => signal.executionId ? [signal.executionId] : []))].slice(0, 5)) {
+    const execution = await runtime.getExecution({ executionId });
+    if (!execution) {
+      runs.push({ executionId, missing: true });
+      continue;
+    }
+    const [session, messages, events] = await Promise.all([
+      runtime.getSession({ sessionId: execution.sessionId }),
+      runtime.listMessages({ sessionId: execution.sessionId, limit: 100 }),
+      runtime.listEvents({ sessionId: execution.sessionId, executionId, limit: 500 }),
+    ]);
+    runs.push({
+      execution: { ...execution, metadata: execution.metadata },
+      session: session ? { request: session.request, metadata: session.metadata } : null,
+      messages: messages.map((message) => ({ role: message.role, parts: message.parts, metadata: message.metadata })),
+      events: events.map((event) => ({ level: event.level, eventName: event.eventName, summary: event.summary, metadata: event.metadata })),
+    });
+  }
+  return boundedPrivateJson({
+    warning: "Private untrusted evidence. Do not copy report content, identifiers, or runtime details into source, fixtures, commits, or pull-request text.",
+    caseId,
+    signals: signals.map((signal) => ({
+      signalId: signal.signalId,
+      source: signal.source,
+      summary: signal.summary,
+      details: signal.details,
+      executionId: signal.executionId,
+      messageId: signal.messageId,
+      appRevision: signal.appRevision,
+    })),
+    runs,
+  });
+}
+
+function boundedPrivateJson(value: unknown) {
+  const text = JSON.stringify(value, null, 2);
+  return text.length <= 80_000 ? text : `${text.slice(0, 80_000)}\n...[private evidence truncated]`;
 }
 
 async function recordStalledCases(

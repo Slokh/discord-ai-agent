@@ -82,11 +82,11 @@ Randomness and wagers add two rules: exposure is reserved before entropy is cons
 1. A member uses the bot normally.
 2. A questionable result, developer impediment, runtime anomaly, or product gap enters the unified improvement stream as a signal. `🐛` is the member-facing shortcut and is not a negative verdict.
 3. Signals are idempotent by source and only deterministic, high-confidence fingerprints coalesce automatically. Operators explicitly merge uncertain matches.
-4. The retained evidence is reconstructed without changing code. A case becomes actionable only with supporting evidence and an accepted contract whose every check has a registered, available proof producer.
-5. Explicitly authorized linked work opens a reviewable PR and moves the case to verification; a failed task returns it to the actionable inbox.
+4. The retained evidence is reconstructed in a clean checkout. Unsupported reports are dismissed; confirmed defects require an accepted contract whose every check has a registered, available proof producer.
+5. A report authorizes its confirmed repair. The repair opens an auto-merge PR; an exact ambiguity or automation blocker is the only reason to request human review.
 6. CI, read-only private contract replays, post-deploy canaries, and production observation emit typed proofs. Private replay conclusions are linked automatically to their revision-matched canonical execution. An immutable receipt resolves the case only when every active contract check passes on one verified deployment.
 
-Improvement cases are private by default and never automatically published or synchronized to GitHub. Member, agent, operator, developer, runtime, deployment, CI, and eval signals share one lifecycle and operator inbox without conflating a report with a defect. Private prompts, identities, Discord links, secrets, and unrelated server context remain in retained source evidence rather than case summaries or public metadata.
+Improvement cases are private by default and are never published as GitHub issues. All signal sources share one lifecycle without conflating a report with a defect. A confirmed repair may publish a diff-derived PR and enable auto-merge, but private prompts, identities, Discord links, secrets, and unrelated server context remain only in retained evidence and never enter source, fixtures, commits, or public PR metadata.
 
 ## Non-goals
 

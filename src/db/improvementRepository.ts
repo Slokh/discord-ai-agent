@@ -424,7 +424,7 @@ export async function recordImprovementCaseEvent(pool: DbPool, input: Parameters
 /** Records an edge-triggered automation decision without changing case lifecycle state. */
 export async function recordImprovementReconciliationDecision(pool: DbPool, input: {
   caseId: string;
-  eventName: "reconciliation.awaiting_operator" | "reconciliation.awaiting_contract" | "reconciliation.stalled";
+  eventName: "reconciliation.assessment_queued" | "reconciliation.awaiting_operator" | "reconciliation.awaiting_contract" | "reconciliation.stalled";
   reason: string;
   actorId?: string;
   metadata?: Record<string, unknown>;
@@ -600,6 +600,7 @@ export async function applyImprovementTriage(
 }
 
 function reconciliationSummary(eventName: string, reason: string) {
+  if (eventName === "reconciliation.assessment_queued") return `Queued autonomous report assessment: ${reason}.`;
   if (eventName === "reconciliation.awaiting_operator") return `Automatic reconciliation left this case for operator judgment: ${reason}.`;
   if (eventName === "reconciliation.awaiting_contract") return `Automatic reconciliation could not map the detector to a registered proof contract: ${reason}.`;
   return `Improvement case reconciliation is stalled: ${reason}.`;

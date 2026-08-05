@@ -502,6 +502,34 @@ describe("OpenRouterClient", () => {
     expect(signal?.aborted).toBe(true);
   });
 
+  it("honors a shorter caller-supplied chat timeout", async () => {
+    vi.useFakeTimers();
+    let signal: AbortSignal | undefined;
+    const fetchMock = vi.fn((_url: string, init?: RequestInit) => {
+      signal = init?.signal ?? undefined;
+      return new Promise<Response>((_resolve, reject) => {
+        signal?.addEventListener("abort", () => reject(new Error("aborted")));
+      });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const client = new OpenRouterClient(config);
+    const request = client.chat({
+      messages: [{ role: "user", content: "hello" }],
+      timeoutMs: 25_000,
+    });
+    const assertion = expect(request).rejects.toMatchObject({
+      name: "OpenRouterTimeoutError",
+      timeoutMs: 25_000,
+      path: "/chat/completions",
+    });
+
+    await vi.advanceTimersByTimeAsync(25_000);
+
+    await assertion;
+    expect(signal?.aborted).toBe(true);
+  });
+
   it("keeps the chat timeout active while consuming the response body", async () => {
     vi.useFakeTimers();
     let signal: AbortSignal | undefined;

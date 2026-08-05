@@ -74,6 +74,28 @@ describe("runObservedModelCall", () => {
     }));
   });
 
+  it("records an explicit model-call deadline", async () => {
+    const ctx = context(vi.fn(async () => ({
+      content: "done",
+      model: "test/model",
+      toolCalls: [],
+      raw: {},
+    })));
+
+    await runObservedModelCall(ctx, {
+      purpose: "external_web_research",
+      chat: {
+        messages: [{ role: "user", content: "look this up" }],
+        timeoutMs: 25_000,
+      },
+    });
+
+    expect(ctx.agentRuntime?.recordEvent).toHaveBeenCalledWith(expect.objectContaining({
+      eventName: "agent.model.call.completed",
+      metadata: expect.objectContaining({ timeoutMs: 25_000 }),
+    }));
+  });
+
   it("stores redacted debugger artifacts for the exact model prompt and response", async () => {
     const ctx = context(vi.fn(async () => ({
       content: "final answer",

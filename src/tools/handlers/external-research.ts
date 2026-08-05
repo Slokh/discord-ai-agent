@@ -5,6 +5,8 @@ import type { ToolName } from "../toolDefinition.js";
 import type { LocalToolHandler } from "./types.js";
 import type { ToolContext } from "../types.js";
 
+const HOSTED_WEB_RESEARCH_TIMEOUT_MS = 25_000;
+
 export const externalResearchToolHandlers = {
   web__run: async (ctx, route, _originalText) => {
     const operations = Array.isArray(route.arguments?.operations) ? route.arguments.operations : [];
@@ -46,6 +48,7 @@ export const externalResearchToolHandlers = {
           maxTokens: 1_200,
           reasoningEffort: "none",
           retryPolicy: "cheap",
+          timeoutMs: HOSTED_WEB_RESEARCH_TIMEOUT_MS,
         },
         metadata: { operationNames: operationKinds(operations) },
       });

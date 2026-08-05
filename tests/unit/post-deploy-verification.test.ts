@@ -32,6 +32,7 @@ describe("post-deploy verification recovery", () => {
 
   it("rolls back and verifies the prior Helm revision after a repeated failure", async () => {
     const rollback = vi.fn(async () => ({ expectedRevision: "revision-a" }));
+    const recordFailureDetection = vi.fn(async () => undefined);
     const result = await verifyReleaseWithRecovery({
       expectedRevision: "revision-b",
       previousHelmRevision: 40,
@@ -40,6 +41,7 @@ describe("post-deploy verification recovery", () => {
       verifyPrivateRegressions: vi.fn(async () => undefined),
       promote: vi.fn(async () => undefined),
       rollback,
+      recordFailureDetection,
       sleep: vi.fn(async () => undefined),
     });
     expect(result).toMatchObject({
@@ -49,6 +51,33 @@ describe("post-deploy verification recovery", () => {
       rollbackExpectedRevision: "revision-a",
     });
     expect(rollback).toHaveBeenCalledWith(40);
+    expect(recordFailureDetection).toHaveBeenCalledOnce();
+    expect(recordFailureDetection).toHaveBeenCalledWith({ failedStage: "capability_canary" });
+  });
+
+  it("retries detection after rollback without changing the release outcome", async () => {
+    const recordFailureDetection = vi.fn()
+      .mockRejectedValueOnce(new Error("new worker unavailable"))
+      .mockResolvedValueOnce(undefined);
+    const events: Record<string, unknown>[] = [];
+    const result = await verifyReleaseWithRecovery({
+      expectedRevision: "revision-b",
+      previousHelmRevision: 40,
+      attempts: 1,
+      verifyHealth: vi.fn(async () => undefined),
+      verifyCapabilities: vi.fn(async () => { throw new Error("canary failed"); }),
+      verifyPrivateRegressions: vi.fn(async () => undefined),
+      promote: vi.fn(async () => undefined),
+      rollback: vi.fn(async () => ({ expectedRevision: "revision-a" })),
+      recordFailureDetection,
+      onEvent: (event) => events.push(event),
+    });
+    expect(result.status).toBe("rolled_back");
+    expect(recordFailureDetection).toHaveBeenCalledTimes(2);
+    expect(events).toEqual(expect.arrayContaining([
+      expect.objectContaining({ stage: "improvement_detection", status: "failed" }),
+      expect.objectContaining({ stage: "improvement_detection", status: "passed" }),
+    ]));
   });
 
   it("reports a rollback failure without hiding the original failed stage", async () => {

@@ -31,7 +31,30 @@ jobs:
         run: aws eks update-kubeconfig --region "$AWS_REGION" --name "$EKS_CLUSTER_NAME"
       - name: Export and run private regressions
         run: |
+          revision="$(kubectl --namespace "$K8S_NAMESPACE" get deployment "$HELM_RELEASE-bot" -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name=="APP_REVISION")].value}')"
+          set +e
           kubectl --namespace "$K8S_NAMESPACE" exec "deployment/$HELM_RELEASE-worker" -- \
             node dist/scripts/exportImprovementEvals.js
-          kubectl --namespace "$K8S_NAMESPACE" exec "deployment/$HELM_RELEASE-worker" -- \
-            node dist/scripts/eval.js --private-only --safe-summary
+          regression_status="$?"
+          if [ "$regression_status" -eq 0 ]; then
+            kubectl --namespace "$K8S_NAMESPACE" exec "deployment/$HELM_RELEASE-worker" -- \
+              node dist/scripts/eval.js --private-only --safe-summary
+            regression_status="$?"
+          fi
+          set -e
+          if [ "$regression_status" -ne 0 ]; then
+            if ! kubectl --namespace "$K8S_NAMESPACE" exec "deployment/$HELM_RELEASE-worker" -- \
+              node dist/scripts/improve.js --target production --confirm-production detect \
+              --source eval_detection \
+              --source-id "private-regressions:$GITHUB_RUN_ID" \
+              --stable-code private-regression-suite \
+              --summary "Private regression workflow failed for deployed revision $revision." \
+              --classification defect \
+              --severity high \
+              --domain evals \
+              --scope deployment \
+              --revision "$revision"; then
+              echo "Failed to record the private regression improvement detection." >&2
+            fi
+            exit "$regression_status"
+          fi

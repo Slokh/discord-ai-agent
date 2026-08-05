@@ -60,9 +60,16 @@ describe("architecture guardrails", () => {
       path.join(process.cwd(), "scripts/postDeployVerification.ts"),
       "utf8",
     );
+    const observation = await fs.readFile(
+      path.join(process.cwd(), ".github/workflows/production-observation.yml"),
+      "utf8",
+    );
     expect(scheduled).toContain("--safe-summary");
     expect(scheduled).toContain("--private-only");
     expect(scheduled).toContain("dist/scripts/exportImprovementEvals.js");
+    expect(scheduled).toContain("dist/scripts/improve.js");
+    expect(scheduled).toContain("eval_detection");
+    expect(scheduled).toContain("private-regression-suite");
     expect(scheduled).not.toContain("exportRunFeedbackEvals");
     expect(deployment).toContain("scripts/postDeployVerification.ts");
     expect(verification).toContain("--safe-summary");
@@ -71,6 +78,12 @@ describe("architecture guardrails", () => {
     expect(verification).not.toContain("exportRunFeedbackEvals");
     expect(verification).toContain("verifyDeploymentStability");
     expect(verification).toContain("stabilitySeconds: 30");
+    expect(verification).toContain("recordFailureDetection");
+    expect(verification).toContain("deployment_detection");
+    expect(verification).toContain("eval_detection");
+    expect(observation).toContain("--record-detection");
+    expect(observation).toContain("improvements, detection");
+    expect(observation).not.toContain("feedback");
     expect(deployment).toContain("--force-conflicts");
     expect(scheduled).not.toContain("upload-artifact");
     expect(deployment).not.toContain("upload-artifact");

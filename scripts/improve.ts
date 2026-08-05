@@ -2,8 +2,12 @@ import { randomUUID } from "node:crypto";
 import { loadConfig } from "../src/config/env.js";
 import { createPool } from "../src/db/pool.js";
 import { createAppDatabase } from "../src/db/repositories.js";
-import type { ImprovementCaseStatus, ImprovementClassification, ImprovementContractCheck, ImprovementSeverity } from "../src/db/types.js";
+import type { ImprovementCase, ImprovementCaseStatus, ImprovementClassification, ImprovementContractCheck, ImprovementSeverity } from "../src/db/types.js";
 import { improvementFingerprint } from "../src/improvements/coalescing.js";
+import {
+  recordAutomatedImprovementDetection,
+  type AutomatedImprovementSource,
+} from "../src/improvements/detections.js";
 
 const args = process.argv.slice(2);
 const target = option("--target");
@@ -52,6 +56,24 @@ try {
       fingerprint,
       appRevision: config.appRevision,
     }));
+  } else if (command === "detect") {
+    const recorded = await recordAutomatedImprovementDetection(repo, {
+      source: automatedDetectionSource(requiredOption("--source")),
+      sourceId: requiredOption("--source-id"),
+      stableCode: requiredOption("--stable-code"),
+      summary: requiredOption("--summary"),
+      classification: classificationValue(requiredOption("--classification")),
+      severity: severityValue(requiredOption("--severity")),
+      owningDomain: requiredOption("--domain"),
+      scope: improvementScope(option("--scope") ?? "deployment"),
+      appRevision: option("--revision") ?? config.appRevision,
+    });
+    print({
+      caseId: recorded.case.caseId,
+      signalId: recorded.signal.signalId,
+      caseCreated: recorded.caseCreated,
+      signalCreated: recorded.signalCreated,
+    });
   } else if (command === "transition") {
     print(await repo.transitionImprovementCase({
       caseId: requiredPositional(1, "case id"),
@@ -120,9 +142,11 @@ function numberOption(name: string, fallback: number) { const value = Number(opt
 function statusValue(value: string): ImprovementCaseStatus { const values: ImprovementCaseStatus[] = ["open", "needs_evidence", "actionable", "in_progress", "verifying", "resolved", "dismissed"]; if (!values.includes(value as ImprovementCaseStatus)) fail(`Invalid status: ${value}`); return value as ImprovementCaseStatus; }
 function classificationValue(value: string): ImprovementClassification { const values: ImprovementClassification[] = ["unknown", "defect", "product_gap", "data_quality", "developer_friction", "external_incident", "expected_behavior"]; if (!values.includes(value as ImprovementClassification)) fail(`Invalid classification: ${value}`); return value as ImprovementClassification; }
 function severityValue(value: string): ImprovementSeverity { const values: ImprovementSeverity[] = ["low", "medium", "high", "critical"]; if (!values.includes(value as ImprovementSeverity)) fail(`Invalid severity: ${value}`); return value as ImprovementSeverity; }
+function automatedDetectionSource(value: string): AutomatedImprovementSource { const values: AutomatedImprovementSource[] = ["runtime_detection", "deployment_detection", "ci_detection", "eval_detection"]; if (!values.includes(value as AutomatedImprovementSource)) fail(`Invalid automated detection source: ${value}`); return value as AutomatedImprovementSource; }
+function improvementScope(value: string): ImprovementCase["scope"] { const values: ImprovementCase["scope"][] = ["guild", "repository", "deployment", "global"]; if (!values.includes(value as ImprovementCase["scope"])) fail(`Invalid improvement scope: ${value}`); return value as ImprovementCase["scope"]; }
 function evidenceDisposition(value: string) { if (value !== "supports" && value !== "contradicts" && value !== "inconclusive") fail(`Invalid evidence disposition: ${value}`); return value; }
 function parseCheck(value: string): ImprovementContractCheck { try { const parsed = JSON.parse(value) as ImprovementContractCheck; if (!parsed || typeof parsed !== "object" || typeof parsed.kind !== "string") throw new Error(); return parsed; } catch { fail(`Invalid --check JSON: ${value}`); } }
 function print(value: unknown) { process.stdout.write(`${JSON.stringify(value, null, 2)}\n`); }
 function fail(message: string): never { throw new Error(message); }
 function assertDatabaseTarget(selected: "local" | "production", databaseUrl: string) { const host = new URL(databaseUrl).hostname; const local = ["localhost", "127.0.0.1", "::1", "postgres"].includes(host); if (selected === "local" && !local) fail(`Refusing --target local for database host ${host}.`); if (selected === "production" && (process.env.NODE_ENV !== "production" || local)) fail("Production target requires NODE_ENV=production and a non-local database host."); }
-function usage() { return "Usage: npm run improve -- --target local|production [--confirm-production] inbox|show|suggest|report|transition|evidence|contract|link-task|verify|merge ..."; }
+function usage() { return "Usage: npm run improve -- --target local|production [--confirm-production] inbox|show|suggest|report|detect|transition|evidence|contract|link-task|verify|merge ..."; }

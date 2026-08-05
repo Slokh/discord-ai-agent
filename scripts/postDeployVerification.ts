@@ -26,6 +26,7 @@ export async function verifyReleaseWithRecovery(input: {
   verifyPrivateRegressions: () => Promise<void>;
   promote: () => Promise<void>;
   rollback: (helmRevision: number) => Promise<{ expectedRevision: string }>;
+  recordFailureDetection?: (input: { failedStage: PostDeployStage }) => Promise<void>;
   onEvent?: (event: Record<string, unknown>) => void;
 }): Promise<PostDeployVerificationResult> {
   const attempts = Math.max(1, Math.min(3, Math.trunc(input.attempts ?? 2)));
@@ -53,6 +54,8 @@ export async function verifyReleaseWithRecovery(input: {
     return result("passed", input.expectedRevision, null, attempted, null, null, null);
   }
 
+  const detectionRecorded = await recordFailureDetection(input, failedStage);
+
   const rollbackRevision = positiveInteger(input.previousHelmRevision);
   if (!rollbackRevision) {
     return result("verification_failed", input.expectedRevision, failedStage, attempted, null, null, error);
@@ -61,11 +64,31 @@ export async function verifyReleaseWithRecovery(input: {
   try {
     const rollback = await input.rollback(rollbackRevision);
     input.onEvent?.({ stage: "rollback", status: "passed", helmRevision: rollbackRevision, expectedRevision: rollback.expectedRevision });
+    if (!detectionRecorded) await recordFailureDetection(input, failedStage);
     return result("rolled_back", input.expectedRevision, failedStage, attempted, rollbackRevision, rollback.expectedRevision, error);
   } catch (rollbackError) {
     const rollbackMessage = message(rollbackError);
     input.onEvent?.({ stage: "rollback", status: "failed", helmRevision: rollbackRevision, error: rollbackMessage });
+    if (!detectionRecorded) await recordFailureDetection(input, failedStage);
     return result("rollback_failed", input.expectedRevision, failedStage, attempted, rollbackRevision, null, `${error}; rollback failed: ${rollbackMessage}`);
+  }
+}
+
+async function recordFailureDetection(
+  input: {
+    recordFailureDetection?: (input: { failedStage: PostDeployStage }) => Promise<void>;
+    onEvent?: (event: Record<string, unknown>) => void;
+  },
+  failedStage: PostDeployStage,
+) {
+  if (!input.recordFailureDetection) return true;
+  try {
+    await input.recordFailureDetection({ failedStage });
+    input.onEvent?.({ stage: "improvement_detection", status: "passed", failedStage });
+    return true;
+  } catch {
+    input.onEvent?.({ stage: "improvement_detection", status: "failed", failedStage });
+    return false;
   }
 }
 
@@ -183,6 +206,27 @@ async function runCli() {
       release: args.release,
       stabilitySeconds: 30,
     }),
+    recordFailureDetection: async ({ failedStage }) => {
+      const isEvalFailure = failedStage === "private_regressions";
+      const source = isEvalFailure ? "eval_detection" : "deployment_detection";
+      const stableCode = isEvalFailure ? "private-regression-suite" : `post-deploy-${failedStage}`;
+      const summary = isEvalFailure
+        ? `Private regression verification failed for revision ${args.expectedRevision}.`
+        : `Post-deploy ${failedStage.replaceAll("_", " ")} verification failed for revision ${args.expectedRevision}.`;
+      command("kubectl", [
+        "--namespace", args.namespace, "exec", `deployment/${args.release}-worker`, "--",
+        "node", "dist/scripts/improve.js", "--target", "production", "--confirm-production", "detect",
+        "--source", source,
+        "--source-id", `post-deploy:${args.deploymentId}:${failedStage}`,
+        "--stable-code", stableCode,
+        "--summary", summary,
+        "--classification", isEvalFailure ? "defect" : "external_incident",
+        "--severity", "high",
+        "--domain", isEvalFailure ? "evals" : "deployment",
+        "--scope", "deployment",
+        "--revision", args.expectedRevision,
+      ]);
+    },
     onEvent: (event) => process.stderr.write(`${JSON.stringify({ type: "release_verification", ...event })}\n`),
   });
   process.stdout.write(`${JSON.stringify(result)}\n`);

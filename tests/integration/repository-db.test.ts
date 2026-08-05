@@ -7,6 +7,7 @@ import { runConversationCompactionOnce } from "../../src/db/conversationCompacti
 import { createAppDatabase, type DiscordAiAgentRepository } from "../../src/db/repositories.js";
 import { runDataRetentionOnce } from "../../src/observability/dataRetention.js";
 import { passingRandomCanaryChannel, passingStatsCanaryChannel, passingWebCanaryChannel } from "../../src/observability/postDeployCanaryEvidence.js";
+import { recordAutomatedImprovementDetection } from "../../src/improvements/detections.js";
 import { createIsolatedTestDatabase, type IsolatedTestDatabase } from "./testDatabase.js";
 import { cleanupRepositoryTestRows, sha256Hex } from "./repositoryTestSupport.js";
 
@@ -165,6 +166,44 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
     await expect(repo.listImprovementSignalsForReporter({ guildId, reporterId: userId })).resolves.toHaveLength(2);
     await repo.requestUserDeletion(userId);
     await expect(repo.listImprovementSignalsForReporter({ guildId, reporterId: userId })).resolves.toEqual([]);
+  });
+
+  it("idempotently coalesces automated detections across observations and revisions", async () => {
+    const first = await recordAutomatedImprovementDetection(repo, {
+      source: "runtime_detection",
+      sourceId: "revision-quality:revision-a",
+      summary: "Production quality gate failed for revision revision-a.",
+      stableCode: "revision-quality-gate",
+      appRevision: "revision-a",
+      classification: "external_incident",
+      severity: "high",
+      owningDomain: "observability",
+    });
+    const repeated = await recordAutomatedImprovementDetection(repo, {
+      source: "runtime_detection",
+      sourceId: "revision-quality:revision-a",
+      summary: "Production quality gate failed for revision revision-a.",
+      stableCode: "revision-quality-gate",
+      appRevision: "revision-a",
+      classification: "external_incident",
+      severity: "high",
+      owningDomain: "observability",
+    });
+    const laterRevision = await recordAutomatedImprovementDetection(repo, {
+      source: "runtime_detection",
+      sourceId: "revision-quality:revision-b",
+      summary: "Production quality gate failed for revision revision-b.",
+      stableCode: "revision-quality-gate",
+      appRevision: "revision-b",
+      classification: "external_incident",
+      severity: "high",
+      owningDomain: "observability",
+    });
+
+    expect(repeated.signal.signalId).toBe(first.signal.signalId);
+    expect(repeated.signalCreated).toBe(false);
+    expect(laterRevision.case.caseId).toBe(first.case.caseId);
+    expect(laterRevision.signal.signalId).not.toBe(first.signal.signalId);
   });
 
   it("links explicit work and requires deployed evidence before resolving", async () => {

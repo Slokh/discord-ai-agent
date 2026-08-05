@@ -4,6 +4,7 @@ import {
   assessRevisionQuality,
   collectRevisionQuality,
   findBaselineRevision,
+  revisionQualityDetectionInput,
   type RevisionQuality,
 } from "../../src/observability/revisionQuality.js";
 
@@ -95,6 +96,26 @@ describe("assessRevisionQuality", () => {
     }));
     expect(assessment.metrics).toMatchObject({ toolCalls: 1, toolAttempts: 4, toolRetries: 3, recoveredValidationRetries: 3, toolFailures: 0 });
     expect(assessment.violations).not.toEqual(expect.arrayContaining([expect.stringContaining("tool failure rate")]));
+  });
+
+  it("creates a safe runtime detection only for a failed quality assessment", () => {
+    const failedQuality = quality({ succeeded: 2 }, {
+      signals: [{ level: "error", count: 1 }],
+    });
+    const failed = assessRevisionQuality(failedQuality);
+    expect(revisionQualityDetectionInput(failedQuality, failed)).toMatchObject({
+      source: "runtime_detection",
+      sourceId: "revision-quality:test-revision",
+      stableCode: "revision-quality-gate",
+      appRevision: "test-revision",
+      metadata: {
+        assessmentStatus: "fail",
+        violations: ["1 error signals exceed 0"],
+      },
+    });
+
+    const waitingQuality = quality({ succeeded: 0 }, { tools: [] });
+    expect(revisionQualityDetectionInput(waitingQuality, assessRevisionQuality(waitingQuality))).toBeNull();
   });
 });
 

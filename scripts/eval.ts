@@ -21,6 +21,9 @@ const evalPromptSchema = z.object({
   id: z.string().min(1),
   category: z.string().min(1),
   sourceRevision: z.string().min(1).optional(),
+  improvementCaseId: z.string().min(1).optional(),
+  improvementContractId: z.string().min(1).optional(),
+  improvementContractVersion: z.number().int().positive().optional(),
   prompt: z.string().min(1),
   notes: z.string().optional(),
   expectedTools: z.array(z.string().min(1)).default([]),
@@ -79,6 +82,7 @@ export type EvalArgs = {
   list: boolean;
   json: boolean;
   safeSummary: boolean;
+  recordImprovementResults: boolean;
   promptTimeoutMs: number;
 };
 
@@ -96,6 +100,9 @@ export type EvalCaseResult = {
   id: string;
   category: string;
   sourceRevision?: string;
+  improvementCaseId?: string;
+  improvementContractId?: string;
+  improvementContractVersion?: number;
   prompt: string;
   status: "passed" | "failed" | "error" | "skipped";
   durationMs: number;
@@ -177,6 +184,7 @@ async function main() {
   const report = await runEvalPrompts(selectedPrompts, args);
   const comparison = args.comparePath ? compareEvalReports(await loadEvalReport(args.comparePath), report, args.comparePath) : null;
   const outputPath = await writeEvalReport(report, args.outputDir, comparison);
+  if (args.recordImprovementResults) await recordImprovementResults(report, args);
   const hasFailures = report.totals.failed > 0 || report.totals.error > 0;
   if (args.safeSummary) {
     process.stdout.write(`${JSON.stringify(safeEvalSummary(report), null, 2)}\n`);
@@ -203,6 +211,7 @@ export function parseEvalArgs(argv: string[]): EvalArgs {
     list: false,
     json: false,
     safeSummary: false,
+    recordImprovementResults: false,
     promptTimeoutMs: DEFAULT_TIMEOUT_MS
   };
 
@@ -248,6 +257,8 @@ export function parseEvalArgs(argv: string[]): EvalArgs {
       args.json = true;
     } else if (arg === "--safe-summary") {
       args.safeSummary = true;
+    } else if (arg === "--record-improvement-results") {
+      args.recordImprovementResults = true;
     } else if (arg === "--prompt-timeout-ms") {
       args.promptTimeoutMs = positiveInteger(requiredNext(argv, ++index, arg), arg);
     } else if (arg.startsWith("--prompt-timeout-ms=")) {
@@ -314,7 +325,12 @@ export async function runEvalPrompts(prompts: EvalPrompt[], args: EvalArgs): Pro
 
   try {
     for (const prompt of prompts) {
-      results.push(await runEvalPrompt(prompt, args, traceReader));
+      results.push({
+        ...await runEvalPrompt(prompt, args, traceReader),
+        ...(prompt.improvementCaseId ? { improvementCaseId: prompt.improvementCaseId } : {}),
+        ...(prompt.improvementContractId ? { improvementContractId: prompt.improvementContractId } : {}),
+        ...(prompt.improvementContractVersion ? { improvementContractVersion: prompt.improvementContractVersion } : {}),
+      });
     }
   } finally {
     await traceReader?.close().catch(() => undefined);
@@ -600,6 +616,43 @@ export function safeEvalSummary(report: EvalRunReport) {
   };
 }
 
+async function recordImprovementResults(report: EvalRunReport, args: EvalArgs) {
+  if (!args.includePrivate || args.dirs.some((dir) => dir !== DEFAULT_PRIVATE_EVAL_DIR)) {
+    throw new Error("--record-improvement-results requires --private-only.");
+  }
+  const [{ loadConfig }, { createPool }, { createAppDatabase }] = await Promise.all([
+    import("../src/config/env.js"),
+    import("../src/db/pool.js"),
+    import("../src/db/repositories.js"),
+  ]);
+  const config = loadConfig();
+  const deploymentId = config.releaseNotes.verificationId;
+  if (!deploymentId) throw new Error("Release verification ID is required to record improvement results.");
+  const results = report.results.flatMap((result) => {
+    if (!result.improvementCaseId || !result.improvementContractId || !result.improvementContractVersion) return [];
+    const status = result.status === "passed" ? "passed" as const
+      : result.status === "skipped" ? "inconclusive" as const
+        : "failed" as const;
+    return [{
+      caseId: result.improvementCaseId,
+      contractId: result.improvementContractId,
+      contractVersion: result.improvementContractVersion,
+      revision: config.appRevision,
+      deploymentId,
+      status,
+      referenceId: result.id,
+      runKey: report.generatedAt,
+      durationMs: result.durationMs,
+    }];
+  });
+  const pool = createPool(config);
+  try {
+    await createAppDatabase(pool).recordImprovementEvalResults(results);
+  } finally {
+    await pool.end();
+  }
+}
+
 export function compareEvalReports(baseline: EvalRunReport, current: EvalRunReport, baselinePath: string): EvalComparisonReport {
   const beforeById = new Map(baseline.results.map((result) => [result.id, result]));
   const afterById = new Map(current.results.map((result) => [result.id, result]));
@@ -821,6 +874,7 @@ Options:
   --dry-run                  Validate selected prompts without running them.
   --json                     Print the final report as JSON.
   --safe-summary             Print only counts grouped by source revision and category.
+  --record-improvement-results  Persist content-free per-contract results (requires --private-only).
 `);
 }
 

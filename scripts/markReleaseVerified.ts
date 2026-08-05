@@ -13,8 +13,20 @@ if (!deploymentId || deploymentId !== config.releaseNotes.verificationId) {
 }
 const pool = createPool(config);
 try {
-  await createAppDatabase(pool).markDeploymentVerified({ revision, deploymentId });
-  process.stdout.write(`${JSON.stringify({ status: "promoted", revision, deploymentId })}\n`);
+  const repo = createAppDatabase(pool);
+  await repo.markDeploymentVerified({ revision, deploymentId });
+  let improvementVerification: Record<string, number>;
+  try {
+    const results = await repo.verifyImprovementCasesForDeployment({ revision, deploymentId });
+    improvementVerification = results.reduce<Record<string, number>>((counts, result) => {
+      counts[result.status] = (counts[result.status] ?? 0) + 1;
+      if (result.recorded) counts.recorded = (counts.recorded ?? 0) + 1;
+      return counts;
+    }, {});
+  } catch {
+    improvementVerification = { error: 1 };
+  }
+  process.stdout.write(`${JSON.stringify({ status: "promoted", revision, deploymentId, improvementVerification })}\n`);
 } finally {
   await pool.end();
 }

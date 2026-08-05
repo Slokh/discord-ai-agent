@@ -17,6 +17,7 @@ import {
   improvementTriageSnapshotKey,
   type ImprovementTriageApplication,
 } from "../improvements/triage.js";
+import { rowToImprovementVerificationReceipt } from "./improvementVerificationRepository.js";
 
 export type RecordImprovementSignalInput = {
   source: ImprovementSignalSource;
@@ -263,11 +264,12 @@ export async function suggestImprovementCaseMerges(pool: DbPool, input: { caseId
 }
 
 export async function getImprovementCase(pool: DbPool, caseId: string) {
-  const [caseResult, signals, evidence, contracts, events] = await Promise.all([
+  const [caseResult, signals, evidence, contracts, verificationReceipts, events] = await Promise.all([
     pool.query("SELECT * FROM improvement_cases WHERE case_id = $1", [caseId]),
     pool.query("SELECT * FROM improvement_signals WHERE case_id = $1 ORDER BY observed_at ASC", [caseId]),
     pool.query("SELECT * FROM improvement_evidence WHERE case_id = $1 ORDER BY created_at ASC", [caseId]),
     pool.query("SELECT * FROM improvement_contracts WHERE case_id = $1 ORDER BY version DESC", [caseId]),
+    pool.query("SELECT * FROM improvement_verification_receipts WHERE case_id = $1 ORDER BY created_at DESC", [caseId]),
     pool.query("SELECT * FROM improvement_case_events WHERE case_id = $1 ORDER BY event_id ASC", [caseId]),
   ]);
   if (!caseResult.rows[0]) return undefined;
@@ -276,6 +278,7 @@ export async function getImprovementCase(pool: DbPool, caseId: string) {
     signals: signals.rows.map(rowToImprovementSignal),
     evidence: evidence.rows.map(rowToEvidence),
     contracts: contracts.rows.map(rowToContract),
+    verificationReceipts: verificationReceipts.rows.map(rowToImprovementVerificationReceipt),
     events: events.rows.map(rowToEvent),
   };
 }
@@ -298,19 +301,13 @@ export async function transitionImprovementCase(pool: DbPool, input: {
     if (!currentResult.rows[0]) throw new Error(`Improvement case ${input.caseId} was not found.`);
     const current = rowToImprovementCase(currentResult.rows[0]);
     if (input.expectedVersion != null && current.version !== input.expectedVersion) throw new Error(`Improvement case ${input.caseId} changed; expected version ${input.expectedVersion}, found ${current.version}.`);
+    if (input.to === "resolved") throw new Error("Improvement cases resolve only through a passed verification receipt.");
     assertImprovementTransition(current.status, input.to);
     if (input.to === "actionable") {
       const contract = await client.query("SELECT checks FROM improvement_contracts WHERE case_id = $1 AND active = true", [input.caseId]);
       assertActionableContract((contract.rows[0]?.checks ?? []) as ImprovementContractCheck[]);
       const evidence = await client.query("SELECT 1 FROM improvement_evidence WHERE case_id = $1 AND disposition = 'supports' LIMIT 1", [input.caseId]);
       if (!evidence.rowCount) throw new Error("An actionable improvement case requires supporting evidence.");
-    }
-    if (input.to === "resolved") {
-      const verified = await client.query(
-        "SELECT 1 FROM improvement_evidence WHERE case_id = $1 AND kind = 'deployment_verification' AND disposition = 'supports' LIMIT 1",
-        [input.caseId],
-      );
-      if (!verified.rowCount) throw new Error("A verifying improvement case requires successful deployment evidence before resolution.");
     }
     const updated = await client.query(
       `UPDATE improvement_cases SET status = $2, classification = coalesce($3, classification), severity = coalesce($4, severity),
@@ -585,38 +582,6 @@ export async function linkImprovementCaseTask(pool: DbPool, input: { caseId: str
     await client.query("UPDATE agent_tasks SET improvement_case_id = $2, updated_at = now() WHERE task_id = $1", [input.taskId, input.caseId]);
     const updated = await client.query("UPDATE improvement_cases SET status = 'in_progress', version = version + 1, updated_at = now() WHERE case_id = $1 RETURNING *", [input.caseId]);
     await insertCaseEvent(client, { caseId: input.caseId, eventName: "work.started", actorKind: "operator", actorId: input.actorId, metadata: { taskId: input.taskId } });
-    await client.query("COMMIT");
-    return rowToImprovementCase(updated.rows[0]);
-  } catch (error) { await client.query("ROLLBACK").catch(() => undefined); throw error; }
-  finally { client.release(); }
-}
-
-export async function verifyImprovementCase(pool: DbPool, input: {
-  caseId: string; revision: string; summary: string; actorId: string; privacy?: ImprovementPrivacy;
-}) {
-  const client = await pool.connect();
-  try {
-    await client.query("BEGIN");
-    const caseResult = await client.query("SELECT * FROM improvement_cases WHERE case_id = $1 FOR UPDATE", [input.caseId]);
-    if (!caseResult.rows[0]) throw new Error(`Improvement case ${input.caseId} was not found.`);
-    const current = rowToImprovementCase(caseResult.rows[0]);
-    if (current.status !== "verifying") throw new Error("Only a verifying improvement case can be resolved by deployed evidence.");
-    const contract = await client.query("SELECT 1 FROM improvement_contracts WHERE case_id = $1 AND active = true AND executable = true", [input.caseId]);
-    if (!contract.rowCount) throw new Error("Deployment verification requires an active executable contract.");
-    const revision = required(input.revision, "revision", 200);
-    const summary = required(input.summary, "summary", 4_000);
-    const evidenceId = `evi-${randomUUID()}`;
-    await client.query(
-      `INSERT INTO improvement_evidence(evidence_id,case_id,kind,disposition,summary,reference_type,reference_id,privacy,metadata)
-       VALUES ($1,$2,'deployment_verification','supports',$3,'deployment_revision',$4,$5,$6)`,
-      [evidenceId, input.caseId, summary, revision, input.privacy ?? "private", JSON.stringify({ revision })],
-    );
-    const updated = await client.query(
-      `UPDATE improvement_cases SET status = 'resolved', resolution = $2, resolved_at = now(), version = version + 1, updated_at = now()
-       WHERE case_id = $1 RETURNING *`,
-      [input.caseId, `Verified on deployment ${revision}.`],
-    );
-    await insertCaseEvent(client, { caseId: input.caseId, eventName: "case.resolved", actorKind: "operator", actorId: input.actorId, summary, metadata: { revision, evidenceId } });
     await client.query("COMMIT");
     return rowToImprovementCase(updated.rows[0]);
   } catch (error) { await client.query("ROLLBACK").catch(() => undefined); throw error; }

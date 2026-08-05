@@ -84,7 +84,7 @@ Randomness and wagers add two rules: exposure is reserved before entropy is cons
 3. Signals are idempotent by source and only deterministic, high-confidence fingerprints coalesce automatically. Operators explicitly merge uncertain matches.
 4. The retained evidence is reconstructed without changing code. A case becomes actionable only with supporting evidence and an accepted contract containing a machine-executable check.
 5. Explicitly authorized linked work opens a reviewable PR and moves the case to verification; a failed task returns it to the actionable inbox.
-6. CI, the post-deploy capability canary, and contract-specific deployed evidence confirm the result before resolution.
+6. CI, private contract replays, post-deploy canaries, production observation, and revision-matched runtime evidence emit typed proofs. An immutable receipt resolves the case only when every active contract check passes on one verified deployment.
 
 Improvement cases are private by default and never automatically published or synchronized to GitHub. Member, agent, operator, developer, runtime, deployment, CI, and eval signals share one lifecycle and operator inbox without conflating a report with a defect. Private prompts, identities, Discord links, secrets, and unrelated server context remain in retained source evidence rather than case summaries or public metadata.
 

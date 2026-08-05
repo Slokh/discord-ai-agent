@@ -1,4 +1,5 @@
 import type { DbPool } from "../db/pool.js";
+import type { AutomatedImprovementDetectionInput } from "../improvements/detections.js";
 
 const MEMBER_COHORT_SQL = "coalesce(nullif(execution.metadata->>'qualityCohort', ''), nullif(session.metadata->>'qualityCohort', '')) = 'member'";
 
@@ -261,6 +262,33 @@ export function assessRevisionQuality(
     return { status: "insufficient_data", recommendation: "observe", sample, metrics, violations, comparisons };
   }
   return { status: "pass", recommendation: "rollout_healthy", sample, metrics, violations, comparisons };
+}
+
+/** Converts only a terminal failed gate into a content-free automated observation. */
+export function revisionQualityDetectionInput(
+  quality: RevisionQuality,
+  assessment: RevisionHealthAssessment,
+): AutomatedImprovementDetectionInput | null {
+  if (assessment.status !== "fail") return null;
+  return {
+    source: "runtime_detection",
+    sourceId: `revision-quality:${quality.revision}`,
+    summary: `Production quality gate failed for revision ${quality.revision}.`,
+    stableCode: "revision-quality-gate",
+    appRevision: quality.revision,
+    scope: "deployment",
+    classification: "external_incident",
+    severity: "high",
+    owningDomain: "observability",
+    metadata: {
+      assessmentStatus: assessment.status,
+      recommendation: assessment.recommendation,
+      windowHours: quality.windowHours,
+      violations: assessment.violations,
+      comparisons: assessment.comparisons,
+      metrics: assessment.metrics,
+    },
+  };
 }
 
 function qualityMetrics(quality: RevisionQuality): RevisionHealthAssessment["metrics"] {

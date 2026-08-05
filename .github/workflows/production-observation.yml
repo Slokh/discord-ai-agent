@@ -33,10 +33,10 @@ jobs:
           revision="$(kubectl --namespace "$K8S_NAMESPACE" get deployment "$HELM_RELEASE-bot" -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name=="APP_REVISION")].value}')"
           set +e
           kubectl --namespace "$K8S_NAMESPACE" exec "deployment/$HELM_RELEASE-worker" -- \
-            node dist/scripts/revisionQuality.js --revision "$revision" --hours 48 --compare --enforce > revision-quality.json
+            node dist/scripts/revisionQuality.js --revision "$revision" --hours 48 --compare --enforce --record-detection > revision-quality.json
           quality_status="$?"
           set -e
-          jq '{revision, windowHours, generatedAt, assessment, baseline: (.baseline | if . then {revision, assessment} else null end), answers, tools, signals, deliveries, feedback}' revision-quality.json >> "$GITHUB_STEP_SUMMARY"
+          jq '{revision, windowHours, generatedAt, assessment, baseline: (.baseline | if . then {revision, assessment} else null end), answers, tools, signals, deliveries, improvements, detection}' revision-quality.json >> "$GITHUB_STEP_SUMMARY"
           exit "$quality_status"
       - uses: actions/upload-artifact@v7
         if: always()

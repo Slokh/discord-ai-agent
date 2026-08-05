@@ -33,13 +33,6 @@ export const openRouterServerToolRegistry: OpenRouterServerToolRegistryEntry[] =
     toolClass: "external",
     group: "external",
     outputContract: ["requested URL", "relevant fetched page content", "source URL"]
-  },
-  {
-    type: "openrouter:datetime",
-    description: "Get the current date and time for time-sensitive questions.",
-    toolClass: "external",
-    group: "external",
-    outputContract: ["current date/time", "timezone or locale context when available"]
   }
 ];
 

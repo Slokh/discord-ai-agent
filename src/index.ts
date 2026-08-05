@@ -23,6 +23,7 @@ async function main() {
   const startsEmbeddingWorker = startsWorker && config.worker.embeddingEnabled;
   const startsTaskWorker = startsWorker && config.worker.taskEnabled;
   const startsAgentRuntimeWorker = startsWorker && config.worker.agentRuntimeEnabled;
+  const startsImprovementWorker = startsWorker;
   const startsDiscordClient = startsBot || startsCrawlWorker || startsAgentRuntimeWorker;
   const startsPaymentRuntime = startsBot || startsAgentRuntimeWorker;
   if (startsBot || startsCrawlWorker || startsAgentRuntimeWorker) assertDiscordConfig(config);
@@ -55,7 +56,8 @@ async function main() {
         crawlEnabled: startsCrawlWorker,
         embeddingEnabled: startsEmbeddingWorker,
         taskEnabled: startsTaskWorker,
-        agentRuntimeEnabled: startsAgentRuntimeWorker
+        agentRuntimeEnabled: startsAgentRuntimeWorker,
+        improvementEnabled: startsImprovementWorker
       },
       payments: {
         walletEnabled: config.payments.walletEnabled,
@@ -120,7 +122,7 @@ async function main() {
         }
       };
   logger.info(
-    { startsApi, startsBot, startsWorker, startsCrawlWorker, startsEmbeddingWorker, startsTaskWorker, startsAgentRuntimeWorker },
+    { startsApi, startsBot, startsWorker, startsCrawlWorker, startsEmbeddingWorker, startsTaskWorker, startsAgentRuntimeWorker, startsImprovementWorker },
     "Starting job runtime"
   );
   const jobs = await startJobs({
@@ -145,14 +147,16 @@ async function main() {
     embeddingWorker: startsEmbeddingWorker,
     taskWorker: startsTaskWorker,
     agentRuntimeWorker: startsAgentRuntimeWorker,
+    improvementWorker: startsImprovementWorker,
     repo,
     agentRuntimeRepo,
+    deliveryObligations: deliveryObligationsRepo,
     openRouter,
     db: pool
   });
   jobRuntimeRef.current = jobs;
   logger.info(
-    { startsApi, startsBot, startsWorker, startsCrawlWorker, startsEmbeddingWorker, startsTaskWorker, startsAgentRuntimeWorker },
+    { startsApi, startsBot, startsWorker, startsCrawlWorker, startsEmbeddingWorker, startsTaskWorker, startsAgentRuntimeWorker, startsImprovementWorker },
     "Job runtime ready"
   );
   const callbackServer = startsApi ? await startSandboxCallbackServer({ config, repo, agentRuntime: agentRuntimeRepo }) : null;

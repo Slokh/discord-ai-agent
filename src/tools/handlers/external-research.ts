@@ -8,8 +8,19 @@ import type { ToolContext } from "../types.js";
 export const externalResearchToolHandlers = {
   web__run: async (ctx, route, _originalText) => {
     const operations = Array.isArray(route.arguments?.operations) ? route.arguments.operations : [];
-    const commands = JSON.stringify(toHostedOperations(operations));
-    const hostedTools = hostedToolsForOperations(operations);
+    const hostedOperations = operations.filter((operation) => objectValue(operation).kind !== "time");
+    const timeEvidence = operations
+      .filter((operation) => objectValue(operation).kind === "time")
+      .map((operation) => currentTimeEvidence(String(objectValue(operation).utcOffset)));
+    if (hostedOperations.length === 0) {
+      const content = timeEvidence.join("\n");
+      await auditWebResearch(ctx, operations, {
+        resultSummary: summarizeForAudit({ operationNames: operationKinds(operations), outputChars: content.length }),
+      });
+      return { content };
+    }
+    const commands = JSON.stringify(toHostedOperations(hostedOperations));
+    const hostedTools = hostedToolsForOperations(hostedOperations);
     let response;
     try {
       response = await runObservedModelCall(ctx, {
@@ -62,7 +73,7 @@ export const externalResearchToolHandlers = {
       }),
     });
     return {
-      content: [response.content.trim(), citations.length ? `Sources:\n${citations.map((url) => `- ${url}`).join("\n")}` : ""]
+      content: [...timeEvidence, response.content.trim(), citations.length ? `Sources:\n${citations.map((url) => `- ${url}`).join("\n")}` : ""]
         .filter(Boolean)
         .join("\n\n"),
     };
@@ -93,7 +104,6 @@ function hostedToolsForOperations(operations: unknown[]) {
     const kind = objectValue(operation).kind;
     if (kind === "search") requestedTypes.add("openrouter:web_search");
     if (kind === "open") requestedTypes.add("openrouter:web_fetch");
-    if (kind === "time") requestedTypes.add("openrouter:datetime");
   }
   return openRouterServerToolDefinitionsForModel().filter((tool) => requestedTypes.has(tool.type));
 }
@@ -101,14 +111,19 @@ function hostedToolsForOperations(operations: unknown[]) {
 function toHostedOperations(operations: unknown[]) {
   const search_query: Record<string, unknown>[] = [];
   const open: Record<string, unknown>[] = [];
-  const time: Record<string, unknown>[] = [];
   for (const value of operations) {
     const operation = objectValue(value);
     if (operation.kind === "search") search_query.push(compact({ q: operation.query, recency: operation.recency, domains: operation.domains }));
     if (operation.kind === "open") open.push(compact({ ref_id: operation.refId, lineno: operation.lineno }));
-    if (operation.kind === "time") time.push({ utc_offset: operation.utcOffset });
   }
-  return compact({ search_query: search_query.length ? search_query : undefined, open: open.length ? open : undefined, time: time.length ? time : undefined });
+  return compact({ search_query: search_query.length ? search_query : undefined, open: open.length ? open : undefined });
+}
+
+function currentTimeEvidence(utcOffset: string, now = new Date()) {
+  const sign = utcOffset.startsWith("-") ? -1 : 1;
+  const [hours, minutes] = utcOffset.slice(1).split(":").map(Number);
+  const shifted = new Date(now.getTime() + sign * (hours * 60 + minutes) * 60_000);
+  return `Current time at UTC${utcOffset}: ${shifted.toISOString().slice(0, 19).replace("T", " ")} UTC${utcOffset}`;
 }
 
 function operationKinds(operations: unknown[]) {

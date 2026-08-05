@@ -87,6 +87,7 @@ npm run improve -- --target local show <case-id>
 npm run improve -- --target local triage <case-id>
 npm run improve -- --target local verify <case-id> --revision <sha>
 npm run improve -- --target local verify <case-id> --revision <sha> --apply
+npm run improve -- --target local reconcile
 npm run improve -- --target local suggest <case-id>
 npm run improve -- --target local evidence <case-id> --kind runtime_trace --disposition supports --summary "..."
 npm run improve -- --target local contract <case-id> --expected "..." --check '{"kind":"test","reference":"release-verify"}'
@@ -98,6 +99,7 @@ Production access is explicit and requires confirmation. The production image om
 kubectl -n discord-ai-agent exec deploy/discord-ai-agent-worker -- node dist/scripts/improve.js --target production --confirm-production inbox
 kubectl -n discord-ai-agent exec deploy/discord-ai-agent-worker -- node dist/scripts/improve.js --target production --confirm-production show <case-id>
 kubectl -n discord-ai-agent exec deploy/discord-ai-agent-worker -- node dist/scripts/improve.js --target production --confirm-production triage <case-id>
+kubectl -n discord-ai-agent exec deploy/discord-ai-agent-worker -- node dist/scripts/improve.js --target production --confirm-production reconcile
 kubectl -n discord-ai-agent exec deploy/discord-ai-agent-worker -- node dist/scripts/improve.js --target production --confirm-production verify <case-id> --revision <sha> --apply
 ```
 
@@ -132,6 +134,8 @@ Every source feeds the same case stream. Source keys provide exact idempotency; 
 Trusted runtime, deployment, CI, and eval observers use the same private intake contract. They provide a stable observation ID for exact idempotency and a separate stable failure code for cross-run coalescing. The intake accepts only bounded identifiers and content-minimized summaries; it never accepts prompt, reply, member, or private-eval payloads. Terminal failures create signals, while passing, awaiting-traffic, and insufficient-data observations do not. PR jobs remain isolated from production credentials; `ci_detection` is available only to a trusted configured caller and does not synchronize cases to GitHub.
 
 `triage <case-id>` is read-only by default and reconstructs a redacted dossier from active signals plus content-free runtime and delivery aggregates. `triage <case-id> --apply` records the reviewed conclusion, evidence, contract, ownership fields, and lifecycle transition atomically and idempotently; an explicit verdict override requires an operator evidence summary. Triage never starts work. Moving a case to `actionable` requires supporting evidence and an accepted contract whose every check resolves to a registered proof adapter with its inputs available. `suggest` returns same-boundary title candidates but never merges them. Explicitly requested linked coding work moves the case to `in_progress`; member-owned cases can link during `runCodingAgent`, while operator cases can attach an already queued/running task with `link-task <case-id> --task <task-id>`. Success moves the case to `verifying`, while failure returns it to `actionable`. `verify <case-id> --revision <sha>` is read-only by default and derives typed check results from retained source-owned proof; `--apply` writes the immutable receipt and lifecycle transition. Free-form success summaries and operator-selected executions cannot resolve a case. Never copy private source evidence into a public issue, PR metadata, or tracked fixtures.
+
+The worker-owned `improvement.reconcile` job runs at startup and every five minutes. It automatically applies triage only for known source-owned detector codes, refreshes active pull-request work, retries verification against the newest durable promotion, and emits edge-triggered stalled/awaiting-operator decisions. A repeated pass is a no-op at every lifecycle boundary. Inspect unknown detectors and subjective reports through the normal inbox; they are deliberately never auto-confirmed. A reconciliation failure is retried by pg-boss and logged with aggregate statuses, while case-local PR or verification failures remain isolated from the rest of the pass.
 
 Active contracts that the prompt evaluator can represent are exported into the private regression suite:
 

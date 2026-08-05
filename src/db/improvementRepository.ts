@@ -248,6 +248,24 @@ export async function listImprovementCases(pool: DbPool, input: { statuses?: Imp
   return result.rows.map(rowToImprovementCase);
 }
 
+/** Keyset page for background reconciliation so a full manual inbox cannot starve older cases. */
+export async function listImprovementCasesForReconciliation(pool: DbPool, input: {
+  statuses: ImprovementCaseStatus[];
+  afterCaseId?: string | null;
+  limit?: number;
+}) {
+  const result = await pool.query(
+    `SELECT * FROM improvement_cases
+     WHERE merged_into_case_id IS NULL
+       AND status = ANY($1::text[])
+       AND ($2::text IS NULL OR case_id > $2)
+     ORDER BY case_id ASC
+     LIMIT $3`,
+    [input.statuses, input.afterCaseId ?? null, boundedLimit(input.limit, 500)],
+  );
+  return result.rows.map(rowToImprovementCase);
+}
+
 export async function suggestImprovementCaseMerges(pool: DbPool, input: { caseId: string; limit?: number }) {
   const result = await pool.query(
     `SELECT candidate.*, similarity(source.title, candidate.title)::float AS similarity
@@ -403,10 +421,51 @@ export async function recordImprovementCaseEvent(pool: DbPool, input: Parameters
   await insertCaseEvent(pool, input);
 }
 
+/** Records an edge-triggered automation decision without changing case lifecycle state. */
+export async function recordImprovementReconciliationDecision(pool: DbPool, input: {
+  caseId: string;
+  eventName: "reconciliation.awaiting_operator" | "reconciliation.awaiting_contract" | "reconciliation.stalled";
+  reason: string;
+  actorId?: string;
+  metadata?: Record<string, unknown>;
+}) {
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const improvementCase = await client.query("SELECT case_id FROM improvement_cases WHERE case_id = $1 FOR UPDATE", [input.caseId]);
+    if (!improvementCase.rowCount) throw new Error(`Improvement case ${input.caseId} was not found.`);
+    const previous = await client.query(
+      `SELECT event_name, metadata FROM improvement_case_events
+       WHERE case_id = $1 ORDER BY event_id DESC LIMIT 1`,
+      [input.caseId],
+    );
+    const previousMetadata = object(previous.rows[0]?.metadata);
+    if (previous.rows[0]?.event_name === input.eventName && previousMetadata.reason === input.reason) {
+      await client.query("COMMIT");
+      return { recorded: false };
+    }
+    await insertCaseEvent(client, {
+      caseId: input.caseId,
+      eventName: input.eventName,
+      actorKind: "automation",
+      actorId: input.actorId ?? "improvement-reconciler",
+      summary: reconciliationSummary(input.eventName, input.reason),
+      metadata: { ...(input.metadata ?? {}), reason: input.reason },
+    });
+    await client.query("COMMIT");
+    return { recorded: true };
+  } catch (error) {
+    await client.query("ROLLBACK").catch(() => undefined);
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
 /** Atomically records one reviewed signal snapshot and applies its lifecycle decision exactly once. */
 export async function applyImprovementTriage(
   pool: DbPool,
-  input: ImprovementTriageApplication & { actorId: string },
+  input: ImprovementTriageApplication & { actorId: string; actorKind?: "operator" | "automation" },
 ) {
   if (input.applicationKey !== improvementTriageApplicationKey(input)) {
     throw new Error("Improvement triage application key does not match its decision.");
@@ -517,7 +576,7 @@ export async function applyImprovementTriage(
     await insertCaseEvent(client, {
       caseId: input.caseId,
       eventName: "triage.applied",
-      actorKind: "operator",
+      actorKind: input.actorKind ?? "operator",
       actorId: input.actorId,
       summary: `Triage concluded ${input.verdict}.`,
       metadata: {
@@ -538,6 +597,12 @@ export async function applyImprovementTriage(
   } finally {
     client.release();
   }
+}
+
+function reconciliationSummary(eventName: string, reason: string) {
+  if (eventName === "reconciliation.awaiting_operator") return `Automatic reconciliation left this case for operator judgment: ${reason}.`;
+  if (eventName === "reconciliation.awaiting_contract") return `Automatic reconciliation could not map the detector to a registered proof contract: ${reason}.`;
+  return `Improvement case reconciliation is stalled: ${reason}.`;
 }
 
 export async function clearImprovementDataForUser(pool: DbPool, userId: string) {

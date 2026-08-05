@@ -91,7 +91,7 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
         appRevision: "test-revision", callId: `call-${randomUUID()}`, purpose: "external_web_research",
         requestedModel: "test/model", messageCount: 1, promptBytes: 10, promptFingerprint: "a".repeat(64),
         messageBytesByRole: { user: 10 }, toolCount: 1, toolSchemaBytes: 10, toolSchemaFingerprint: "b".repeat(64),
-        offeredTools: ["openrouter:datetime"], maxTokens: 100, serverToolUse: { datetime_requests: 1 },
+        offeredTools: ["openrouter:web_search"], maxTokens: 100, serverToolUse: { web_search_requests: 1 },
       },
     });
 
@@ -206,6 +206,35 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
     expect(repeated.signalCreated).toBe(false);
     expect(laterRevision.case.caseId).toBe(first.case.caseId);
     expect(laterRevision.signal.signalId).not.toBe(first.signal.signalId);
+  });
+
+  it("records reconciliation decisions only when the case edge changes", async () => {
+    const recorded = await repo.recordImprovementSignal({
+      source: "developer_report",
+      sourceKey: `reconciliation-decision-${randomUUID()}`,
+      reporterKind: "developer",
+      reporterId: "developer-a",
+      scope: "repository",
+      privacy: "private",
+      summary: "A subjective report needs operator judgment.",
+      classification: "developer_friction",
+      severity: "medium",
+      fingerprint: `reconciliation-${randomUUID()}`,
+    });
+
+    await expect(repo.recordImprovementReconciliationDecision({
+      caseId: recorded.case.caseId,
+      eventName: "reconciliation.awaiting_operator",
+      reason: "subjective_source_requires_operator_judgment",
+    })).resolves.toEqual({ recorded: true });
+    await expect(repo.recordImprovementReconciliationDecision({
+      caseId: recorded.case.caseId,
+      eventName: "reconciliation.awaiting_operator",
+      reason: "subjective_source_requires_operator_judgment",
+    })).resolves.toEqual({ recorded: false });
+
+    const improvement = await repo.getImprovementCase(recorded.case.caseId);
+    expect(improvement?.events.filter((event) => event.eventName === "reconciliation.awaiting_operator")).toHaveLength(1);
   });
 
   it("atomically applies one triage snapshot without duplicating evidence or contracts", async () => {

@@ -6,12 +6,14 @@ import {
   AGENT_TASK_JOB,
   CRAWL_GUILD_JOB,
   EMBED_MESSAGE_JOB,
+  IMPROVEMENT_RECONCILIATION_JOB,
   startJobs,
   type JobRuntime
 } from "../../src/jobs/queue.js";
 import { createPool } from "../../src/db/pool.js";
 import { createAppDatabase } from "../../src/db/repositories.js";
 import { AgentRuntimeRepository } from "../../src/db/agentRuntimeRepository.js";
+import { DeliveryObligationsRepository } from "../../src/db/deliveryObligationsRepository.js";
 import { agentRuntimeSessionId } from "../../src/db/agentRuntimeRepository.js";
 import { createIsolatedTestDatabase, type IsolatedTestDatabase } from "./testDatabase.js";
 
@@ -494,6 +496,43 @@ describe.skipIf(!runDbTests)("pg-boss database behavior", () => {
         [CRAWL_GUILD_JOB]
       );
       expect(scheduled.rows).toEqual([]);
+    } finally {
+      await pool.end();
+    }
+    await runtime.stop();
+  });
+
+  it("registers and runs the improvement reconciliation schedule only on the worker", async () => {
+    const config = { ...testConfig(), improvementReconcileScheduleCron: "*/7 * * * *" };
+    const pool = createPool(config);
+    const runtime = await startJobs({
+      config,
+      pgBossSchema: "pgboss_test",
+      crawlWorker: false,
+      embeddingWorker: false,
+      taskWorker: false,
+      agentRuntimeWorker: false,
+      improvementWorker: true,
+      crawler: { crawlConfiguredGuild: async () => undefined },
+      repo: createAppDatabase(pool),
+      agentRuntimeRepo: new AgentRuntimeRepository(pool),
+      deliveryObligations: new DeliveryObligationsRepository(pool),
+    });
+    runtimes.push(runtime);
+
+    try {
+      const scheduled = await pool.query(
+        "SELECT cron FROM pgboss_test.schedule WHERE name = $1",
+        [IMPROVEMENT_RECONCILIATION_JOB],
+      );
+      expect(scheduled.rows).toEqual([{ cron: "*/7 * * * *" }]);
+      await waitFor(async () => {
+        const jobs = await pool.query(
+          "SELECT state FROM pgboss_test.job WHERE name = $1 ORDER BY created_on DESC LIMIT 1",
+          [IMPROVEMENT_RECONCILIATION_JOB],
+        );
+        return jobs.rows[0]?.state === "completed";
+      }, 10_000);
     } finally {
       await pool.end();
     }

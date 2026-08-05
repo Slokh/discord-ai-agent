@@ -2,6 +2,7 @@ import { ChannelType, PermissionFlagsBits, type Client, type Message, type Messa
 import type { AppConfig } from "../config/env.js";
 import type { AgentRuntimeRepository } from "../db/agentRuntimeRepository.js";
 import type { DiscordAiAgentRepository, ScheduledReminder } from "../db/repositories.js";
+import type { ReminderWakeup } from "../db/reminderRepository.js";
 import { sendDiscordNotification } from "../discord/responseSink.js";
 import {
   finishBackgroundJobRuntime,
@@ -9,10 +10,11 @@ import {
   startBackgroundJobRuntime,
 } from "../observability/backgroundJobRuntime.js";
 import { durationMs, logger } from "../util/logger.js";
+import { nextReminderOccurrence } from "./recurrence.js";
 
 export type ReminderDeliveryRunner = {
-  deliver: (reminderId: string) => Promise<void>;
-  listDueReminderIds: () => Promise<string[]>;
+  deliver: (reminderId: string) => Promise<ReminderWakeup | null>;
+  listDueReminderWakeups: () => Promise<ReminderWakeup[]>;
 };
 
 export function createReminderDeliveryRunner(input: {
@@ -22,7 +24,7 @@ export function createReminderDeliveryRunner(input: {
   agentRuntime?: AgentRuntimeRepository;
 }): ReminderDeliveryRunner {
   return {
-    listDueReminderIds: () => input.repo.listDueReminderIds(),
+    listDueReminderWakeups: () => input.repo.listDueReminderWakeups(),
     deliver: async (reminderId) => deliverReminder({ ...input, reminderId }),
   };
 }
@@ -35,11 +37,11 @@ async function deliverReminder(input: {
   reminderId: string;
 }) {
   const reminder = await input.repo.claimReminderForDelivery({ reminderId: input.reminderId });
-  if (!reminder) return;
+  if (!reminder) return null;
   const startedAt = Date.now();
   const runtime = await startBackgroundJobRuntime({
     agentRuntime: input.agentRuntime,
-    executionId: `reminder-delivery-${reminder.reminderId}-${reminder.deliveryAttempts}`,
+    executionId: `reminder-delivery-${reminder.reminderId}-${reminder.occurrenceSequence}-${reminder.deliveryAttempts}`,
     traceId: reminder.reminderId,
     kind: "reminder_delivery",
     title: "Scheduled reminder delivery",
@@ -47,7 +49,7 @@ async function deliverReminder(input: {
     source: "pgboss.reminder",
     guildId: reminder.guildId,
     channelId: reminder.channelId,
-    metadata: { reminderId: reminder.reminderId, attempt: reminder.deliveryAttempts },
+    metadata: { reminderId: reminder.reminderId, occurrence: reminder.occurrenceSequence, attempt: reminder.deliveryAttempts },
   }).catch((error) => {
     logger.warn({ err: error, reminderId: reminder.reminderId }, "Failed to create reminder delivery runtime");
     return null;
@@ -55,10 +57,14 @@ async function deliverReminder(input: {
 
   try {
     const message = await sendReminder(input.client, input.config, reminder);
-    await input.repo.markReminderDelivered({
+    const nextScheduledFor = reminder.recurrence
+      ? nextReminderOccurrence(reminder.recurrence, reminder.timezone, new Date(), reminder.scheduledFor)
+      : undefined;
+    const saved = await input.repo.markReminderDelivered({
       reminderId: reminder.reminderId,
       channelId: message.channelId,
       messageId: message.id,
+      nextScheduledFor,
     });
     await recordBackgroundJobEvent(runtime, {
       eventName: "reminder.delivery.sent",
@@ -72,6 +78,9 @@ async function deliverReminder(input: {
       metadata: { reminderId: reminder.reminderId, messageId: message.id },
       durationMs: durationMs(startedAt),
     });
+    return saved?.status === "scheduled"
+      ? { reminderId: saved.reminderId, scheduledFor: saved.scheduledFor, occurrenceSequence: saved.occurrenceSequence }
+      : null;
   } catch (error) {
     const code = deliveryErrorCode(error);
     const terminal = isTerminalDeliveryError(error) || reminder.deliveryAttempts >= 10;
@@ -85,7 +94,7 @@ async function deliverReminder(input: {
         durationMs: durationMs(startedAt),
       });
       logger.warn({ reminderId: reminder.reminderId, errorCode: code }, "Reminder delivery permanently failed");
-      return;
+      return null;
     }
     await input.repo.releaseReminderDelivery({ reminderId: reminder.reminderId, errorCode: code });
     await finishBackgroundJobRuntime(runtime, {
@@ -136,7 +145,7 @@ async function sendReminder(client: Client, config: AppConfig, reminder: Schedul
     channel: channel as unknown as { send: (payload: MessageCreateOptions) => Promise<Message> },
     content: `<@${reminder.requesterId}> reminder: ${reminder.reminderText}`,
     mentionUserId: reminder.requesterId,
-    deliveryKey: `reminder:${reminder.reminderId}`,
+    deliveryKey: `reminder:${reminder.reminderId}:${reminder.occurrenceSequence}`,
     maxChars: config.maxReplyChars,
     logger,
   });

@@ -36,12 +36,50 @@ describe.skipIf(!runDbTests)("durable reminder repository", () => {
     expect(claims.filter(Boolean)).toHaveLength(1);
     expect(claims.find(Boolean)).toEqual(expect.objectContaining({ status: "delivering", deliveryAttempts: 1 }));
 
-    await expect(repo.listDueReminderIds({ now: new Date(now.getTime() + 6 * 60_000) }))
-      .resolves.toContain("r_due");
+    await expect(repo.listDueReminderWakeups({ now: new Date(now.getTime() + 6 * 60_000) }))
+      .resolves.toContainEqual(expect.objectContaining({ reminderId: "r_due", occurrenceSequence: 0 }));
     await expect(repo.claimReminderForDelivery({ reminderId: "r_due", now: new Date(now.getTime() + 6 * 60_000) }))
       .resolves.toEqual(expect.objectContaining({ deliveryAttempts: 2 }));
     await expect(repo.markReminderDelivered({ reminderId: "r_due", channelId: "channel", messageId: "message" }))
-      .resolves.toBe(true);
+      .resolves.toEqual(expect.objectContaining({ status: "delivered" }));
+  });
+
+  it("advances, pauses, resumes, and cancels one durable recurring series", async () => {
+    const repo = createAppDatabase(database.pool);
+    const first = new Date("2026-08-07T09:00:00Z");
+    await repo.createReminder({
+      ...reminderInput("r_recurring", "recurring-key", first),
+      recurrence: { frequency: "weekly", interval: 1, localTime: "09:00", anchorDate: "2026-08-07", weekdays: [1, 5] },
+    });
+
+    await repo.claimReminderForDelivery({ reminderId: "r_recurring", now: first });
+    const advanced = await repo.markReminderDelivered({
+      reminderId: "r_recurring",
+      channelId: "channel",
+      messageId: "occurrence-0",
+      nextScheduledFor: new Date("2026-08-10T09:00:00Z"),
+    });
+    expect(advanced).toEqual(expect.objectContaining({
+      status: "scheduled",
+      occurrenceSequence: 1,
+      deliveryAttempts: 0,
+      scheduledFor: new Date("2026-08-10T09:00:00Z"),
+    }));
+
+    await expect(repo.pauseReminderForRequester({ reminderId: "r_recurring", guildId: "guild", requesterId: "other" }))
+      .resolves.toBeUndefined();
+    await expect(repo.pauseReminderForRequester({ reminderId: "r_recurring", guildId: "guild", requesterId: "user" }))
+      .resolves.toEqual(expect.objectContaining({ status: "paused", pausedAt: expect.any(Date) }));
+    await expect(repo.listDueReminderWakeups({ now: new Date("2026-08-20T00:00:00Z") }))
+      .resolves.not.toContainEqual(expect.objectContaining({ reminderId: "r_recurring" }));
+    await expect(repo.resumeReminderForRequester({
+      reminderId: "r_recurring",
+      guildId: "guild",
+      requesterId: "user",
+      scheduledFor: new Date("2026-08-21T09:00:00Z"),
+    })).resolves.toEqual(expect.objectContaining({ status: "scheduled", pausedAt: null }));
+    await expect(repo.cancelReminderForRequester({ reminderId: "r_recurring", guildId: "guild", requesterId: "user" }))
+      .resolves.toEqual(expect.objectContaining({ status: "cancelled" }));
   });
 
   it("deletes requester data and expires only terminal reminder history", async () => {

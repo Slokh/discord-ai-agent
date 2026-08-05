@@ -582,8 +582,8 @@ describe.skipIf(!runDbTests)("pg-boss database behavior", () => {
       embeddingWorker: false,
       reminderWorker: true,
       reminders: {
-        deliver: async (id) => { delivered.push(id); },
-        listDueReminderIds: async () => [],
+        deliver: async (id) => { delivered.push(id); return null; },
+        listDueReminderWakeups: async () => [],
       },
       pgBossSchema: "pgboss_test",
       crawler: { crawlConfiguredGuild: async () => undefined },

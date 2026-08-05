@@ -61,7 +61,7 @@ const declarations: readonly CapabilityDeclaration[] = ([
   },
   {
     id: "reminders",
-    summary: "Durable requester-owned one-shot reminder creation, listing, cancellation, and delivery.",
+    summary: "Durable requester-owned one-shot and recurring reminder creation, management, and delivery.",
     toolNames: TOOL_NAMES_BY_CAPABILITY.reminders,
   },
   {

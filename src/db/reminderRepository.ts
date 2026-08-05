@@ -1,6 +1,7 @@
 import type { DbPool } from "./pool.js";
+import { parseReminderRecurrence, type ReminderRecurrence } from "../reminders/recurrence.js";
 
-export type ReminderStatus = "scheduled" | "delivering" | "delivered" | "cancelled" | "failed";
+export type ReminderStatus = "scheduled" | "delivering" | "delivered" | "paused" | "cancelled" | "failed";
 
 export type ScheduledReminder = {
   reminderId: string;
@@ -12,11 +13,14 @@ export type ScheduledReminder = {
   reminderText: string;
   timezone: string;
   scheduledFor: Date;
+  recurrence: ReminderRecurrence | null;
+  occurrenceSequence: number;
   status: ReminderStatus;
   deliveryAttempts: number;
   claimedAt: Date | null;
   deliveredAt: Date | null;
   cancelledAt: Date | null;
+  pausedAt: Date | null;
   deliveryChannelId: string | null;
   deliveryMessageId: string | null;
   lastErrorCode: string | null;
@@ -26,14 +30,14 @@ export type ScheduledReminder = {
 
 export async function createReminder(
   pool: DbPool,
-  input: Pick<ScheduledReminder, "reminderId" | "requestKey" | "guildId" | "channelId" | "requesterId" | "sourceMessageId" | "reminderText" | "timezone" | "scheduledFor">,
+  input: Pick<ScheduledReminder, "reminderId" | "requestKey" | "guildId" | "channelId" | "requesterId" | "sourceMessageId" | "reminderText" | "timezone" | "scheduledFor"> & { recurrence?: ReminderRecurrence | null },
 ): Promise<ScheduledReminder> {
   const result = await pool.query(
     `
       INSERT INTO scheduled_reminders(
         reminder_id, request_key, guild_id, channel_id, requester_id,
-        source_message_id, reminder_text, timezone, scheduled_for
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+        source_message_id, reminder_text, timezone, scheduled_for, recurrence
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb)
       ON CONFLICT(request_key) DO UPDATE SET request_key = EXCLUDED.request_key
       RETURNING *
     `,
@@ -47,6 +51,7 @@ export async function createReminder(
       input.reminderText,
       input.timezone,
       input.scheduledFor,
+      input.recurrence ? JSON.stringify(input.recurrence) : null,
     ],
   );
   return rowToReminder(result.rows[0]);
@@ -59,13 +64,25 @@ export async function listScheduledRemindersForRequester(
   const result = await pool.query(
     `
       SELECT * FROM scheduled_reminders
-      WHERE guild_id = $1 AND requester_id = $2 AND status = 'scheduled'
+      WHERE guild_id = $1 AND requester_id = $2 AND status IN ('scheduled', 'paused')
       ORDER BY scheduled_for, reminder_id
       LIMIT $3
     `,
     [input.guildId, input.requesterId, Math.max(1, Math.min(input.limit ?? 25, 100))],
   );
   return result.rows.map(rowToReminder);
+}
+
+export async function getReminderForRequester(
+  pool: DbPool,
+  input: { reminderId: string; guildId: string; requesterId: string },
+): Promise<ScheduledReminder | undefined> {
+  const result = await pool.query(
+    `SELECT * FROM scheduled_reminders
+     WHERE reminder_id = $1 AND guild_id = $2 AND requester_id = $3`,
+    [input.reminderId, input.guildId, input.requesterId],
+  );
+  return result.rows[0] ? rowToReminder(result.rows[0]) : undefined;
 }
 
 export async function cancelReminderForRequester(
@@ -75,11 +92,46 @@ export async function cancelReminderForRequester(
   const result = await pool.query(
     `
       UPDATE scheduled_reminders SET
-        status = 'cancelled', cancelled_at = now(), updated_at = now()
-      WHERE reminder_id = $1 AND guild_id = $2 AND requester_id = $3 AND status = 'scheduled'
+        status = 'cancelled', cancelled_at = now(), paused_at = NULL, updated_at = now()
+      WHERE reminder_id = $1 AND guild_id = $2 AND requester_id = $3 AND status IN ('scheduled', 'paused')
       RETURNING *
     `,
     [input.reminderId, input.guildId, input.requesterId],
+  );
+  return result.rows[0] ? rowToReminder(result.rows[0]) : undefined;
+}
+
+export async function pauseReminderForRequester(
+  pool: DbPool,
+  input: { reminderId: string; guildId: string; requesterId: string },
+): Promise<ScheduledReminder | undefined> {
+  const result = await pool.query(
+    `
+      UPDATE scheduled_reminders SET
+        status = 'paused', paused_at = now(), updated_at = now()
+      WHERE reminder_id = $1 AND guild_id = $2 AND requester_id = $3
+        AND status = 'scheduled' AND recurrence IS NOT NULL
+      RETURNING *
+    `,
+    [input.reminderId, input.guildId, input.requesterId],
+  );
+  return result.rows[0] ? rowToReminder(result.rows[0]) : undefined;
+}
+
+export async function resumeReminderForRequester(
+  pool: DbPool,
+  input: { reminderId: string; guildId: string; requesterId: string; scheduledFor: Date },
+): Promise<ScheduledReminder | undefined> {
+  const result = await pool.query(
+    `
+      UPDATE scheduled_reminders SET
+        status = 'scheduled', paused_at = NULL, scheduled_for = $4,
+        delivery_attempts = 0, last_error_code = NULL, updated_at = now()
+      WHERE reminder_id = $1 AND guild_id = $2 AND requester_id = $3
+        AND status = 'paused' AND recurrence IS NOT NULL
+      RETURNING *
+    `,
+    [input.reminderId, input.guildId, input.requesterId, input.scheduledFor],
   );
   return result.rows[0] ? rowToReminder(result.rows[0]) : undefined;
 }
@@ -106,15 +158,17 @@ export async function claimReminderForDelivery(
   return result.rows[0] ? rowToReminder(result.rows[0]) : undefined;
 }
 
-export async function listDueReminderIds(
+export type ReminderWakeup = Pick<ScheduledReminder, "reminderId" | "scheduledFor" | "occurrenceSequence">;
+
+export async function listDueReminderWakeups(
   pool: DbPool,
   input: { now?: Date; staleBefore?: Date; limit?: number } = {},
-): Promise<string[]> {
+): Promise<ReminderWakeup[]> {
   const now = input.now ?? new Date();
   const staleBefore = input.staleBefore ?? new Date(now.getTime() - 5 * 60_000);
   const result = await pool.query(
     `
-      SELECT reminder_id FROM scheduled_reminders
+      SELECT reminder_id, scheduled_for, occurrence_sequence FROM scheduled_reminders
       WHERE (status = 'scheduled' AND scheduled_for <= $1)
          OR (status = 'delivering' AND claimed_at < $2)
       ORDER BY scheduled_for, reminder_id
@@ -122,23 +176,32 @@ export async function listDueReminderIds(
     `,
     [now, staleBefore, Math.max(1, Math.min(input.limit ?? 500, 2_000))],
   );
-  return result.rows.map((row) => String(row.reminder_id));
+  return result.rows.map((row) => ({
+    reminderId: String(row.reminder_id),
+    scheduledFor: new Date(String(row.scheduled_for)),
+    occurrenceSequence: Number(row.occurrence_sequence),
+  }));
 }
 
 export async function markReminderDelivered(
   pool: DbPool,
-  input: { reminderId: string; channelId: string; messageId: string },
-): Promise<boolean> {
+  input: { reminderId: string; channelId: string; messageId: string; nextScheduledFor?: Date },
+): Promise<ScheduledReminder | undefined> {
   const result = await pool.query(
     `
       UPDATE scheduled_reminders SET
-        status = 'delivered', delivered_at = now(), delivery_channel_id = $2,
-        delivery_message_id = $3, claimed_at = NULL, updated_at = now()
+        status = CASE WHEN recurrence IS NULL THEN 'delivered' ELSE 'scheduled' END,
+        scheduled_for = CASE WHEN recurrence IS NULL THEN scheduled_for ELSE $4::timestamptz END,
+        occurrence_sequence = occurrence_sequence + CASE WHEN recurrence IS NULL THEN 0 ELSE 1 END,
+        delivered_at = now(), delivery_channel_id = $2, delivery_message_id = $3,
+        delivery_attempts = CASE WHEN recurrence IS NULL THEN delivery_attempts ELSE 0 END,
+        claimed_at = NULL, last_error_code = NULL, updated_at = now()
       WHERE reminder_id = $1 AND status = 'delivering'
+      RETURNING *
     `,
-    [input.reminderId, input.channelId, input.messageId],
+    [input.reminderId, input.channelId, input.messageId, input.nextScheduledFor ?? null],
   );
-  return (result.rowCount ?? 0) > 0;
+  return result.rows[0] ? rowToReminder(result.rows[0]) : undefined;
 }
 
 export async function releaseReminderDelivery(
@@ -196,11 +259,14 @@ function rowToReminder(row: Record<string, unknown>): ScheduledReminder {
     reminderText: String(row.reminder_text),
     timezone: String(row.timezone),
     scheduledFor: new Date(String(row.scheduled_for)),
+    recurrence: parseReminderRecurrence(row.recurrence),
+    occurrenceSequence: Number(row.occurrence_sequence ?? 0),
     status: String(row.status) as ReminderStatus,
     deliveryAttempts: Number(row.delivery_attempts),
     claimedAt: row.claimed_at ? new Date(String(row.claimed_at)) : null,
     deliveredAt: row.delivered_at ? new Date(String(row.delivered_at)) : null,
     cancelledAt: row.cancelled_at ? new Date(String(row.cancelled_at)) : null,
+    pausedAt: row.paused_at ? new Date(String(row.paused_at)) : null,
     deliveryChannelId: row.delivery_channel_id ? String(row.delivery_channel_id) : null,
     deliveryMessageId: row.delivery_message_id ? String(row.delivery_message_id) : null,
     lastErrorCode: row.last_error_code ? String(row.last_error_code) : null,

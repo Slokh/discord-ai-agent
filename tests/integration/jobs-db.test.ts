@@ -16,6 +16,7 @@ import { AgentRuntimeRepository } from "../../src/db/agentRuntimeRepository.js";
 import { DeliveryObligationsRepository } from "../../src/db/deliveryObligationsRepository.js";
 import { agentRuntimeSessionId } from "../../src/db/agentRuntimeRepository.js";
 import { createIsolatedTestDatabase, type IsolatedTestDatabase } from "./testDatabase.js";
+import { REMINDER_DELIVERY_JOB, REMINDER_RECONCILIATION_CRON, REMINDER_RECONCILIATION_JOB } from "../../src/jobs/reminderJobs.js";
 
 const runDbTests = process.env.DISCORD_AI_AGENT_DB_TESTS === "true";
 let jobsDatabase: IsolatedTestDatabase;
@@ -560,6 +561,48 @@ describe.skipIf(!runDbTests)("pg-boss database behavior", () => {
     await runtime.boss.deleteJob(CRAWL_GUILD_JOB, firstJobId!);
     await runtime.stop();
   });
+
+  it("preserves delayed reminders across producer restart and reconciles them", async () => {
+    const config = testConfig();
+    const reminderId = `reminder-${randomUUID()}`;
+    const producer = await startJobs({
+      config,
+      worker: false,
+      pgBossSchema: "pgboss_test",
+      crawler: { crawlConfiguredGuild: async () => undefined },
+    });
+    runtimes.push(producer);
+    await expect(producer.enqueueReminderDelivery(reminderId, new Date())).resolves.toEqual(expect.any(String));
+    await producer.stop();
+
+    const delivered: string[] = [];
+    const worker = await startJobs({
+      config,
+      crawlWorker: false,
+      embeddingWorker: false,
+      reminderWorker: true,
+      reminders: {
+        deliver: async (id) => { delivered.push(id); },
+        listDueReminderIds: async () => [],
+      },
+      pgBossSchema: "pgboss_test",
+      crawler: { crawlConfiguredGuild: async () => undefined },
+    });
+    runtimes.push(worker);
+
+    await waitFor(() => delivered.includes(reminderId), 10_000);
+    const scheduled = await jobsDatabase.pool.query(
+      "SELECT cron FROM pgboss_test.schedule WHERE name = $1",
+      [REMINDER_RECONCILIATION_JOB],
+    );
+    expect(scheduled.rows).toEqual([{ cron: REMINDER_RECONCILIATION_CRON }]);
+    const queues = await jobsDatabase.pool.query(
+      "SELECT name FROM pgboss_test.queue WHERE name = ANY($1::text[]) ORDER BY name",
+      [[REMINDER_DELIVERY_JOB, REMINDER_RECONCILIATION_JOB]],
+    );
+    expect(queues.rows).toHaveLength(2);
+    await worker.stop();
+  }, 15_000);
 });
 
 function testConfig() {

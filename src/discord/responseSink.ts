@@ -342,6 +342,29 @@ export function discordDeliveryNonce(deliveryKey: string): string {
   return createHash("sha256").update(deliveryKey).digest("hex").slice(0, 20);
 }
 
+/** Sends a durable, non-conversational notification through the canonical Discord write boundary. */
+export async function sendDiscordNotification(input: {
+  channel: { send: (payload: MessageCreateOptions) => Promise<Message> };
+  content: string;
+  mentionUserId: string;
+  deliveryKey: string;
+  maxChars: number;
+  logger: Logger;
+}): Promise<Message> {
+  const sent = await discordSend(input.channel, {
+    content: cleanResponse(input.content, input.maxChars),
+    allowedMentions: { parse: [], users: [input.mentionUserId], repliedUser: false },
+    nonce: discordDeliveryNonce(input.deliveryKey),
+    enforceNonce: true,
+  }, { logger: input.logger, throwUnknown: false });
+  if (!sent.ok) {
+    const error = new Error(`Discord notification delivery failed (${sent.reason}).`, { cause: sent.error });
+    Object.assign(error, { discordFailureReason: sent.reason });
+    throw error;
+  }
+  return sent.value;
+}
+
 export function formatDiscordResponseFooter(footer?: DiscordResponseFooter | null) {
   const lines: string[] = [];
   for (const extraLine of footer?.extraLines ?? []) {

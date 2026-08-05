@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { installedToolHandlers } from "../../src/capabilities/catalog.js";
 import { coreToolHandlers } from "../../src/tools/handlers/core.js";
 import { userSettingsToolHandlers } from "../../src/tools/handlers/user-settings.js";
+import { reminderToolHandlers } from "../../src/tools/handlers/reminders.js";
 import { discordRetrievalToolHandlers } from "../../src/tools/handlers/discord-retrieval.js";
 import { opsToolHandlers } from "../../src/tools/handlers/ops.js";
 import { improvementToolHandlers } from "../../src/tools/handlers/improvements.js";
@@ -18,6 +19,7 @@ import { bindToolHandlers } from "../../src/tools/toolDefinition.js";
 const handlerFamilies = {
   core: coreToolHandlers,
   userSettings: userSettingsToolHandlers,
+  reminders: reminderToolHandlers,
   discordRetrieval: discordRetrievalToolHandlers,
   ops: opsToolHandlers,
   improvements: improvementToolHandlers,
@@ -33,6 +35,7 @@ const handlerFamilies = {
 const expectedFamilyTools = {
   core: ["loadSkillContext"],
   userSettings: ["setMyTimezone"],
+  reminders: ["createReminder", "listMyReminders", "cancelReminder"],
   discordRetrieval: [
     "findDiscordUsers", "findDiscordChannels", "listMyImprovementSignals", "inspectDiscordFile",
     "summarizeDiscordThread", "getRecentDiscordMessages", "getRecentAgentMemory", "getAgentMemoryStats",

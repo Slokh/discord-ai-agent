@@ -39,6 +39,8 @@ The current message is always the operative request. Prior messages and retrieve
 
 The foundation capability resolves the current requester's validated timezone preference before building current-data context. It supplies requester-local and UTC date/time together, defaults to UTC when no override exists, and tells the model to preserve explicit event dates and event/venue timezone evidence. The self-service timezone tool can only mutate the immutable current requester's preference and takes effect on the next request.
 
+The `reminders` capability uses that grounded time context to translate conversational dates into an explicit RFC 3339 instant. `createReminder` rejects missing zones, invalid dates, and past instants; `listMyReminders` and `cancelReminder` always derive ownership from the immutable requester and current guild rather than model arguments. Reminder persistence and delivery live outside the generic agent loop.
+
 Static prompt skills live in `skills/`. The model can load one exact skill through `loadSkillContext`. Deployment-specific guidance belongs in the untracked prompt overlay or Postgres server overlay. The runtime does not create or mutate database-backed skills.
 
 ## Models
@@ -169,6 +171,8 @@ Discord-visible output flows through `src/discord/responseSink.ts`:
 - oversized body text and deterministic footers are chunked independently, so a large proof footer cannot collapse the answer into one-character messages;
 - delivery events record the first reply ID, continuation IDs, message count, content size, and footer-line count for debugging and improvement evidence;
 - the loading reaction is removed at terminal delivery.
+
+One-shot reminder notifications also use `responseSink.ts`'s canonical Discord write boundary with a stable nonce. `scheduled_reminders` remains authoritative while pg-boss supplies delayed wakeups and minute reconciliation. The reminder worker claims due rows atomically, checks current requester visibility, records each attempt in the runtime ledger, and either commits the Discord message ID, releases a transient failure for retry, or terminalizes a permanent permission/target failure.
 
 Timeout recovery distinguishes unfinished work from already committed work. Completed mutations and generated files can still be delivered after the model runtime times out. An unresolved wager cannot be converted into a generic timeout answer because funds or game state may still require deterministic resolution.
 

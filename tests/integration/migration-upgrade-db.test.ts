@@ -203,6 +203,11 @@ describe.skipIf(!runDbTests)("forward migration upgrades", () => {
         .resolves.toEqual(expect.objectContaining({ rows: [expect.objectContaining({
           case_id: "linked-case", source: "agent_task", source_key: "agent_task:linked-task", status: "in_progress", task_id: "linked-task",
         })] }));
+      for (const version of ["044_improvement_reporter_conversations", "045_improvement_lifecycle_health", "046_scheduled_reminders"]) {
+        await client.query(await readFile(path.resolve(`migrations/${version}.sql`), "utf8"));
+      }
+      await expect(client.query("SELECT reminder_id, requester_id, scheduled_for, status FROM scheduled_reminders LIMIT 0"))
+        .resolves.toEqual(expect.objectContaining({ rows: [] }));
     } finally {
       await client.query("RESET search_path").catch(() => undefined);
       await client.query(`DROP SCHEMA IF EXISTS ${schema} CASCADE`).catch(() => undefined);

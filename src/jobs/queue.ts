@@ -25,6 +25,7 @@ import { enqueueAgentTaskJob, type AgentTaskEnqueueInput, type AgentTaskEnqueueR
 import { agentTaskRuntimeParentMetadata } from "./agentTaskRuntimeParent.js";
 import { normalizeEmbeddingPriority } from "./embeddingPriority.js";
 import { KeyedSerialQueue } from "./keyedSerialQueue.js";
+import { configureReminderQueues, enqueueReminderDelivery, registerReminderWorkers, REMINDER_DELIVERY_JOB, REMINDER_RECONCILIATION_JOB, type ReminderJobRunner } from "./reminderJobs.js";
 
 export const CRAWL_GUILD_JOB = "crawl.guild";
 export const EMBED_MESSAGE_JOB = "embedding.message";
@@ -90,6 +91,7 @@ export type JobRuntime = {
   enqueueAgentRuntimeExecution: (job: AgentRuntimeExecutionJob) => Promise<string | null>;
   enqueueAgentTask: (job: AgentTaskEnqueueInput) => Promise<AgentTaskEnqueueResult>;
   enqueueImprovementReconciliation: () => Promise<string | null>;
+  enqueueReminderDelivery: (reminderId: string, scheduledFor: Date) => Promise<string | null>;
   stop: () => Promise<void>;
 };
 
@@ -105,6 +107,8 @@ export async function startJobs(input: {
   taskWorker?: boolean;
   agentRuntimeWorker?: boolean;
   improvementWorker?: boolean;
+  reminderWorker?: boolean;
+  reminders?: ReminderJobRunner;
   pgBossSchema?: string;
   repo?: DiscordAiAgentRepository;
   agentRuntimeRepo?: AgentRuntimeRepository;
@@ -117,11 +121,12 @@ export async function startJobs(input: {
   const taskWorkerEnabled = input.taskWorker ?? false;
   const agentRuntimeWorkerEnabled = input.agentRuntimeWorker ?? false;
   const improvementWorkerEnabled = input.improvementWorker ?? false;
+  const reminderWorkerEnabled = input.reminderWorker ?? false;
   const boss = input.pgBossSchema
     ? new PgBoss({ connectionString: input.config.databaseUrl, schema: input.pgBossSchema })
     : new PgBoss(input.config.databaseUrl);
   logger.info(
-    { crawlWorkerEnabled, embeddingWorkerEnabled, taskWorkerEnabled, agentRuntimeWorkerEnabled, improvementWorkerEnabled, schema: input.pgBossSchema ?? "pgboss" },
+    { crawlWorkerEnabled, embeddingWorkerEnabled, taskWorkerEnabled, agentRuntimeWorkerEnabled, improvementWorkerEnabled, reminderWorkerEnabled, schema: input.pgBossSchema ?? "pgboss" },
     "Starting pg-boss"
   );
   await boss.start();
@@ -145,19 +150,21 @@ export async function startJobs(input: {
   });
   await boss.createQueue(IMPROVEMENT_RECONCILIATION_JOB, { policy: "short", retryLimit: 2, retryDelay: 30, retryBackoff: true });
   await boss.updateQueue(IMPROVEMENT_RECONCILIATION_JOB, { retryLimit: 2, retryDelay: 30, retryBackoff: true });
+  await configureReminderQueues(boss);
   logger.info(
     {
-      queues: [CRAWL_GUILD_JOB, EMBED_MESSAGE_JOB, AGENT_TASK_JOB, AGENT_RUNTIME_EXECUTION_JOB, IMPROVEMENT_RECONCILIATION_JOB],
+      queues: [CRAWL_GUILD_JOB, EMBED_MESSAGE_JOB, AGENT_TASK_JOB, AGENT_RUNTIME_EXECUTION_JOB, IMPROVEMENT_RECONCILIATION_JOB, REMINDER_DELIVERY_JOB, REMINDER_RECONCILIATION_JOB],
       crawlWorkerEnabled,
       embeddingWorkerEnabled,
       taskWorkerEnabled,
       agentRuntimeWorkerEnabled,
-      improvementWorkerEnabled
+      improvementWorkerEnabled,
+      reminderWorkerEnabled
     },
     "pg-boss ready"
   );
   const agentTaskBackendName = input.agentTask?.name ?? defaultAgentTaskBackendName(input.config);
-  const runsAnyWorker = crawlWorkerEnabled || embeddingWorkerEnabled || taskWorkerEnabled || agentRuntimeWorkerEnabled || improvementWorkerEnabled;
+  const runsAnyWorker = crawlWorkerEnabled || embeddingWorkerEnabled || taskWorkerEnabled || agentRuntimeWorkerEnabled || improvementWorkerEnabled || reminderWorkerEnabled;
   const artifactRetentionMaintenance = runsAnyWorker
     ? startArtifactRetentionMaintenance({ agentRuntimeRepo: input.agentRuntimeRepo })
     : null;
@@ -238,6 +245,7 @@ export async function startJobs(input: {
       }),
     enqueueImprovementReconciliation: async () =>
       (await boss.send(IMPROVEMENT_RECONCILIATION_JOB, {})) ?? null,
+    enqueueReminderDelivery: (reminderId, scheduledFor) => enqueueReminderDelivery(boss, reminderId, scheduledFor),
     stop: async () => {
       artifactRetentionMaintenance?.stop();
       dataRetentionMaintenance?.stop();
@@ -295,6 +303,13 @@ export async function startJobs(input: {
       { queue: IMPROVEMENT_RECONCILIATION_JOB },
       "Improvement worker requested without repository, runtime, or delivery readers",
     );
+  }
+
+  if (reminderWorkerEnabled && input.reminders) {
+    await registerReminderWorkers(boss, input.reminders);
+    logger.info({ queue: REMINDER_DELIVERY_JOB }, "Registered reminder delivery workers");
+  } else if (reminderWorkerEnabled) {
+    logger.warn({ queue: REMINDER_DELIVERY_JOB }, "Reminder worker requested without a delivery runner");
   }
 
   if (embeddingWorkerEnabled && input.embedding) {

@@ -32,6 +32,7 @@ Focused repositories under `src/db/` own persistence:
 | Payments and randomness | focused payment repositories and `rngRepository.ts` |
 | Server overlays and model settings | `serverOverlayRepository.ts`, `agentSettingsRepository.ts` |
 | Typed per-user preferences | `userPreferenceRepository.ts`; capability-owned validators interpret each key |
+| One-shot reminder state and delivery claims | `reminderRepository.ts` |
 
 `src/db/repositories.ts` delegates to these modules for existing callers. New durable behavior belongs in the focused owner.
 
@@ -72,6 +73,12 @@ Memory may preserve a subject, preference, or prior result. It cannot:
 Explicit user preferences that must apply across conversation scopes live in the generic `user_preferences` store rather than conversational memory. Each preference key has a capability-owned validator and model/tool contract; arbitrary prompt-derived values never become settings. Timezone is the first key: the current requester may set a validated IANA timezone or remove the override, with UTC as the unstored default.
 
 Undo operations update both visible Discord output when possible and durable conversation state. They do not rewrite the canonical audit history.
+
+## Reminder lifecycle
+
+`scheduled_reminders` is the source of truth for requester-owned one-shot reminders. A deterministic request key makes repeat execution of the same create call idempotent. Rows move from `scheduled` to an atomic `delivering` claim and then to `delivered`, `failed`, or `cancelled`; stale claims become eligible for recovery. The queue carries only the reminder ID and desired wake time. A deterministic Discord nonce closes the crash window between the network send and committing the delivered message ID.
+
+Reminder text is private member content and stays in the reminder row, never queue payloads, event metadata, logs, fixtures, or public artifacts. List and cancel queries require both current guild and immutable requester. Delivery uses the stored origin channel but revalidates current Discord visibility before sending.
 
 ## Canonical runtime ledger
 
@@ -131,9 +138,9 @@ DB integration tests mirror that ownership boundary. Each test file creates, mig
 
 ## Retention and deletion
 
-Worker maintenance bounds canonical runtime events, runtime sessions, artifacts, transient budget reservations, and audit logs using the configured retention windows. A value of zero disables the corresponding automatic cleanup. Conversation compaction separately limits raw continuity rows.
+Worker maintenance bounds canonical runtime events, runtime sessions, artifacts, transient budget reservations, audit logs, and terminal reminder rows using the configured retention windows. Scheduled reminders are retained until delivered, cancelled, failed, or explicitly deleted. A value of zero disables the corresponding automatic cleanup. Conversation compaction separately limits raw continuity rows.
 
-Privacy deletion covers the archive, embeddings, attachments, emoji-derived state, typed user preferences, reporter-owned improvement signals, orphaned reporter-conversation projections and linked private evidence, conversation threads and snapshots derived from the requester, agent-runtime sessions/artifacts, and code-update tasks. Empty cases are removed; shared cases and reporter conversations retain only independently sourced evidence and reporter mappings. Entire affected agent conversation threads are removed because summaries and assistant/tool turns may derive from the deleted message even when they have another author. Operational payment/randomness evidence may retain redacted structure when required to explain a transaction, but it must not retain deleted private message bodies unnecessarily.
+Privacy deletion covers the archive, embeddings, attachments, emoji-derived state, typed user preferences, scheduled reminders, reporter-owned improvement signals, orphaned reporter-conversation projections and linked private evidence, conversation threads and snapshots derived from the requester, agent-runtime sessions/artifacts, and code-update tasks. Empty cases are removed; shared cases and reporter conversations retain only independently sourced evidence and reporter mappings. Entire affected agent conversation threads are removed because summaries and assistant/tool turns may derive from the deleted message even when they have another author. Operational payment/randomness evidence may retain redacted structure when required to explain a transaction, but it must not retain deleted private message bodies unnecessarily.
 
 ## Verification
 

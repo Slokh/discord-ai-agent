@@ -14,6 +14,7 @@ import { logger } from "./util/logger.js";
 import { createAgentRuntimeRunner } from "./discord/agentRuntimeRunner.js";
 import { startPaymentReconciler } from "./payments/reconciler.js";
 import { createApplicationServices } from "./runtime/applicationServices.js";
+import { createReminderDeliveryRunner } from "./reminders/reminderDelivery.js";
 
 async function main() {
   const config = loadConfig();
@@ -25,9 +26,10 @@ async function main() {
   const startsTaskWorker = startsWorker && config.worker.taskEnabled;
   const startsAgentRuntimeWorker = startsWorker && config.worker.agentRuntimeEnabled;
   const startsImprovementWorker = startsWorker;
-  const startsDiscordClient = startsBot || startsCrawlWorker || startsAgentRuntimeWorker;
+  const startsReminderWorker = startsWorker;
+  const startsDiscordClient = startsBot || startsCrawlWorker || startsAgentRuntimeWorker || startsReminderWorker;
   const startsPaymentRuntime = startsBot || startsAgentRuntimeWorker;
-  if (startsBot || startsCrawlWorker || startsAgentRuntimeWorker) assertDiscordConfig(config);
+  if (startsBot || startsCrawlWorker || startsAgentRuntimeWorker || startsReminderWorker) assertDiscordConfig(config);
   if (startsBot || startsEmbeddingWorker || startsTaskWorker || startsAgentRuntimeWorker) assertOpenRouterConfig(config);
   if (startsApi) assertTaskCallbackConfig(config);
   if (startsTaskWorker) assertExecutionConfig(config);
@@ -58,7 +60,8 @@ async function main() {
         embeddingEnabled: startsEmbeddingWorker,
         taskEnabled: startsTaskWorker,
         agentRuntimeEnabled: startsAgentRuntimeWorker,
-        improvementEnabled: startsImprovementWorker
+        improvementEnabled: startsImprovementWorker,
+        reminderEnabled: startsReminderWorker
       },
       payments: {
         walletEnabled: config.payments.walletEnabled,
@@ -124,7 +127,7 @@ async function main() {
         }
       };
   logger.info(
-    { startsApi, startsBot, startsWorker, startsCrawlWorker, startsEmbeddingWorker, startsTaskWorker, startsAgentRuntimeWorker, startsImprovementWorker },
+    { startsApi, startsBot, startsWorker, startsCrawlWorker, startsEmbeddingWorker, startsTaskWorker, startsAgentRuntimeWorker, startsImprovementWorker, startsReminderWorker },
     "Starting job runtime"
   );
   const jobs = await startJobs({
@@ -150,6 +153,10 @@ async function main() {
     taskWorker: startsTaskWorker,
     agentRuntimeWorker: startsAgentRuntimeWorker,
     improvementWorker: startsImprovementWorker,
+    reminderWorker: startsReminderWorker,
+    reminders: client && startsReminderWorker
+      ? createReminderDeliveryRunner({ client, config, repo, agentRuntime: agentRuntimeRepo })
+      : undefined,
     repo,
     agentRuntimeRepo,
     deliveryObligations: deliveryObligationsRepo,
@@ -158,7 +165,7 @@ async function main() {
   });
   jobRuntimeRef.current = jobs;
   logger.info(
-    { startsApi, startsBot, startsWorker, startsCrawlWorker, startsEmbeddingWorker, startsTaskWorker, startsAgentRuntimeWorker, startsImprovementWorker },
+    { startsApi, startsBot, startsWorker, startsCrawlWorker, startsEmbeddingWorker, startsTaskWorker, startsAgentRuntimeWorker, startsImprovementWorker, startsReminderWorker },
     "Job runtime ready"
   );
   const callbackServer = startsApi ? await startSandboxCallbackServer({ config, repo, agentRuntime: agentRuntimeRepo }) : null;

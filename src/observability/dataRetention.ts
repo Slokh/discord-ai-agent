@@ -10,6 +10,7 @@ export type DataRetentionConfig = {
   runtimeEventsDays: number;
   auditDays: number;
   runtimeSessionsDays: number;
+  terminalRemindersDays: number;
 };
 
 export type DataRetentionResult = Record<string, number>;
@@ -26,6 +27,7 @@ export async function runDataRetentionOnce(input: {
   const runtimeEventCutoff = cutoff(now, input.config.runtimeEventsDays);
   const auditCutoff = cutoff(now, input.config.auditDays);
   const runtimeSessionCutoff = cutoff(now, input.config.runtimeSessionsDays);
+  const terminalReminderCutoff = cutoff(now, input.config.terminalRemindersDays);
 
   if (runtimeEventCutoff) {
     result.agentRuntimeEvents = await deleteAgentRuntimeEvents(input.db, runtimeEventCutoff, limit);
@@ -36,6 +38,15 @@ export async function runDataRetentionOnce(input: {
   }
   if (runtimeSessionCutoff) {
     result.agentRuntimeSessions = await deleteAgentRuntimeSessions(input.db, runtimeSessionCutoff, limit);
+  }
+  if (terminalReminderCutoff) {
+    result.scheduledReminders = await deleteBatches(
+      input.db,
+      "scheduled_reminders",
+      "status IN ('delivered', 'cancelled', 'failed') AND updated_at < $1",
+      [terminalReminderCutoff],
+      limit,
+    );
   }
 
   return result;
@@ -48,7 +59,7 @@ export function startDataRetentionMaintenance(input: {
   initialDelayMs?: number;
   limit?: number;
 }): { stop: () => void } | null {
-  if (!input.config.runtimeEventsDays && !input.config.auditDays && !input.config.runtimeSessionsDays) return null;
+  if (!input.config.runtimeEventsDays && !input.config.auditDays && !input.config.runtimeSessionsDays && !input.config.terminalRemindersDays) return null;
   const intervalMs = positiveMs(input.intervalMs, DEFAULT_INTERVAL_MS);
   const initialDelayMs = positiveMs(input.initialDelayMs, DEFAULT_INITIAL_DELAY_MS);
   let stopped = false;

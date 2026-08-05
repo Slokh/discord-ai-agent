@@ -1,0 +1,210 @@
+import type { DbPool } from "./pool.js";
+
+export type ReminderStatus = "scheduled" | "delivering" | "delivered" | "cancelled" | "failed";
+
+export type ScheduledReminder = {
+  reminderId: string;
+  requestKey: string;
+  guildId: string;
+  channelId: string;
+  requesterId: string;
+  sourceMessageId: string;
+  reminderText: string;
+  timezone: string;
+  scheduledFor: Date;
+  status: ReminderStatus;
+  deliveryAttempts: number;
+  claimedAt: Date | null;
+  deliveredAt: Date | null;
+  cancelledAt: Date | null;
+  deliveryChannelId: string | null;
+  deliveryMessageId: string | null;
+  lastErrorCode: string | null;
+  createdAt: Date;
+  updatedAt: Date;
+};
+
+export async function createReminder(
+  pool: DbPool,
+  input: Pick<ScheduledReminder, "reminderId" | "requestKey" | "guildId" | "channelId" | "requesterId" | "sourceMessageId" | "reminderText" | "timezone" | "scheduledFor">,
+): Promise<ScheduledReminder> {
+  const result = await pool.query(
+    `
+      INSERT INTO scheduled_reminders(
+        reminder_id, request_key, guild_id, channel_id, requester_id,
+        source_message_id, reminder_text, timezone, scheduled_for
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+      ON CONFLICT(request_key) DO UPDATE SET request_key = EXCLUDED.request_key
+      RETURNING *
+    `,
+    [
+      input.reminderId,
+      input.requestKey,
+      input.guildId,
+      input.channelId,
+      input.requesterId,
+      input.sourceMessageId,
+      input.reminderText,
+      input.timezone,
+      input.scheduledFor,
+    ],
+  );
+  return rowToReminder(result.rows[0]);
+}
+
+export async function listScheduledRemindersForRequester(
+  pool: DbPool,
+  input: { guildId: string; requesterId: string; limit?: number },
+): Promise<ScheduledReminder[]> {
+  const result = await pool.query(
+    `
+      SELECT * FROM scheduled_reminders
+      WHERE guild_id = $1 AND requester_id = $2 AND status = 'scheduled'
+      ORDER BY scheduled_for, reminder_id
+      LIMIT $3
+    `,
+    [input.guildId, input.requesterId, Math.max(1, Math.min(input.limit ?? 25, 100))],
+  );
+  return result.rows.map(rowToReminder);
+}
+
+export async function cancelReminderForRequester(
+  pool: DbPool,
+  input: { reminderId: string; guildId: string; requesterId: string },
+): Promise<ScheduledReminder | undefined> {
+  const result = await pool.query(
+    `
+      UPDATE scheduled_reminders SET
+        status = 'cancelled', cancelled_at = now(), updated_at = now()
+      WHERE reminder_id = $1 AND guild_id = $2 AND requester_id = $3 AND status = 'scheduled'
+      RETURNING *
+    `,
+    [input.reminderId, input.guildId, input.requesterId],
+  );
+  return result.rows[0] ? rowToReminder(result.rows[0]) : undefined;
+}
+
+export async function claimReminderForDelivery(
+  pool: DbPool,
+  input: { reminderId: string; now?: Date; staleBefore?: Date },
+): Promise<ScheduledReminder | undefined> {
+  const now = input.now ?? new Date();
+  const staleBefore = input.staleBefore ?? new Date(now.getTime() - 5 * 60_000);
+  const result = await pool.query(
+    `
+      UPDATE scheduled_reminders SET
+        status = 'delivering', claimed_at = $2, delivery_attempts = delivery_attempts + 1,
+        last_error_code = NULL, updated_at = $2
+      WHERE reminder_id = $1 AND (
+        (status = 'scheduled' AND scheduled_for <= $2)
+        OR (status = 'delivering' AND claimed_at < $3)
+      )
+      RETURNING *
+    `,
+    [input.reminderId, now, staleBefore],
+  );
+  return result.rows[0] ? rowToReminder(result.rows[0]) : undefined;
+}
+
+export async function listDueReminderIds(
+  pool: DbPool,
+  input: { now?: Date; staleBefore?: Date; limit?: number } = {},
+): Promise<string[]> {
+  const now = input.now ?? new Date();
+  const staleBefore = input.staleBefore ?? new Date(now.getTime() - 5 * 60_000);
+  const result = await pool.query(
+    `
+      SELECT reminder_id FROM scheduled_reminders
+      WHERE (status = 'scheduled' AND scheduled_for <= $1)
+         OR (status = 'delivering' AND claimed_at < $2)
+      ORDER BY scheduled_for, reminder_id
+      LIMIT $3
+    `,
+    [now, staleBefore, Math.max(1, Math.min(input.limit ?? 500, 2_000))],
+  );
+  return result.rows.map((row) => String(row.reminder_id));
+}
+
+export async function markReminderDelivered(
+  pool: DbPool,
+  input: { reminderId: string; channelId: string; messageId: string },
+): Promise<boolean> {
+  const result = await pool.query(
+    `
+      UPDATE scheduled_reminders SET
+        status = 'delivered', delivered_at = now(), delivery_channel_id = $2,
+        delivery_message_id = $3, claimed_at = NULL, updated_at = now()
+      WHERE reminder_id = $1 AND status = 'delivering'
+    `,
+    [input.reminderId, input.channelId, input.messageId],
+  );
+  return (result.rowCount ?? 0) > 0;
+}
+
+export async function releaseReminderDelivery(
+  pool: DbPool,
+  input: { reminderId: string; errorCode: string },
+): Promise<boolean> {
+  const result = await pool.query(
+    `
+      UPDATE scheduled_reminders SET
+        status = 'scheduled', claimed_at = NULL, last_error_code = $2, updated_at = now()
+      WHERE reminder_id = $1 AND status = 'delivering'
+    `,
+    [input.reminderId, input.errorCode],
+  );
+  return (result.rowCount ?? 0) > 0;
+}
+
+export async function markReminderFailed(
+  pool: DbPool,
+  input: { reminderId: string; errorCode: string },
+): Promise<boolean> {
+  const result = await pool.query(
+    `
+      UPDATE scheduled_reminders SET
+        status = 'failed', claimed_at = NULL, last_error_code = $2, updated_at = now()
+      WHERE reminder_id = $1 AND status = 'delivering'
+    `,
+    [input.reminderId, input.errorCode],
+  );
+  return (result.rowCount ?? 0) > 0;
+}
+
+export async function clearRemindersForUser(pool: DbPool, userId: string): Promise<number> {
+  const result = await pool.query("DELETE FROM scheduled_reminders WHERE requester_id = $1", [userId]);
+  return result.rowCount ?? 0;
+}
+
+export async function deleteTerminalRemindersBefore(pool: DbPool, cutoff: Date): Promise<number> {
+  const result = await pool.query(
+    `DELETE FROM scheduled_reminders
+     WHERE status IN ('delivered', 'cancelled', 'failed') AND updated_at < $1`,
+    [cutoff],
+  );
+  return result.rowCount ?? 0;
+}
+
+function rowToReminder(row: Record<string, unknown>): ScheduledReminder {
+  return {
+    reminderId: String(row.reminder_id),
+    requestKey: String(row.request_key),
+    guildId: String(row.guild_id),
+    channelId: String(row.channel_id),
+    requesterId: String(row.requester_id),
+    sourceMessageId: String(row.source_message_id),
+    reminderText: String(row.reminder_text),
+    timezone: String(row.timezone),
+    scheduledFor: new Date(String(row.scheduled_for)),
+    status: String(row.status) as ReminderStatus,
+    deliveryAttempts: Number(row.delivery_attempts),
+    claimedAt: row.claimed_at ? new Date(String(row.claimed_at)) : null,
+    deliveredAt: row.delivered_at ? new Date(String(row.delivered_at)) : null,
+    cancelledAt: row.cancelled_at ? new Date(String(row.cancelled_at)) : null,
+    deliveryChannelId: row.delivery_channel_id ? String(row.delivery_channel_id) : null,
+    deliveryMessageId: row.delivery_message_id ? String(row.delivery_message_id) : null,
+    lastErrorCode: row.last_error_code ? String(row.last_error_code) : null,
+    createdAt: new Date(String(row.created_at)),
+    updatedAt: new Date(String(row.updated_at)),
+  };
+}

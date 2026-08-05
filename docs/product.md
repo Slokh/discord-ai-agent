@@ -90,6 +90,8 @@ Randomness and wagers add two rules: exposure is reserved before entropy is cons
 
 Improvement cases are private by default and are never published as GitHub issues. All signal sources share one lifecycle without conflating a report with a defect. A confirmed repair may publish a diff-derived PR and enable auto-merge, but private prompts, identities, Discord links, secrets, and unrelated server context remain only in retained evidence and never enter source, fixtures, commits, or public PR metadata.
 
+Operators measure the loop from the same canonical records: throughput and phase latency, automated repair outcomes, human-review blockers, post-resolution recurrence, and observed repair cost. This effectiveness view is content-free and reports coverage when telemetry is missing rather than treating missing observations as successful or free work.
+
 ## Non-goals
 
 - Slash commands as the normal product interface.

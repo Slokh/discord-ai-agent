@@ -38,10 +38,21 @@ jobs:
           set -e
           jq '{revision, windowHours, generatedAt, assessment, baseline: (.baseline | if . then {revision, assessment} else null end), answers, tools, signals, deliveries, improvements, detection, verification, failureClusters}' revision-quality.json >> "$GITHUB_STEP_SUMMARY"
           exit "$quality_status"
+      - name: Collect safe improvement effectiveness
+        if: always()
+        run: |
+          kubectl --namespace "$K8S_NAMESPACE" exec "deployment/$HELM_RELEASE-worker" -- \
+            node dist/scripts/improve.js --target production --confirm-production health --hours 720 > improvement-effectiveness.json
+          jq '{generatedAt, window, current, flow, automation, recurrence, economics, attention}' improvement-effectiveness.json >> "$GITHUB_STEP_SUMMARY"
+          if [ "$(jq -r '.attention.status' improvement-effectiveness.json)" = "needs_attention" ]; then
+            echo "::warning::Improvement effectiveness crossed an attention threshold; inspect the aggregate blocker, stalled, retry-exhaustion, and recurrence counts."
+          fi
       - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: production-revision-quality
-          path: revision-quality.json
+          path: |
+            revision-quality.json
+            improvement-effectiveness.json
           if-no-files-found: error
           retention-days: 14

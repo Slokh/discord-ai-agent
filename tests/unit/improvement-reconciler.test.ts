@@ -4,7 +4,7 @@ import type { ImprovementCase, ImprovementSignal } from "../../src/db/types.js";
 import { runImprovementReconciliationOnce } from "../../src/improvements/reconciler.js";
 
 describe("improvement reconciler", () => {
-  it("advances deterministic cases and leaves subjective reports for operators", async () => {
+  it("advances deterministic cases and queues autonomous assessment for member reports", async () => {
     const now = new Date("2026-08-05T12:00:00.000Z");
     const automatedCase = improvementCase("imp-auto", "open", now);
     const manualCase = improvementCase("imp-manual", "open", now);
@@ -15,6 +15,7 @@ describe("improvement reconciler", () => {
     ]);
     const applyImprovementTriage = vi.fn(async () => ({ applied: true }));
     const recordImprovementReconciliationDecision = vi.fn(async () => ({ recorded: true }));
+    const enqueueAssessment = vi.fn(async ({ taskId }: { taskId?: string }) => ({ taskId: taskId! }));
     const verifyImprovementCasesForDeployment = vi.fn(async () => ([
       { caseId: stalledCase.caseId, status: "passed" as const, recorded: true },
     ]));
@@ -22,6 +23,7 @@ describe("improvement reconciler", () => {
       listImprovementCasesForReconciliation: vi.fn(async ({ statuses }: { statuses?: string[] }) =>
         statuses?.includes("open") ? [automatedCase, manualCase] : [stalledCase]),
       getImprovementCase: vi.fn(async (caseId: string) => records.get(caseId)),
+      getAgentTask: vi.fn(async () => undefined),
       applyImprovementTriage,
       recordImprovementReconciliationDecision,
       listActiveImprovementPullRequestWork: vi.fn(async () => []),
@@ -33,14 +35,15 @@ describe("improvement reconciler", () => {
     const result = await runImprovementReconciliationOnce({
       repo: repo as never,
       config: { improvementStalledAfterMs: 1_000 } as unknown as AppConfig,
-      runtime: { getExecution: vi.fn(), listEvents: vi.fn() } as never,
+      runtime: { getExecution: vi.fn(), getSession: vi.fn(), listMessages: vi.fn(async () => []), listEvents: vi.fn(async () => []) } as never,
       deliveries: { getByExecutionId: vi.fn() } as never,
+      enqueueAssessment: enqueueAssessment as never,
       now,
     });
 
     expect(result.triage).toEqual([
       { caseId: automatedCase.caseId, status: "applied" },
-      { caseId: manualCase.caseId, status: "deferred", reason: "operator_judgment" },
+      { caseId: manualCase.caseId, status: "deferred", reason: "assessment_running" },
     ]);
     expect(applyImprovementTriage).toHaveBeenCalledWith(expect.objectContaining({
       caseId: automatedCase.caseId,
@@ -48,9 +51,13 @@ describe("improvement reconciler", () => {
       actorKind: "automation",
       targetStatus: "actionable",
     }));
+    expect(enqueueAssessment).toHaveBeenCalledWith(expect.objectContaining({
+      taskType: "improvement_report",
+      improvementCaseId: manualCase.caseId,
+    }));
     expect(recordImprovementReconciliationDecision).toHaveBeenCalledWith(expect.objectContaining({
       caseId: manualCase.caseId,
-      eventName: "reconciliation.awaiting_operator",
+      eventName: "reconciliation.assessment_queued",
     }));
     expect(verifyImprovementCasesForDeployment).toHaveBeenCalledWith({
       revision: "revision-b",
@@ -104,6 +111,7 @@ describe("improvement reconciler", () => {
         const improvementCase = cases.find((candidate) => candidate.caseId === caseId)!;
         return record(improvementCase, signal(caseId, "member_report"));
       }),
+      getAgentTask: vi.fn(async () => undefined),
       applyImprovementTriage: vi.fn(),
       recordImprovementReconciliationDecision: vi.fn(async () => ({ recorded: true })),
       listActiveImprovementPullRequestWork: vi.fn(async () => []),

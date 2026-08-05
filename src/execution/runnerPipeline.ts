@@ -5,10 +5,11 @@ import type { AppConfig } from "../config/env.js";
 import { OpenRouterClient } from "../models/openrouter.js";
 import { complete, progress, recordArtifact } from "./callbacks.js";
 import { categoryForCodegenPhase, CodegenTaskError, diagnoseCodegenFailure, renderCodegenFailureDiagnosis, type CodegenFailureDiagnosis } from "./codegenFailureDiagnosis.js";
-import { codeUpdateVerificationRepairPrompt, renderCodegenContextPack } from "./codegenPrompts.js";
+import { codeUpdateVerificationRepairPrompt, improvementReportRepairPrompt, renderCodegenContextPack } from "./codegenPrompts.js";
 import { runCommand } from "./commands.js";
 import { buildCodegenContextPack } from "./contextPack.js";
 import { changedDependencyManifestFiles, codegenNpmScriptEnv, prepareDependencies, readDependencyManifestState } from "./dependencyCache.js";
+import { readImprovementAssessmentResult, validatedImprovementTriage, type ImprovementAssessmentResult } from "./improvementAssessmentResult.js";
 import { NANOCODEX_RUNTIME_LABEL, nanoCodexModel, runNanoCodex } from "./harness/nanocodex.js";
 import type { AgentRunSummary, NanoCodexRunInput } from "./harness/types.js";
 import { codeUpdateBranchName, codeUpdatePullRequestMetadata, codeUpdatePullRequestTitle } from "./prFormatting.js";
@@ -54,7 +55,7 @@ export async function main() {
       prUrl: result.prUrl,
       draft: result.draft,
       verifyPassed: result.verifyPassed,
-      error: null,
+      error: result.status === "no_changes" ? result.improvementAssessment?.summary ?? null : null,
       metadata: {
         timingsMs: result.timings,
         cache: result.cacheSummary,
@@ -62,6 +63,8 @@ export async function main() {
         targetPullRequestNumber: env.targetPullRequestNumber,
         targetPullRequestUrl: env.targetPullRequestUrl,
         updatedExistingPullRequest: result.updatedExistingPullRequest,
+        improvementAssessment: result.improvementAssessment ?? null,
+        autoMergeEnabled: result.autoMergeEnabled,
         resultSummary,
       }
     });
@@ -208,12 +211,54 @@ export async function runCodeUpdate(env: SandboxEnv, timings: TaskTimings, total
     const nanoCodexSummary = await runNanoCodexPhase({
       env,
       timings,
+      phase: env.taskType === "improvement_report" ? "improvement_triage" : undefined,
+      message: env.taskType === "improvement_report" ? "Running evidence-only improvement assessment." : undefined,
       input: {
         ...nanoCodexInput,
         attempt: 1,
         totalAttempts: 2,
+        ...(env.taskType === "improvement_report" ? {
+          instructions: "Assess the report using retained evidence. Keep the checkout unchanged and write the required structured result. Do not implement a fix in this phase."
+        } : {})
       }
     });
+
+    let improvementAssessment: ImprovementAssessmentResult | null = null;
+    if (env.taskType === "improvement_report") {
+      const triageChangeState = await readGitChangeState(checkoutDir, baseRevision);
+      if (triageChangeState.hasChanges) {
+        throw new CodegenTaskError("command_failed", "improvement_triage", "Improvement assessment modified the checkout before a defect was confirmed; refusing to continue.");
+      }
+      const triageResult = validatedImprovementTriage(await readImprovementAssessmentResult(env.improvementAssessmentResultPath));
+      improvementAssessment = triageResult;
+      await recordArtifact(env, {
+        kind: "diagnostic",
+        name: "Improvement assessment",
+        content: JSON.stringify(triageResult, null, 2),
+        contentType: "application/json"
+      });
+      await progress(env, "improvement_triage_verdict", triageResult.summary, { disposition: triageResult.disposition });
+      if (triageResult.disposition !== "confirmed_unfixed") {
+        timings.total = Date.now() - totalStartedAt;
+        return noChangeImprovementResult(triageResult, timings, cacheSummary);
+      }
+
+      await fs.rm(env.improvementAssessmentResultPath, { force: true });
+      await runNanoCodexPhase({
+        env,
+        timings,
+        phase: "improvement_repair",
+        message: "The defect is confirmed; running the gated repair phase.",
+        input: {
+          ...nanoCodexInput,
+          attempt: 2,
+          totalAttempts: 2,
+          prompt: improvementReportRepairPrompt(env, triageResult, contextPack),
+          instructions: "Repair only the confirmed defect, add focused regression coverage, and write the required structured repair result."
+        }
+      });
+      improvementAssessment = await readImprovementAssessmentResult(env.improvementAssessmentResultPath);
+    }
 
     await progress(env, "diff", "Checking whether NanoCodex produced real code changes.", {
       harness: NANOCODEX_RUNTIME_LABEL,
@@ -233,12 +278,26 @@ export async function runCodeUpdate(env: SandboxEnv, timings: TaskTimings, total
           draft: null,
           verifyPassed: true,
           updatedExistingPullRequest: false,
+          improvementAssessment: null,
+          autoMergeEnabled: false,
           resultSummary,
           timings,
           cacheSummary
         };
       }
+      if (improvementAssessment && improvementAssessment.disposition !== "confirmed_fixed") {
+        timings.total = Date.now() - totalStartedAt;
+        return noChangeImprovementResult(improvementAssessment, timings, cacheSummary);
+      }
       throw new CodegenTaskError("no_diff", "diff", "Agent task produced no diff; no PR will be opened.");
+    }
+    if (env.taskType === "improvement_report" && improvementAssessment && improvementAssessment.disposition !== "confirmed_fixed") {
+      timings.total = Date.now() - totalStartedAt;
+      await progress(env, "improvement_repair_blocked", improvementAssessment.summary, { disposition: improvementAssessment.disposition });
+      return noChangeImprovementResult(improvementAssessment, timings, cacheSummary);
+    }
+    if (env.taskType === "improvement_report" && (improvementAssessment?.disposition !== "confirmed_fixed" || !improvementAssessment.regression)) {
+      throw new Error("Improvement task produced code changes without a confirmed_fixed result and executable regression contract; refusing to push.");
     }
     await progress(env, "diff_detected", "Detected generated code changes.", gitChangeStateMetadata(changeState));
     const dependencyStateAfterCodegen = await readDependencyManifestState(checkoutDir);
@@ -433,6 +492,21 @@ export async function runCodeUpdate(env: SandboxEnv, timings: TaskTimings, total
       prUrl = pr.data.html_url;
     }
 
+    let autoMergeEnabled = false;
+    if (env.taskType === "improvement_report" && prNumber) {
+      const pullRequest = await octokit.pulls.get({ owner, repo, pull_number: prNumber });
+      await octokit.graphql(
+        `mutation EnableAutoMerge($pullRequestId: ID!) {
+          enablePullRequestAutoMerge(input: {pullRequestId: $pullRequestId, mergeMethod: SQUASH}) {
+            pullRequest { number }
+          }
+        }`,
+        { pullRequestId: pullRequest.data.node_id },
+      );
+      autoMergeEnabled = true;
+      await progress(env, "auto_merge_enabled", "Required checks will automatically merge and deploy this repair.", { prUrl, prNumber });
+    }
+
     timings.total = Date.now() - totalStartedAt;
     if (prMetadata) {
       await recordArtifact(env, {
@@ -469,6 +543,8 @@ export async function runCodeUpdate(env: SandboxEnv, timings: TaskTimings, total
       draft,
       verifyPassed: true,
       updatedExistingPullRequest,
+      improvementAssessment,
+      autoMergeEnabled,
       timings,
       cacheSummary
     };
@@ -477,6 +553,25 @@ export async function runCodeUpdate(env: SandboxEnv, timings: TaskTimings, total
     await removeCachedWorktree(cache.mirrorDir, checkoutDir).catch(() => undefined);
     await fs.rm(workRoot, { recursive: true, force: true }).catch(() => undefined);
   }
+}
+
+function noChangeImprovementResult(
+  improvementAssessment: ImprovementAssessmentResult,
+  timings: TaskTimings,
+  cacheSummary: CacheSummary,
+) {
+  return {
+    status: "no_changes" as const,
+    branchName: null,
+    prUrl: null,
+    draft: null,
+    verifyPassed: null,
+    updatedExistingPullRequest: false,
+    improvementAssessment,
+    autoMergeEnabled: false,
+    timings,
+    cacheSummary
+  };
 }
 
 async function timedPhase<T>(

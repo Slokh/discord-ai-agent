@@ -60,7 +60,7 @@ export async function linkImprovementCaseTask(pool: DbPool, input: {
   caseId: string;
   taskId: string;
   actorId: string;
-  actorKind?: "operator" | "system";
+  actorKind?: "operator" | "automation" | "system";
 }) {
   const client = await pool.connect();
   try {

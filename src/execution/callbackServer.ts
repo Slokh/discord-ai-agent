@@ -4,6 +4,7 @@ import { assertTaskCallbackConfig } from "../config/env.js";
 import type { DiscordAiAgentRepository } from "../db/repositories.js";
 import type { AgentRuntimeRepository } from "../db/agentRuntimeRepository.js";
 import { logger } from "../util/logger.js";
+import { applyImprovementAssessmentCompletion } from "../improvements/assessmentCompletion.js";
 import {
   taskCallbackSecret,
   verifyCallbackBodySignature,
@@ -131,13 +132,24 @@ export async function handleSandboxCallbackRequest(input: {
     return;
   }
 
-  const status = completionStatus(body.status);
+  let status = completionStatus(body.status);
   const task = await input.repo.getAgentTask(taskId);
   if (task && isTerminalTaskStatus(task.status)) {
     sendJson(input.response, 200, { ok: true, idempotent: true });
     return;
   }
   const metadata = objectValue(body.metadata);
+  if (task?.taskType === "improvement_report" && task.improvementCaseId) {
+    const assessment = await applyImprovementAssessmentCompletion({
+      repo: input.repo,
+      taskId,
+      caseId: task.improvementCaseId,
+      taskStatus: status,
+      prUrl: optionalString(body.prUrl),
+      metadata,
+    });
+    if (assessment.result && assessment.result.disposition !== "confirmed_fixed") status = "no_changes";
+  }
   if (status === "succeeded") {
     await input.repo.markAgentTaskSucceeded({
       taskId,

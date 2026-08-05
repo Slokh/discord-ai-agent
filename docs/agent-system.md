@@ -86,7 +86,7 @@ The architecture test rejects known feature/tool names in the generic runtime an
 
 The installed `improvements` capability lets the normal reply model record a concrete, reusable impediment only when it materially harms the current answer. Typical signals describe a missing capability, contradictory instruction, unclear tool contract, unusable result, data-quality limitation, or delivery problem. The signal must generalize the system issue rather than copy the member's prompt, identity, Discord link, secrets, or unrelated server content. Reporting is silent and never replaces the best answer the model can still provide.
 
-`reportImprovementSignal`, member `🐛` reactions, operator/developer reports, and automated detections all write through `improvementRepository.ts`. Exact source keys make intake idempotent; deterministic fingerprints coalesce high-confidence repetitions inside one privacy boundary. The generic agent loop has no source-specific lifecycle branch, and no signal automatically creates GitHub work.
+`reportImprovementSignal`, member `🐛` reactions, operator/developer reports, and automated detections all write through `improvementRepository.ts`. Exact source keys make intake idempotent; deterministic fingerprints coalesce high-confidence repetitions inside one privacy boundary. The generic agent loop has no source-specific lifecycle branch. The improvement worker may start a gated `improvement_report` task whose clean-checkout phase rejects, requests an exact clarification, or unlocks repair from a machine-executable contract.
 
 ## Tool execution
 
@@ -105,7 +105,7 @@ If a non-mutating focused implementation unexpectedly throws after those gates, 
 
 Mutating tools require explicit current-user intent and must be idempotent or durably deduplicated where repetition would be harmful. A successful mutation is retained immediately. If the model, audit write, balance refresh, or final synthesis later fails, the runtime delivers the committed result with a partial limitation instead of inviting a duplicate retry.
 
-Private improvement reporting is internal telemetry rather than a user-requested product mutation, so the model may record it without asking permission. Trusted operator workflows own evidence, contracts, merges, work authorization, deployment verification, and resolution.
+Private improvement reporting is internal telemetry, so the model may record it without asking permission. A report authorizes autonomous assessment and repair, but never makes itself a defect verdict. Code enforces the clean assessment gate, executable contract, auto-merge checks, deployment verification, and resolution; human judgment is reserved for a stated ambiguity or blocker.
 
 Paid generation contracts may declare identical-success reuse. Within one turn, the generic runtime executes the first exact call, retains its successful output, and returns that evidence for an identical repeat without charging the provider or attaching the file again. Distinct arguments still execute normally. This is a contract-owned cost and delivery invariant, not semantic prompt routing.
 

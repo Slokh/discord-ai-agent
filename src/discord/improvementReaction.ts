@@ -1,6 +1,7 @@
 import type { Message, MessageReaction, PartialMessageReaction, PartialUser, User } from "discord.js";
 import type { AppConfig } from "../config/env.js";
 import type { DiscordAiAgentRepository } from "../db/repositories.js";
+import type { JobRuntime } from "../jobs/queue.js";
 import { improvementFingerprint } from "../improvements/coalescing.js";
 import { logger } from "../util/logger.js";
 import { persistDiscordMessage } from "./messagePersistence.js";
@@ -15,7 +16,7 @@ export function isDiscordImprovementReaction(emoji: ReactionEmojiLike | null | u
 }
 
 export async function handleDiscordImprovementReaction(
-  input: { config: AppConfig; repo: DiscordAiAgentRepository; botUserId?: string | null },
+  input: { config: AppConfig; repo: DiscordAiAgentRepository; jobs?: Pick<JobRuntime, "enqueueImprovementReconciliation">; botUserId?: string | null },
   reaction: MessageReaction | PartialMessageReaction,
   user: User | PartialUser | null,
   present: boolean,
@@ -27,6 +28,7 @@ export async function handleDiscordImprovementReaction(
   const sourceKey = `discord-reaction:${message.guildId}:${message.id}:${user.id}:bug`;
   if (!present) {
     await input.repo.withdrawImprovementSignal({ sourceKey, actorId: user.id });
+    await wakeImprovementReconciliation(input.jobs);
     return true;
   }
 
@@ -63,7 +65,14 @@ export async function handleDiscordImprovementReaction(
     }),
     metadata: { reaction: DISCORD_IMPROVEMENT_EMOJI, messageAuthorIsBot: message.author.bot },
   });
+  await wakeImprovementReconciliation(input.jobs);
   return true;
+}
+
+async function wakeImprovementReconciliation(jobs: Pick<JobRuntime, "enqueueImprovementReconciliation"> | undefined) {
+  await jobs?.enqueueImprovementReconciliation().catch((error) => {
+    logger.warn({ err: error }, "Failed to wake improvement reconciliation; scheduled reconciliation remains active");
+  });
 }
 
 export async function clearDiscordImprovementSignalsForReaction(

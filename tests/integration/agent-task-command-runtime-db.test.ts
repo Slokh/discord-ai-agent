@@ -60,4 +60,22 @@ describe.skipIf(!runDbTests)("agent task command runtime projection", () => {
       status: "running",
     })).rejects.toThrow(/unique/i);
   });
+
+  it("associates report assessment without starting work before confirmation", async () => {
+    const taskId = `task-${randomUUID()}`;
+    const recorded = await repo.recordImprovementSignal({
+      source: "member_report", sourceKey: `member-report:${randomUUID()}`, reporterKind: "member",
+      reporterId: `user-${randomUUID()}`, scope: "global", privacy: "private", summary: "Reported reply.",
+    });
+    await repo.upsertAgentTaskQueued({
+      taskId, improvementCaseId: recorded.case.caseId, taskType: "improvement_report",
+      title: "Assess report", request: "private evidence", requestedBy: "improvement-reconciler",
+    });
+    await expect(repo.getAgentTask(taskId)).resolves.toEqual(expect.objectContaining({
+      improvementCaseId: recorded.case.caseId, taskType: "improvement_report", status: "queued",
+    }));
+    await expect(repo.getImprovementCase(recorded.case.caseId)).resolves.toEqual(expect.objectContaining({
+      case: expect.objectContaining({ status: "open" }), workAttempts: [],
+    }));
+  });
 });

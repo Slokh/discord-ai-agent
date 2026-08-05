@@ -21,7 +21,7 @@ flowchart LR
   D --> E["Evidence"]
   E --> F["Accepted executable contract"]
   F --> G["Actionable"]
-  G --> H["Explicit linked work"]
+  G --> H["Authorized linked work"]
   H --> I["Source-independent work attempt"]
   I --> L["In progress"]
   L -->|"task or PR failed"| G
@@ -37,9 +37,9 @@ Automatic coalescing requires the same guild, privacy boundary, and deterministi
 
 ## Authority and privacy
 
-A signal is an observation, never a verdict or authorization. `🐛` creates a private member signal and removing it withdraws that signal. It never starts a sandbox. The model may silently record generalized internal impediments, but it must still answer the member normally.
+A signal is an observation, never a defect verdict. A report signal authorizes autonomous assessment and repair: assessment keeps the checkout clean, and only a confirmed machine-executable contract unlocks edits. `🐛` creates a private member signal and removing it withdraws that signal. The model may silently record generalized internal impediments, but it must still answer the member normally.
 
-Member-facing reads are reporter-scoped and current-channel-permission-filtered. A Discord user may link work only to an actionable guild case containing one of their signals, and the current turn must explicitly request code work. Trusted operators manage repository/global cases through the explicit-target CLI. Case summaries and contracts must remain generalized; private prompts, identities, message content, and secrets belong only in retained evidence.
+Member-facing reads are reporter-scoped and current-channel-permission-filtered. Trusted operators manage repository/global cases through the explicit-target CLI. Case summaries and contracts remain generalized; private prompts, identities, message content, and secrets belong only in retained evidence. Assessment requests are private task-ledger data, and public PR metadata is derived only from the verified diff.
 
 Privacy deletion removes reporter-owned signals and evidence directly linked to those signals or their runtime executions. Empty cases are deleted. Coalesced cases remain only when independent signals or evidence still justify them, and actor identifiers in retained events are cleared.
 
@@ -58,17 +58,17 @@ The allowed states are `open`, `needs_evidence`, `actionable`, `in_progress`, `v
 
 `improve triage <case-id>` is the single read-only triage view. It combines active signal provenance with content-free aggregates from signal-linked runtime executions: terminal status, warning/error counts, terminal tool outcomes, duration, delivery state, and safe event names. It never copies prompts, replies, event summaries, artifact bodies, member identities, or private eval content into the dossier.
 
-Deterministic runtime, deployment, CI, and eval gate failures may be confirmed from their authoritative signal. An ordinary member, agent, operator, or developer report remains `insufficient_evidence` unless its retained runtime aggregates establish a terminal execution, tool, event, or delivery failure. Code never declares a subjective report `not_reproduced`; that verdict requires an explicit operator conclusion.
+Deterministic runtime, deployment, CI, and eval gate failures may be confirmed from their authoritative signal. Other reports enter an isolated semantic assessment that compares retained request, reply, model/tool, delivery, revision, source, and test evidence. It may dismiss expected behavior or a non-reproducible claim, identify an already-fixed regression, confirm a current defect with an executable contract, or request one exact clarification when neither rejection nor repair is safe.
 
-Known source-owned gates may propose an executable contract. Unknown detector codes and semantic reports require the operator to provide expected behavior and a concrete executable check. This prevents a stable label from masquerading as a runnable acceptance test.
+Known source-owned gates may propose an executable contract. Semantic assessment may propose only registered tool or answer-text checks; invalid or non-executable contracts cannot unlock repair. Unknown automated detector codes still await a registered source-owned contract.
 
-`--apply` performs one transaction: it records the dossier evidence, accepts the confirmed contract when present, updates classification/owner/severity, transitions confirmed cases to `actionable`, inconclusive cases to `needs_evidence`, or explicitly not-reproduced cases to `dismissed`, and appends one audit event. The operation compares the case version and locks the case. Its application key covers the signal snapshot, verdict, evidence, contract, and ownership decision, so concurrent exact retries are harmless while a later materially different conclusion may still be applied. Triage never starts a coding task or publishes anything to GitHub.
+`--apply` performs one transaction: it records the dossier evidence, accepts the confirmed contract when present, updates classification/owner/severity, transitions confirmed cases to `actionable`, inconclusive cases to `needs_evidence`, or explicitly not-reproduced cases to `dismissed`, and appends one audit event. The operation compares the case version and locks the case. Its application key covers the signal snapshot, verdict, evidence, contract, and ownership decision, so concurrent exact retries are harmless while a later materially different conclusion may still be applied. Manual CLI triage never starts work; the worker-owned assessment does so only after its clean evidence gate.
 
 ## Automatic reconciliation
 
-The worker runs `improvement.reconcile` immediately at startup and on the source-controlled schedule. It advances only trusted automated detections whose stable code maps to a registered proof adapter: the private regression suite, repository and database release gates, known post-deploy canaries, and the revision-quality gate. Unknown detector codes and member, agent, operator, or developer reports remain in the operator queue; automation records an edge-triggered `reconciliation.awaiting_operator` or `reconciliation.awaiting_contract` decision instead of inventing evidence or a contract.
+The worker runs `improvement.reconcile` immediately at startup, whenever a member report is added or withdrawn, and on the source-controlled schedule. It directly advances trusted automated detections whose stable code maps to a registered proof adapter. For report-backed cases without deterministic failure evidence, it queues one idempotent `improvement_report` task per signal snapshot. The task first assesses evidence in a clean checkout. Rejection dismisses the case; confirmation unlocks a focused repair, verified PR, and auto-merge; only a specific ambiguity, changed signal snapshot, or automation blocker records `reconciliation.awaiting_operator`. Unknown detector codes record `reconciliation.awaiting_contract`.
 
-Each pass also refreshes active GitHub pull-request work, retries verifying cases against the latest durable deployment, and records one `reconciliation.stalled` edge when `in_progress` or `verifying` has not advanced within the configured source-controlled interval. Existing case-version locks, triage application keys, work source keys, and verification receipt keys make concurrent or repeated passes harmless. Reconciliation never starts code work, merges cases, opens GitHub issues, replays an old mutation, or resolves a case without the normal deployed receipt.
+Each pass also refreshes active GitHub pull-request work, retries verifying cases against the latest durable deployment, and records one `reconciliation.stalled` edge when `in_progress` or `verifying` has not advanced within the configured source-controlled interval. Deterministic assessment task IDs, case-version locks, snapshot keys, triage application keys, work source keys, and verification receipt keys make concurrent or repeated passes harmless. Reconciliation never merges cases, opens GitHub issues, replays an old mutation, copies private evidence into public GitHub state, or resolves a case without the normal deployed receipt.
 
 ## Deployment verification
 

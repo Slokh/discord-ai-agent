@@ -1,0 +1,112 @@
+import { describe, expect, it, vi } from "vitest";
+import type { ImprovementCase, ImprovementSignal } from "../../src/db/types.js";
+import { improvementContractChecks, parseImprovementAssessmentResult, validatedImprovementTriage } from "../../src/execution/improvementAssessmentResult.js";
+import { applyImprovementAssessmentCompletion } from "../../src/improvements/assessmentCompletion.js";
+import { improvementAssessmentTaskId } from "../../src/improvements/reconciler.js";
+import { buildImprovementTriageDossier } from "../../src/improvements/triage.js";
+
+describe("autonomous improvement assessment", () => {
+  it("accepts only machine-executable confirmed regressions", () => {
+    const result = parseImprovementAssessmentResult({
+      disposition: "confirmed_fixed",
+      summary: "The reply omitted the requested result.",
+      regression: {
+        failureMode: "wrong_answer",
+        expectedBehavior: "The answer includes the computed total.",
+        expectedTools: [], forbiddenTools: [], mustContain: ["total"], mustNotContain: [],
+      },
+    });
+    expect(result?.regression).not.toBeNull();
+    expect(improvementContractChecks(result!.regression!)).toEqual([
+      { kind: "answer_text", value: "total", expectation: "required" },
+    ]);
+    expect(validatedImprovementTriage({ ...result!, disposition: "confirmed_unfixed" }).disposition).toBe("confirmed_unfixed");
+    expect(validatedImprovementTriage({ ...result!, disposition: "confirmed_fixed" }).disposition).toBe("insufficient_evidence");
+  });
+
+  it("dismisses expected behavior without human review", async () => {
+    const record = improvementRecord();
+    const taskId = improvementAssessmentTaskId(record.case.caseId, buildImprovementTriageDossier(record, []).snapshotKey);
+    const repo = assessmentRepo(record);
+    const outcome = await applyImprovementAssessmentCompletion({
+      repo: repo as never,
+      taskId,
+      caseId: record.case.caseId,
+      taskStatus: "no_changes",
+      metadata: { improvementAssessment: { disposition: "expected_behavior", summary: "The response follows the documented permission boundary.", regression: null } },
+    });
+    expect(outcome.applied).toBe(true);
+    expect(repo.applyImprovementTriage).toHaveBeenCalledWith(expect.objectContaining({
+      verdict: "not_reproduced", targetStatus: "dismissed", classification: "expected_behavior", actorKind: "automation",
+    }));
+    expect(repo.recordImprovementReconciliationDecision).not.toHaveBeenCalled();
+  });
+
+  it("links repaired work and asks for human review only with an exact clarification", async () => {
+    const record = improvementRecord();
+    const taskId = improvementAssessmentTaskId(record.case.caseId, buildImprovementTriageDossier(record, []).snapshotKey);
+    const repo = assessmentRepo(record);
+    await applyImprovementAssessmentCompletion({
+      repo: repo as never,
+      taskId,
+      caseId: record.case.caseId,
+      taskStatus: "succeeded",
+      prUrl: "https://github.com/example/repo/pull/1",
+      metadata: { improvementAssessment: {
+        disposition: "confirmed_fixed",
+        summary: "Reproduced and fixed the missing answer footer.",
+        regression: {
+          failureMode: "wrong_answer",
+          expectedBehavior: "Terminal replies include the elapsed footer.",
+          expectedTools: [], forbiddenTools: [], mustContain: ["s"], mustNotContain: [],
+        },
+      } },
+    });
+    expect(repo.linkImprovementCaseTask).toHaveBeenCalledWith(expect.objectContaining({ caseId: record.case.caseId, taskId }));
+
+    repo.applyImprovementTriage.mockClear();
+    await applyImprovementAssessmentCompletion({
+      repo: repo as never,
+      taskId,
+      caseId: record.case.caseId,
+      taskStatus: "no_changes",
+      metadata: { improvementAssessment: {
+        disposition: "insufficient_evidence",
+        summary: "Clarify whether the expected total includes tax.",
+        regression: null,
+      } },
+    });
+    expect(repo.applyImprovementTriage).toHaveBeenCalledWith(expect.objectContaining({ targetStatus: "needs_evidence" }));
+    expect(repo.recordImprovementReconciliationDecision).toHaveBeenCalledWith(expect.objectContaining({
+      eventName: "reconciliation.awaiting_operator",
+      reason: "assessment_requires_clarification",
+      metadata: expect.objectContaining({ question: "Clarify whether the expected total includes tax." }),
+    }));
+  });
+});
+
+function assessmentRepo(record: ReturnType<typeof improvementRecord>) {
+  return {
+    getImprovementCase: vi.fn(async () => record),
+    applyImprovementTriage: vi.fn(async () => ({ applied: true })),
+    linkImprovementCaseTask: vi.fn(async () => undefined),
+    recordImprovementReconciliationDecision: vi.fn(async () => ({ recorded: true })),
+  };
+}
+
+function improvementRecord() {
+  const now = new Date("2026-08-05T12:00:00.000Z");
+  const improvementCase: ImprovementCase = {
+    caseId: "imp-member", guildId: "guild", scope: "guild", privacy: "private", title: "Member report", status: "open",
+    classification: "unknown", severity: "medium", owningDomain: null, fingerprint: "member-report", mergedIntoCaseId: null,
+    resolution: null, version: 1, metadata: {}, firstSeenAt: now, lastSeenAt: now, resolvedAt: null, createdAt: now, updatedAt: now,
+  };
+  const signal: ImprovementSignal = {
+    signalId: "sig-member", caseId: improvementCase.caseId, source: "member_report", sourceKey: "member:guild:message:reporter",
+    reporterKind: "member", reporterId: "reporter", guildId: "guild", channelId: "channel", messageId: "message", executionId: "execution",
+    taskId: null, appRevision: "revision-a", privacy: "private", summary: "Member marked a reply for improvement.", details: null,
+    severityHint: null, classificationHint: null, owningDomainHint: null, fingerprint: null, active: true, metadata: {}, observedAt: now,
+    withdrawnAt: null, createdAt: now, updatedAt: now,
+  };
+  return { case: improvementCase, signals: [signal], evidence: [], contracts: [], workAttempts: [], verificationReceipts: [], events: [] };
+}

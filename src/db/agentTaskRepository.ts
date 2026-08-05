@@ -65,7 +65,7 @@ export async function upsertAgentTaskQueued(pool: DbPool, input: {
         input.discordResponseChannelId ?? null,
         input.discordResponseMessageId ?? null,
         input.retriedFromTaskId ?? null,
-        null,
+        input.improvementCaseId ?? null,
         input.taskType,
         input.title,
         input.request,
@@ -74,7 +74,7 @@ export async function upsertAgentTaskQueued(pool: DbPool, input: {
         statusMessage
       ]
     );
-    if (input.improvementCaseId) {
+    if (input.improvementCaseId && input.taskType !== "improvement_report") {
       await linkImprovementCaseTask(pool, {
         caseId: input.improvementCaseId,
         taskId: input.taskId,

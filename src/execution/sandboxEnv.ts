@@ -7,7 +7,9 @@ export type { SandboxEnv, TaskTimings } from "./types.js";
 
 export function loadSandboxEnv(): SandboxEnv {
   const taskId = requiredEnv("TASK_ID");
-  const taskType = process.env.TASK_TYPE === "diagnosis"
+  const taskType = process.env.TASK_TYPE === "improvement_report"
+    ? "improvement_report"
+    : process.env.TASK_TYPE === "diagnosis"
       ? "diagnosis"
       : "code_update";
   return {
@@ -17,6 +19,7 @@ export function loadSandboxEnv(): SandboxEnv {
     sandboxRunId: requiredEnv("SANDBOX_RUN_ID"),
     taskTitle: requiredEnv("TASK_TITLE"),
     taskRequest: requiredEnv("TASK_REQUEST"),
+    improvementAssessmentResultPath: path.join(os.tmpdir(), `${taskId}-improvement-assessment.json`),
     requestedBy: requiredEnv("REQUESTED_BY"),
     targetBranch: optionalEnv("TARGET_BRANCH"),
     targetPullRequestNumber: numberEnv("TARGET_PULL_REQUEST_NUMBER"),

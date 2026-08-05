@@ -108,6 +108,29 @@ export async function requestImprovementReporterClarification(pool: DbPool, inpu
   return result.rowCount ?? 0;
 }
 
+/** Gives reconciliation a content-free view of whether reporter input or delivery is the current blocker. */
+export async function getImprovementReporterClarificationState(pool: DbPool, caseId: string) {
+  const result = await pool.query(
+    `SELECT
+       count(*) FILTER (WHERE clarification_question IS NOT NULL AND clarification_answer IS NULL)::int AS pending_count,
+       count(*) FILTER (WHERE clarification_question IS NOT NULL AND clarification_answer IS NULL AND delivery_abandoned_at IS NOT NULL)::int AS abandoned_count,
+       min(next_delivery_at) FILTER (WHERE clarification_question IS NOT NULL AND clarification_answer IS NULL) AS next_delivery_at,
+       max(updated_at) AS latest_updated_at,
+       max(clarification_task_id) FILTER (WHERE clarification_question IS NOT NULL AND clarification_answer IS NULL) AS clarification_task_id
+     FROM improvement_reporter_conversations
+     WHERE case_id = $1`,
+    [caseId],
+  );
+  const row = result.rows[0] ?? {};
+  return {
+    pendingCount: Number(row.pending_count ?? 0),
+    abandonedCount: Number(row.abandoned_count ?? 0),
+    nextDeliveryAt: dateOrNull(row.next_delivery_at),
+    latestUpdatedAt: dateOrNull(row.latest_updated_at),
+    clarificationTaskId: row.clarification_task_id == null ? null : String(row.clarification_task_id),
+  };
+}
+
 export async function listRenderableImprovementReporterConversations(pool: DbPool, limit = 50) {
   const result = await pool.query(
     `SELECT conversation.*,

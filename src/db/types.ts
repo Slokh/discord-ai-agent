@@ -56,6 +56,19 @@ export type ImprovementPrivacy = "private" | "publication_safe";
 export type ImprovementSignalSource = "member_report" | "agent_report" | "operator_report" | "developer_report" | "runtime_detection" | "deployment_detection" | "ci_detection" | "eval_detection";
 export type ImprovementWorkSource = "agent_task" | "github_pull_request";
 export type ImprovementWorkStatus = "in_progress" | "succeeded" | "failed" | "cancelled";
+export type ImprovementAutomationState = "pending" | "progressing" | "waiting" | "blocked" | "complete";
+
+export type ImprovementCaseHealth = {
+  caseId: string;
+  state: ImprovementAutomationState;
+  blocker: string | null;
+  nextAction: string;
+  retryTrigger: string | null;
+  retryAt: Date | null;
+  progressKey: string;
+  lastProgressAt: Date;
+  checkedAt: Date;
+};
 
 export type ImprovementCase = {
   caseId: string;

@@ -36,11 +36,14 @@ const repo = createAppDatabase(pool);
 try {
   if (command === "inbox") {
     const statuses = repeated("--status").map(statusValue);
-    print(await repo.listImprovementCases({ statuses, limit: numberOption("--limit", 100) }));
+    const cases = await repo.listImprovementCases({ statuses, limit: numberOption("--limit", 100) });
+    const health = await repo.listImprovementCaseHealth(cases.map((improvementCase) => improvementCase.caseId));
+    const healthByCase = new Map(health.map((entry) => [entry.caseId, entry]));
+    print(cases.map((improvementCase) => ({ ...improvementCase, health: healthByCase.get(improvementCase.caseId) ?? null })));
   } else if (command === "show") {
     const result = await repo.getImprovementCase(requiredPositional(1, "case id"));
     if (!result) fail("Improvement case not found.");
-    print(result);
+    print({ ...result, health: await repo.getImprovementCaseHealth(result.case.caseId) });
   } else if (command === "suggest") {
     print(await repo.suggestImprovementCaseMerges({ caseId: requiredPositional(1, "case id"), limit: numberOption("--limit", 10) }));
   } else if (command === "triage") {

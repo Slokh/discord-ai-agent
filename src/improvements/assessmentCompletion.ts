@@ -3,7 +3,7 @@ import {
   improvementContractChecks,
   parseImprovementAssessmentResult,
 } from "../execution/improvementAssessmentResult.js";
-import { improvementAssessmentTaskId } from "./reconciler.js";
+import { isImprovementAssessmentTaskId } from "./reconciler.js";
 import { buildImprovementTriageDossier, improvementTriageApplication } from "./triage.js";
 
 type AssessmentRepository = Pick<
@@ -27,7 +27,7 @@ export async function applyImprovementAssessmentCompletion(input: {
   const record = await input.repo.getImprovementCase(input.caseId);
   if (!record) return { result, applied: false };
   const dossier = buildImprovementTriageDossier(record, []);
-  if (improvementAssessmentTaskId(input.caseId, dossier.snapshotKey) !== input.taskId) {
+  if (!isImprovementAssessmentTaskId(input.caseId, dossier.snapshotKey, input.taskId)) {
     await input.repo.recordImprovementReconciliationDecision({
       caseId: input.caseId,
       eventName: "reconciliation.assessment_superseded",
@@ -37,7 +37,9 @@ export async function applyImprovementAssessmentCompletion(input: {
     return { result, applied: false };
   }
   if (!result) {
-    await awaitingHuman(input.repo, input.caseId, "assessment_failed_without_structured_result", input.taskId);
+    if (input.taskStatus !== "failed" && input.taskStatus !== "cancelled") {
+      await awaitingHuman(input.repo, input.caseId, "assessment_failed_without_structured_result", input.taskId);
+    }
     return { result: null, applied: false };
   }
 
@@ -49,7 +51,9 @@ export async function applyImprovementAssessmentCompletion(input: {
 
   if (result.disposition === "confirmed_fixed") {
     if (input.taskStatus !== "succeeded" || !input.prUrl || !result.regression) {
-      await awaitingHuman(input.repo, input.caseId, "confirmed_report_repair_did_not_complete", input.taskId);
+      if (input.taskStatus !== "failed" && input.taskStatus !== "cancelled") {
+        await awaitingHuman(input.repo, input.caseId, "confirmed_report_repair_did_not_complete", input.taskId);
+      }
       return { result, applied: false };
     }
     const application = improvementTriageApplication(dossier, {

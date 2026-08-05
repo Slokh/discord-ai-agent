@@ -42,6 +42,24 @@ describe("autonomous improvement assessment", () => {
     expect(repo.recordImprovementReconciliationDecision).not.toHaveBeenCalled();
   });
 
+  it("accepts completion from a bounded retry of the same assessment snapshot", async () => {
+    const record = improvementRecord();
+    const snapshotKey = buildImprovementTriageDossier(record, []).snapshotKey;
+    const taskId = improvementAssessmentTaskId(record.case.caseId, snapshotKey, 2);
+    const repo = assessmentRepo(record);
+    const outcome = await applyImprovementAssessmentCompletion({
+      repo: repo as never,
+      taskId,
+      caseId: record.case.caseId,
+      taskStatus: "no_changes",
+      metadata: { improvementAssessment: { disposition: "expected_behavior", summary: "The observed behavior is expected.", regression: null } },
+    });
+    expect(outcome.applied).toBe(true);
+    expect(repo.recordImprovementReconciliationDecision).not.toHaveBeenCalledWith(expect.objectContaining({
+      eventName: "reconciliation.assessment_superseded",
+    }));
+  });
+
   it("links repaired work and asks the reporter for an exact clarification", async () => {
     const record = improvementRecord();
     const taskId = improvementAssessmentTaskId(record.case.caseId, buildImprovementTriageDossier(record, []).snapshotKey);
@@ -131,6 +149,23 @@ describe("autonomous improvement assessment", () => {
       reason: "assessment_signal_snapshot_changed",
       metadata: { taskId: "improvement-stale-snapshot" },
     }));
+    expect(repo.recordImprovementReconciliationDecision).not.toHaveBeenCalledWith(expect.objectContaining({
+      eventName: "reconciliation.awaiting_operator",
+    }));
+  });
+
+  it("leaves transient task failures to bounded reconciliation retries", async () => {
+    const record = improvementRecord();
+    const taskId = improvementAssessmentTaskId(record.case.caseId, buildImprovementTriageDossier(record, []).snapshotKey);
+    const repo = assessmentRepo(record);
+    const outcome = await applyImprovementAssessmentCompletion({
+      repo: repo as never,
+      taskId,
+      caseId: record.case.caseId,
+      taskStatus: "failed",
+      metadata: {},
+    });
+    expect(outcome.applied).toBe(false);
     expect(repo.recordImprovementReconciliationDecision).not.toHaveBeenCalledWith(expect.objectContaining({
       eventName: "reconciliation.awaiting_operator",
     }));

@@ -47,7 +47,7 @@ describe("config", () => {
       APP_REVISION: "abc123",
       RELEASE_VERIFICATION_ID: "run-1",
       PREVIOUS_APP_REVISION: "def456",
-      RELEASE_NOTES_CHANNEL_ID: "123",
+      DISCORD_BOT_CHANNEL_ID: "123456789012345678",
       DISCORD_PREMIUM_SKU_IDS: "123456789012345678,111111111111111111",
       POD_NAMESPACE: "test-namespace",
       SANDBOX_IMAGE: "registry.example/sandbox:abc123",
@@ -57,7 +57,8 @@ describe("config", () => {
       PRIVY_APP_SECRET: "privy-secret"
     }, () => {
       const config = loadConfig();
-      expect(config.releaseNotes).toEqual({ verificationId: "run-1", previousRevision: "def456", channelId: "123" });
+      expect(config.releaseNotes).toEqual({ verificationId: "run-1", previousRevision: "def456" });
+      expect(config.discord.botChannelId).toBe("123456789012345678");
       expect(config.discord.premiumSkuIds).toEqual(["123456789012345678", "111111111111111111"]);
       expect(config.execution.kubernetes).toEqual(expect.objectContaining({
         namespace: "test-namespace",
@@ -75,17 +76,27 @@ describe("config", () => {
       OPENROUTER_CHAT_MODEL: "anthropic/claude-sonnet-5",
       GITHUB_REPOSITORY: "somewhere/else",
       CODEGEN_EXECUTION_BACKEND: "local-process",
+      RELEASE_NOTES_CHANNEL_ID: "123456789012345678",
+      IMPROVEMENT_REPORT_CHANNEL_ID: "123456789012345678",
       WORKER_TASK_ENABLED: "false",
       WALLET_BALANCES_PUBLIC: "false",
       TEMPO_NETWORK: "moderato"
     }, () => {
-      expect(() => loadConfig()).toThrow(/Removed environment variables.*CODEGEN_EXECUTION_BACKEND.*GITHUB_REPOSITORY.*OPENROUTER_CHAT_MODEL/);
+      expect(() => loadConfig()).toThrow(
+        /Removed environment variables.*CODEGEN_EXECUTION_BACKEND.*GITHUB_REPOSITORY.*IMPROVEMENT_REPORT_CHANNEL_ID.*OPENROUTER_CHAT_MODEL.*RELEASE_NOTES_CHANNEL_ID/,
+      );
     });
   });
 
   it("validates Discord premium SKU identifiers", () => {
     withEnv({ DISCORD_PREMIUM_SKU_IDS: "not-a-snowflake" }, () => {
       expect(() => loadConfig()).toThrow(/premium.*snowflakes/i);
+    });
+  });
+
+  it("validates the canonical bot channel identifier", () => {
+    withEnv({ DISCORD_BOT_CHANNEL_ID: "not-a-snowflake" }, () => {
+      expect(() => loadConfig()).toThrow(/bot channel.*snowflake/i);
     });
   });
 
@@ -111,7 +122,7 @@ function withCleanEnv(callback: () => void) {
   withEnv({
     APP_REVISION: "",
     PREVIOUS_APP_REVISION: "",
-    RELEASE_NOTES_CHANNEL_ID: "",
+    DISCORD_BOT_CHANNEL_ID: "",
     DISCORD_PREMIUM_SKU_IDS: "",
     PRIVY_APP_ID: "",
     PRIVY_APP_SECRET: "",

@@ -30,10 +30,6 @@ helm.sh/chart: {{ .Chart.Name }}-{{ .Chart.Version | replace "+" "_" }}
 - name: PREVIOUS_APP_REVISION
   value: {{ .Values.config.previousAppRevision | quote }}
 {{- end }}
-{{- if .Values.config.releaseNotesChannelId }}
-- name: RELEASE_NOTES_CHANNEL_ID
-  value: {{ .Values.config.releaseNotesChannelId | quote }}
-{{- end }}
 - name: BOT_OWNER_USER_ID
   valueFrom: { secretKeyRef: { name: {{ .Values.secret.existingSecretName }}, key: BOT_OWNER_USER_ID, optional: true } }
 - name: OPS_ALLOWLIST_USER_IDS
@@ -64,6 +60,10 @@ helm.sh/chart: {{ .Chart.Name }}-{{ .Chart.Version | replace "+" "_" }}
   valueFrom: { secretKeyRef: { name: {{ .Values.secret.existingSecretName }}, key: DISCORD_CLIENT_ID } }
 - name: DISCORD_GUILD_ID
   valueFrom: { secretKeyRef: { name: {{ .Values.secret.existingSecretName }}, key: DISCORD_GUILD_ID } }
+{{- if .Values.config.botChannelId }}
+- name: DISCORD_BOT_CHANNEL_ID
+  value: {{ .Values.config.botChannelId | quote }}
+{{- end }}
 - name: DISCORD_PREMIUM_SKU_IDS
   valueFrom: { secretKeyRef: { name: {{ .Values.secret.existingSecretName }}, key: DISCORD_PREMIUM_SKU_IDS, optional: true } }
 {{- end -}}

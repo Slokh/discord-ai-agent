@@ -33,11 +33,10 @@ export async function handleDiscordImprovementReaction(
   }
 
   await persistDiscordMessage(input.repo, message as Message);
-  const execution = message.author.id === input.botUserId
-    ? await input.repo.findAgentRuntimeChatExecutionByTraceId(message.id)
-    : undefined;
-  const summary = message.author.id === input.botUserId
-    ? "A member reported a Discord assistant reply"
+  const execution = await input.repo.findAgentRuntimeChatExecutionByTraceId(message.id);
+  const isAgentInteraction = Boolean(execution) || message.author.id === input.botUserId;
+  const summary = isAgentInteraction
+    ? "A member reported a Discord assistant interaction"
     : "A member reported a Discord message or interaction";
   const recorded = await input.repo.recordImprovementSignal({
     source: "member_report",
@@ -53,15 +52,15 @@ export async function handleDiscordImprovementReaction(
     privacy: "private",
     summary,
     classification: "unknown",
-    owningDomain: message.author.id === input.botUserId ? "agent-replies" : "discord",
+    owningDomain: isAgentInteraction ? "agent-replies" : "discord",
     fingerprint: improvementFingerprint({
       guildId: message.guildId,
       scope: "guild",
       privacy: "private",
-      owningDomain: message.author.id === input.botUserId ? "agent-replies" : "discord",
+      owningDomain: isAgentInteraction ? "agent-replies" : "discord",
       classification: "unknown",
       summary,
-      stableCode: `discord-message:${message.id}`,
+      stableCode: execution ? `discord-execution:${execution.executionId}` : `discord-message:${message.id}`,
     }),
     metadata: { reaction: DISCORD_IMPROVEMENT_EMOJI, messageAuthorIsBot: message.author.bot },
   });

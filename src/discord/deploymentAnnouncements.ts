@@ -38,7 +38,7 @@ export async function announceDeployment(input: {
 }): Promise<"disabled" | "baseline" | "duplicate" | "posted"> {
   const { config, repo } = input;
   const guildId = config.discord.guildId;
-  const channelId = config.releaseNotes.channelId;
+  const channelId = config.discord.botChannelId;
   const revision = config.appRevision;
   if (!guildId || !channelId || !isDeployRevision(revision)) return "disabled";
 
@@ -63,7 +63,7 @@ export async function announceDeployment(input: {
     const comparisonUrl = githubComparisonUrl(config.github.repository, previousRevision, revision);
     const channel = await input.client.channels.fetch(channelId);
     if (!channel || typeof (channel as any).send !== "function") {
-      throw new Error(`Release notes channel ${channelId} is missing or is not message-capable.`);
+      throw new Error(`Bot channel ${channelId} is missing or is not message-capable.`);
     }
 
     const existing = await findExistingAnnouncement(channel as any, revision);

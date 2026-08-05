@@ -34,6 +34,7 @@ type ImprovementReconciliationRepository = Pick<
   | "getAgentTask"
   | "applyImprovementTriage"
   | "recordImprovementReconciliationDecision"
+  | "messageContext"
   | "ensureImprovementReporterConversationsForCase"
   | "listActiveImprovementPullRequestWork"
   | "linkImprovementCasePullRequest"
@@ -177,7 +178,7 @@ async function reconcileAutonomousAssessment(
     return { status: "deferred", reason: "operator_judgment" };
   }
   const signals = record.signals.filter((signal) => signal.active);
-  const request = await renderPrivateAssessmentEvidence(record.case.caseId, signals, input.runtime);
+  const request = await renderPrivateAssessmentEvidence(record.case.caseId, signals, input.runtime, input.repo);
   const first = signals[0];
   await input.enqueueAssessment({
     taskId,

@@ -1,4 +1,11 @@
-import { ThreadAutoArchiveDuration, type Client, type Message, type MessageCreateOptions } from "discord.js";
+import {
+  ChannelType,
+  PermissionFlagsBits,
+  ThreadAutoArchiveDuration,
+  type Client,
+  type Message,
+  type MessageCreateOptions,
+} from "discord.js";
 import type { AppConfig } from "../config/env.js";
 import type { DiscordAiAgentRepository, ImprovementReporterConversation } from "../db/repositories.js";
 import type { JobRuntime } from "../jobs/queue.js";
@@ -13,7 +20,7 @@ const THREAD_NAME = "🐛 report follow-up";
 
 export type ImprovementReporterNotifierRuntime = { stop: () => void };
 
-/** Posts case transitions as turns in a source-message thread, with DM as a bounded fallback. */
+/** Posts case transitions as turns in the configured bot channel, with DM as a bounded fallback. */
 export function startImprovementReporterNotifier(input: {
   client: Client;
   repo: DiscordAiAgentRepository;
@@ -32,6 +39,7 @@ export function startImprovementReporterNotifier(input: {
       if (!input.client.isReady()) return;
       const conversations = await input.repo.listRenderableImprovementReporterConversations(RENDER_LIMIT);
       for (const conversation of conversations) {
+        if (!shouldDeliverImprovementReporterConversation(conversation)) continue;
         await deliverReporterConversation(input, conversation).catch((error) => {
           logger.warn({ err: error, conversationId: conversation.conversationId }, "Failed to render improvement reporter conversation");
         });
@@ -52,6 +60,16 @@ export function startImprovementReporterNotifier(input: {
       if (timer) clearTimeout(timer);
     },
   };
+}
+
+/** Keeps autonomous triage silent until a reporter answer or repair lifecycle needs a durable conversation. */
+export function shouldDeliverImprovementReporterConversation(conversation: ImprovementReporterConversation) {
+  if (conversation.deliveryKind) return true;
+  if (!conversation.signalActive) return false;
+  if (["in_progress", "verifying", "resolved"].includes(conversation.caseStatus)) return true;
+  return conversation.caseStatus === "needs_evidence"
+    && Boolean(conversation.clarificationQuestion)
+    && conversation.clarificationAnswer == null;
 }
 
 export function renderImprovementReporterConversation(conversation: ImprovementReporterConversation) {
@@ -146,7 +164,12 @@ async function deliverReporterConversation(
   }
   try {
     const content = cleanResponse(rendered.content, input.config.maxReplyChars);
-    const delivered = await sendConversationTurn(input.client, conversation, content);
+    const delivered = await sendConversationTurn(
+      input.client,
+      conversation,
+      content,
+      input.config.discord.botChannelId,
+    );
     await input.repo.markImprovementReporterConversationRendered({
       conversationId: conversation.conversationId,
       deliveryKind: delivered.kind,
@@ -174,7 +197,12 @@ async function deliverReporterConversation(
   }
 }
 
-async function sendConversationTurn(client: Client, conversation: ImprovementReporterConversation, content: string) {
+async function sendConversationTurn(
+  client: Client,
+  conversation: ImprovementReporterConversation,
+  content: string,
+  reportChannelId: string | null,
+) {
   if (conversation.deliveryKind === "thread" && conversation.deliveryChannelId) {
     try {
       const channel = await client.channels.fetch(conversation.deliveryChannelId);
@@ -190,10 +218,13 @@ async function sendConversationTurn(client: Client, conversation: ImprovementRep
   if (conversation.deliveryKind === "dm") return sendFallbackDm(client, conversation, content);
 
   try {
-    const thread = await resolveImprovementReporterThread(client, conversation);
+    const thread = await resolveImprovementReporterThread(client, conversation, reportChannelId);
     if (thread) {
       await reopenThread(thread);
-      return { kind: "thread" as const, message: await sendMessage(thread, content) };
+      return {
+        kind: "thread" as const,
+        message: await sendMessage(thread, `<@${conversation.reporterId}> ${content}`, conversation.reporterId),
+      };
     }
   } catch (error) {
     logger.warn({ err: error, conversationId: conversation.conversationId }, "Could not create reporter thread; falling back to DM");
@@ -201,20 +232,20 @@ async function sendConversationTurn(client: Client, conversation: ImprovementRep
   return sendFallbackDm(client, conversation, content);
 }
 
-export async function resolveImprovementReporterThread(client: Client, conversation: ImprovementReporterConversation) {
-  const sourceChannel = await client.channels.fetch(conversation.sourceChannelId);
-  if (!sourceChannel || sourceChannel.isThread()) return null;
-  const messages = (sourceChannel as { messages?: { fetch?: (messageId: string) => Promise<Message> } }).messages;
-  if (!messages?.fetch) return null;
-  const sourceMessage = await messages.fetch(conversation.sourceMessageId);
-  if (!sourceMessage.inGuild() || sourceMessage.guildId !== conversation.guildId) return null;
-  if (sourceMessage.thread) return sourceMessage.thread;
-  if (sourceMessage.hasThread) {
-    const existing = await client.channels.fetch(sourceMessage.id);
-    return existing?.isThread() ? existing : null;
-  }
-  return sourceMessage.startThread({
+export async function resolveImprovementReporterThread(
+  client: Client,
+  conversation: ImprovementReporterConversation,
+  reportChannelId: string | null,
+) {
+  if (!reportChannelId) return null;
+  const reportChannel = await client.channels.fetch(reportChannelId);
+  if (!reportChannel || reportChannel.type !== ChannelType.GuildText || reportChannel.guildId !== conversation.guildId) return null;
+  const reporter = await reportChannel.guild.members.fetch(conversation.reporterId);
+  const permissions = reportChannel.permissionsFor(reporter);
+  if (!permissions?.has([PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessagesInThreads])) return null;
+  return reportChannel.threads.create({
     name: THREAD_NAME,
+    type: ChannelType.PublicThread,
     autoArchiveDuration: ThreadAutoArchiveDuration.OneDay,
     reason: "Follow-up conversation for a member improvement report",
   });
@@ -230,8 +261,15 @@ async function sendFallbackDm(client: Client, conversation: ImprovementReporterC
   return { kind: "dm" as const, message: await sendMessage(channel, content) };
 }
 
-async function sendMessage(channel: { send: (payload: MessageCreateOptions) => Promise<Message> }, content: string) {
-  const sent = await discordSend(channel, { content }, { logger, throwUnknown: false });
+async function sendMessage(
+  channel: { send: (payload: MessageCreateOptions) => Promise<Message> },
+  content: string,
+  mentionUserId?: string,
+) {
+  const sent = await discordSend(channel, {
+    content,
+    allowedMentions: { parse: [], users: mentionUserId ? [mentionUserId] : [] },
+  }, { logger, throwUnknown: false });
   if (!sent.ok) throw new Error(`Discord rejected the reporter conversation turn (${sent.reason}).`);
   return sent.value;
 }

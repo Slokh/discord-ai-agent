@@ -152,6 +152,19 @@ describe.skipIf(!runDbTests)("improvement reporter conversation database behavio
       guildId, channelId: "channel-shared", messageId: "message-shared",
     });
 
+    await expect(repo.listRenderableImprovementReporterConversations(10)).resolves.toEqual([]);
+    const before = await repo.getImprovementCase(first.case.caseId);
+    if (!before) throw new Error("Expected improvement case.");
+    await repo.applyImprovementTriage({
+      ...improvementTriageApplication(buildImprovementTriageDossier(before, [])),
+      actorId: "improvement-assessor",
+      actorKind: "automation",
+    });
+    await repo.requestImprovementReporterClarification({
+      caseId: first.case.caseId,
+      taskId: "assessment-shared",
+      question: "What result did you expect?",
+    });
     await expect(repo.listRenderableImprovementReporterConversations(10)).resolves.toEqual([
       expect.objectContaining({ caseId: first.case.caseId, signalActive: true }),
     ]);

@@ -37,7 +37,7 @@ export const environmentVariables = [
   { name: "APP_REVISION", group: "deployment", description: "Immutable deployed git revision.", requiredFor: "release workflow" },
   { name: "RELEASE_VERIFICATION_ID", group: "deployment", description: "Unique public identifier for this rollout's post-deploy promotion.", requiredFor: "release workflow" },
   { name: "PREVIOUS_APP_REVISION", group: "deployment", description: "Previously deployed git revision.", requiredFor: "release announcements" },
-  { name: "RELEASE_NOTES_CHANNEL_ID", group: "deployment", description: "Discord channel receiving deployment announcements.", requiredFor: "release announcements" },
+  { name: "DISCORD_BOT_CHANNEL_ID", group: "deployment", description: "Single Discord text channel for bot updates, deployment announcements, and improvement threads.", requiredFor: "bot updates and improvement conversations", operator: true },
   { name: "POD_NAMESPACE", group: "deployment", description: "Namespace where isolated code-update Jobs are created.", requiredFor: "Kubernetes worker" },
   { name: "SANDBOX_IMAGE", group: "deployment", description: "Immutable code-update sandbox image reference.", requiredFor: "Kubernetes worker" },
 ] as const satisfies readonly EnvironmentVariableDefinition[];
@@ -55,6 +55,7 @@ export const retiredEnvironmentVariableNames = new Set([
   "RETENTION_EMBEDDING_RUNS_DAYS", "RETENTION_EVENTS_DAYS", "RETENTION_RUNTIME_DAYS", "RUN_MIGRATIONS",
   "SANDBOX_CACHE_DIR", "SANDBOX_CACHE_PVC_NAME", "TEMPO_NETWORK", "TEMPO_USD_TOKEN", "USER_WALLETS_ENABLED",
   "WALLET_BALANCES_PUBLIC", "WALLET_ENABLED", "WALLET_INITIAL_GRANT_USD", "WORKER_TASK_ENABLED",
+  "RELEASE_NOTES_CHANNEL_ID", "IMPROVEMENT_REPORT_CHANNEL_ID",
 ]);
 
 export function assertNoRetiredEnvironmentVariables(env: NodeJS.ProcessEnv): void {

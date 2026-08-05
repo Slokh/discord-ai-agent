@@ -14,8 +14,8 @@ function setup() {
   const config: AppConfig = {
     ...loadConfig(),
     appRevision: newRevision,
-    releaseNotes: { verificationId: null, channelId: "release-channel", previousRevision: oldRevision },
-    discord: { ...loadConfig().discord, guildId: "guild-1" },
+    releaseNotes: { verificationId: null, previousRevision: oldRevision },
+    discord: { ...loadConfig().discord, guildId: "guild-1", botChannelId: "release-channel" },
     github: { ...loadConfig().github, repository: "example-org/example-agent", token: undefined }
   };
   const repo = {

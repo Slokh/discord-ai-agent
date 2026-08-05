@@ -6,6 +6,8 @@ import { z } from "zod";
 import { extractPromptJson, type PromptJsonOutput } from "./promptJson.js";
 
 export { extractPromptJson } from "./promptJson.js";
+import type { ImprovementContractCheck } from "../src/db/types.js";
+import { improvementContractReplayResults, type ImprovementReplayCheckResult } from "../src/observability/improvementContractReplay.js";
 import { openRouterServerToolRegistry, toolRegistry } from "../src/tools/registry.js";
 
 const DEFAULT_EVAL_DIR = "evals/prompts";
@@ -17,6 +19,18 @@ const KNOWN_EVAL_TOOLS = new Set<string>([
   ...openRouterServerToolRegistry.map((tool) => tool.type),
 ]);
 
+const improvementContractCheckSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("tool"), name: z.string().min(1), expectation: z.enum(["required", "forbidden"]) }),
+  z.object({ kind: z.literal("answer_text"), value: z.string().min(1), expectation: z.enum(["required", "forbidden"]) }),
+  z.object({ kind: z.literal("runtime_event"), name: z.string().min(1), expectation: z.enum(["required", "forbidden"]) }),
+  z.object({ kind: z.literal("delivery_state"), state: z.string().min(1) }),
+  z.object({ kind: z.literal("test"), reference: z.string().min(1) }),
+  z.object({ kind: z.literal("eval"), reference: z.string().min(1) }),
+  z.object({ kind: z.literal("database_invariant"), reference: z.string().min(1) }),
+  z.object({ kind: z.literal("deployment_canary"), reference: z.string().min(1) }),
+  z.object({ kind: z.literal("manual"), description: z.string().min(1) }),
+]);
+
 const evalPromptSchema = z.object({
   id: z.string().min(1),
   category: z.string().min(1),
@@ -24,6 +38,7 @@ const evalPromptSchema = z.object({
   improvementCaseId: z.string().min(1).optional(),
   improvementContractId: z.string().min(1).optional(),
   improvementContractVersion: z.number().int().positive().optional(),
+  improvementChecks: z.array(improvementContractCheckSchema).default([]),
   prompt: z.string().min(1),
   notes: z.string().optional(),
   expectedTools: z.array(z.string().min(1)).default([]),
@@ -31,6 +46,8 @@ const evalPromptSchema = z.object({
   expectedRequestedTools: z.array(z.string().min(1)).default([]),
   mustContain: z.array(z.string().min(1)).default([]),
   mustNotContain: z.array(z.string().min(1)).default([]),
+  expectedRuntimeEvents: z.array(z.string().min(1)).default([]),
+  forbiddenRuntimeEvents: z.array(z.string().min(1)).default([]),
   maxAnswerWords: z.number().int().positive().optional(),
   auditMustNotMatch: z
     .array(
@@ -92,6 +109,7 @@ export type EvalTraceEvidence = {
   auditedTools: string[];
   /** One line per tool audit: "toolName argumentsSummary resultSummary", for auditMustNotMatch assertions. */
   toolAuditLines: string[];
+  eventNames: string[];
   traceEventCount: number;
   toolAuditCount: number;
 };
@@ -103,6 +121,7 @@ export type EvalCaseResult = {
   improvementCaseId?: string;
   improvementContractId?: string;
   improvementContractVersion?: number;
+  improvementCheckResults?: ImprovementReplayCheckResult[];
   prompt: string;
   status: "passed" | "failed" | "error" | "skipped";
   durationMs: number;
@@ -362,6 +381,7 @@ async function runEvalPrompt(
       traceId: null,
       answer: "",
       evidence: emptyEvidence(),
+      improvementCheckResults: replayResults(prompt, "", emptyEvidence(), "inconclusive"),
       failures: [],
       notes: prompt.skipReason ?? prompt.notes
     };
@@ -386,6 +406,7 @@ async function runEvalPrompt(
       traceId: null,
       answer: "",
       evidence: emptyEvidence(),
+      improvementCheckResults: replayResults(prompt, "", emptyEvidence(), "inconclusive"),
       failures: [`prompt command exited with ${result.exitCode}`],
       notes: prompt.notes,
       stderr: result.stderr,
@@ -408,6 +429,7 @@ async function runEvalPrompt(
       traceId: null,
       answer: result.stdout.trim(),
       evidence: emptyEvidence(),
+      improvementCheckResults: replayResults(prompt, "", emptyEvidence(), "inconclusive"),
       failures: ["prompt command did not return parseable JSON"],
       notes: prompt.notes,
       stderr: result.stderr,
@@ -434,6 +456,7 @@ async function runEvalPrompt(
     traceId,
     answer: output.content,
     evidence,
+    improvementCheckResults: replayResults(prompt, output.content, evidence),
     failures,
     notes: prompt.notes,
     stderr: result.stderr.trim() || undefined
@@ -447,6 +470,7 @@ export function buildPromptCommand(prompt: EvalPrompt): { command: string; args:
     : ["run", "prompt", "--", "--json"];
   if (prompt.noMemory) args.push("--no-memory");
   if (prompt.useDiscordMemory) args.push("--use-discord-memory");
+  if (prompt.improvementCaseId) args.push("--read-only");
   args.push(...prompt.promptArgs, prompt.prompt);
   return { command: compiled ? process.execPath : "npm", args };
 }
@@ -474,6 +498,12 @@ export function evaluatePromptAssertions(
   }
   for (const text of prompt.mustNotContain) {
     if (normalizedAnswer.includes(text.toLowerCase())) failures.push(`answer contained forbidden text: ${text}`);
+  }
+  for (const eventName of prompt.expectedRuntimeEvents) {
+    if (!output.evidence.eventNames.includes(eventName)) failures.push(`expected runtime event ${eventName} was not observed`);
+  }
+  for (const eventName of prompt.forbiddenRuntimeEvents) {
+    if (output.evidence.eventNames.includes(eventName)) failures.push(`forbidden runtime event ${eventName} was observed`);
   }
   if (prompt.maxAnswerWords != null) {
     const wordCount = output.answer.trim() ? output.answer.trim().split(/\s+/u).length : 0;
@@ -534,6 +564,7 @@ export function evidenceFromTrace(runtimeEvents: RuntimeEventLike[], toolAudits:
     toolAuditLines: toolAudits.map((audit) =>
       [audit.toolName, audit.argumentsSummary, audit.resultSummary].filter(Boolean).join(" ")
     ),
+    eventNames: uniqueStrings(runtimeEvents.flatMap((event) => event.eventName ? [event.eventName] : [])),
     traceEventCount: runtimeEvents.length,
     toolAuditCount: toolAudits.length
   };
@@ -631,8 +662,8 @@ async function recordImprovementResults(report: EvalRunReport, args: EvalArgs) {
   const results = report.results.flatMap((result) => {
     if (!result.improvementCaseId || !result.improvementContractId || !result.improvementContractVersion) return [];
     const status = result.status === "passed" ? "passed" as const
-      : result.status === "skipped" ? "inconclusive" as const
-        : "failed" as const;
+      : result.status === "failed" ? "failed" as const
+        : "inconclusive" as const;
     return [{
       caseId: result.improvementCaseId,
       contractId: result.improvementContractId,
@@ -643,11 +674,21 @@ async function recordImprovementResults(report: EvalRunReport, args: EvalArgs) {
       referenceId: result.id,
       runKey: report.generatedAt,
       durationMs: result.durationMs,
+      traceId: result.traceId,
+      checkResults: result.improvementCheckResults ?? [],
     }];
   });
   const pool = createPool(config);
   try {
-    await createAppDatabase(pool).recordImprovementEvalResults(results);
+    const repo = createAppDatabase(pool);
+    await repo.recordImprovementEvalResults(results);
+    if (await repo.isDeploymentVerified({ revision: config.appRevision, deploymentId })) {
+      await repo.verifyImprovementCasesForDeployment({
+        revision: config.appRevision,
+        deploymentId,
+        actorId: "private-replay",
+      });
+    }
   } finally {
     await pool.end();
   }
@@ -832,9 +873,32 @@ function emptyEvidence(): EvalTraceEvidence {
     selectedTools: [],
     auditedTools: [],
     toolAuditLines: [],
+    eventNames: [],
     traceEventCount: 0,
     toolAuditCount: 0
   };
+}
+
+function replayResults(
+  prompt: EvalPrompt,
+  answer: string,
+  evidence: EvalTraceEvidence,
+  unavailableStatus?: "inconclusive",
+) {
+  if (unavailableStatus) {
+    return improvementContractReplayResults(prompt.improvementChecks as ImprovementContractCheck[], {
+      answer,
+      observedTools: [],
+      eventNames: [],
+      available: false,
+    }).map((result) => ({ ...result, status: unavailableStatus }));
+  }
+  return improvementContractReplayResults(prompt.improvementChecks as ImprovementContractCheck[], {
+    answer,
+    observedTools: uniqueStrings([...evidence.selectedTools, ...evidence.auditedTools]),
+    eventNames: evidence.eventNames,
+    available: true,
+  });
 }
 
 function valueAfterEquals(arg: string) {

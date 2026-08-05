@@ -66,7 +66,8 @@ high-confidence matches. Semantic similarity may suggest a merge but never
 performs one automatically.
 
 A report is not a verdict. Cases become `actionable` only after supporting
-evidence and an accepted contract with at least one machine-executable check.
+evidence and an accepted contract whose every check has a registered proof
+adapter with its required inputs available.
 Linked work moves through `in_progress` and `verifying`; only successful deployed
 evidence can resolve it. Use `npm run improve -- --target local ...` locally and
 add `--target production --confirm-production` only in the configured production

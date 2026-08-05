@@ -8,6 +8,7 @@ import { createAppDatabase, type DiscordAiAgentRepository } from "../../src/db/r
 import { runDataRetentionOnce } from "../../src/observability/dataRetention.js";
 import { passingRandomCanaryChannel, passingStatsCanaryChannel, passingWebCanaryChannel } from "../../src/observability/postDeployCanaryEvidence.js";
 import { recordAutomatedImprovementDetection } from "../../src/improvements/detections.js";
+import { improvementCheckHash } from "../../src/improvements/proofAdapters.js";
 import { buildImprovementTriageDossier, improvementTriageApplication } from "../../src/improvements/triage.js";
 import { createIsolatedTestDatabase, type IsolatedTestDatabase } from "./testDatabase.js";
 import { cleanupRepositoryTestRows, sha256Hex } from "./repositoryTestSupport.js";
@@ -158,7 +159,7 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
     await repo.acceptImprovementContract({
       caseId: first.case.caseId,
       expectedBehavior: "Return the verified value.",
-      checks: [{ kind: "test", reference: "verified-value-unit-test" }],
+      checks: [{ kind: "test", reference: "release-verify" }],
       createdBy: "test",
     });
     await expect(repo.transitionImprovementCase({
@@ -299,12 +300,12 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
       verdict: "confirmed",
       evidenceSummary: "A focused reproduction confirmed the repository failure.",
       expectedBehavior: "The focused repository invariant passes.",
-      checks: [{ kind: "test", reference: "focused-repository-invariant" }],
+      checks: [{ kind: "test", reference: "release-verify" }],
     });
     await expect(repo.applyImprovementTriage({ ...confirmed, actorId: "operator" })).resolves.toMatchObject({
       applied: true,
       case: { status: "actionable" },
-      contract: { checks: [{ kind: "test", reference: "focused-repository-invariant" }] },
+      contract: { checks: [{ kind: "test", reference: "release-verify" }] },
     });
   });
 
@@ -316,7 +317,7 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
     await repo.addImprovementEvidence({ caseId: caseRecord.case.caseId, kind: "test_failure", disposition: "supports", summary: "The focused test reproduces the invariant violation." });
     await repo.acceptImprovementContract({
       caseId: caseRecord.case.caseId, expectedBehavior: "The focused invariant test passes.",
-      checks: [{ kind: "test", reference: "focused-invariant" }], createdBy: "operator",
+      checks: [{ kind: "test", reference: "release-verify" }], createdBy: "operator",
     });
     await repo.transitionImprovementCase({ caseId: caseRecord.case.caseId, to: "actionable", actorKind: "operator" });
     const taskId = `task-${randomUUID()}`;
@@ -357,15 +358,35 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
   });
 
   it("records content-free private replay proof and resolves it automatically after promotion", async () => {
+    const traceId = `trace-${randomUUID()}`;
+    const sessionId = `agent-session-${randomUUID()}`;
+    const executionId = `agent-execution-${randomUUID()}`;
+    const guildId = `guild-${randomUUID()}`;
+    const channelId = `channel-${randomUUID()}`;
+    const userId = `user-${randomUUID()}`;
+    await repo.upsertGuild({ id: guildId, name: "private replay" });
+    await agentRuntimeRepo.upsertSession({
+      sessionId, traceId, threadKey: `discord:${guildId}:${channelId}`, guildId, channelId, userId,
+      request: "Cite the source.", status: "succeeded", metadata: { appRevision: "test-replay-revision" },
+    });
+    await agentRuntimeRepo.createExecution({
+      executionId, sessionId, traceId, status: "succeeded", metadata: { appRevision: "test-replay-revision" },
+    });
+    await agentRuntimeRepo.storeArtifact({
+      sessionId, executionId, kind: "turn_envelope", name: "Agent runtime turn envelope", contentType: "application/json",
+      content: JSON.stringify({ text: "Cite the source.", visibleChannelIds: [channelId] }),
+    });
     const caseRecord = await repo.recordImprovementSignal({
       source: "member_report", sourceKey: `source-${randomUUID()}`, reporterKind: "member",
+      reporterId: userId, guildId, channelId, executionId,
       summary: "A reply contract needs deployment verification.", scope: "repository",
     });
     await repo.addImprovementEvidence({ caseId: caseRecord.case.caseId, kind: "runtime_trace", disposition: "supports", summary: "Retained evidence confirms the mismatch." });
+    const check = { kind: "answer_text", value: "source", expectation: "required" } as const;
     const contract = await repo.acceptImprovementContract({
       caseId: caseRecord.case.caseId,
       expectedBehavior: "The reply cites its source.",
-      checks: [{ kind: "answer_text", value: "source", expectation: "required" }],
+      checks: [check],
       createdBy: "operator",
     });
     await repo.transitionImprovementCase({ caseId: caseRecord.case.caseId, to: "actionable", actorKind: "operator" });
@@ -381,6 +402,8 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
       referenceId: `improvement-${caseRecord.case.caseId}-v${contract.version}`,
       runKey: "run-a",
       durationMs: 125,
+      traceId,
+      checkResults: [{ checkHash: improvementCheckHash(check), status: "passed" }],
     }])).resolves.toEqual({ recorded: 1, total: 1 });
     await repo.markDeploymentVerified({ revision: "test-replay-revision", deploymentId: "deployment-replay" });
 
@@ -392,12 +415,48 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
       { caseId: caseRecord.case.caseId, status: "passed", recorded: true },
     ]));
     await expect(repo.getImprovementCase(caseRecord.case.caseId)).resolves.toMatchObject({ case: { status: "resolved" } });
-    const proofs = await pool.query("SELECT status,summary,metadata FROM improvement_verification_proofs WHERE case_id = $1", [caseRecord.case.caseId]);
+    const proofs = await pool.query("SELECT status,summary,metadata,execution_id,check_results FROM improvement_verification_proofs WHERE case_id = $1", [caseRecord.case.caseId]);
     expect(proofs.rows).toEqual([expect.objectContaining({
       status: "passed",
       summary: "The case-specific private contract replay passed.",
       metadata: { durationMs: 125 },
+      execution_id: executionId,
+      check_results: [{ checkHash: improvementCheckHash(check), status: "passed" }],
     })]);
+  });
+
+  it("rejects private replay contracts whose retained request used a mutating tool", async () => {
+    const traceId = `trace-${randomUUID()}`;
+    const sessionId = `agent-session-${randomUUID()}`;
+    const executionId = `agent-execution-${randomUUID()}`;
+    const guildId = `guild-${randomUUID()}`;
+    const channelId = `channel-${randomUUID()}`;
+    const userId = `user-${randomUUID()}`;
+    await repo.upsertGuild({ id: guildId, name: "unsafe private replay" });
+    await agentRuntimeRepo.upsertSession({
+      sessionId, traceId, threadKey: `discord:${guildId}:${channelId}`, guildId, channelId, userId,
+      request: "Transfer funds.", status: "succeeded", metadata: { appRevision: "test-replay-revision" },
+    });
+    await agentRuntimeRepo.createExecution({ executionId, sessionId, traceId, status: "succeeded" });
+    await agentRuntimeRepo.storeArtifact({
+      sessionId, executionId, kind: "turn_envelope", name: "Agent runtime turn envelope", contentType: "application/json",
+      content: JSON.stringify({ text: "Transfer funds.", visibleChannelIds: [channelId] }),
+    });
+    await agentRuntimeRepo.recordEvent({
+      sessionId, executionId, traceId, kind: "tool", eventName: "agent.tool.complete",
+      metadata: { toolName: "transferWalletFunds", status: "ok", outputChars: 50 },
+    });
+    const caseRecord = await repo.recordImprovementSignal({
+      source: "member_report", sourceKey: `source-${randomUUID()}`, reporterKind: "member",
+      reporterId: userId, guildId, channelId, executionId,
+      summary: "A mutating reply needs verification.", scope: "repository",
+    });
+    await expect(repo.acceptImprovementContract({
+      caseId: caseRecord.case.caseId,
+      expectedBehavior: "The transfer reply contains a receipt.",
+      checks: [{ kind: "answer_text", value: "receipt", expectation: "required" }],
+      createdBy: "operator",
+    })).rejects.toThrow(/no mutating tool use/);
   });
 
   it("waits for traffic-sampled revision quality before resolving a quality-gate case", async () => {
@@ -431,35 +490,67 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
   });
 
   it("returns failed runtime-backed verification to actionable", async () => {
+    const traceId = `trace-${randomUUID()}`;
+    const sessionId = `agent-session-${randomUUID()}`;
+    const executionId = `agent-execution-${randomUUID()}`;
+    const guildId = `guild-${randomUUID()}`;
+    const channelId = `channel-${randomUUID()}`;
+    const userId = `user-${randomUUID()}`;
+    await repo.upsertGuild({ id: guildId, name: "failed replay" });
+    await agentRuntimeRepo.upsertSession({
+      sessionId, traceId, threadKey: `discord:${guildId}:${channelId}`, guildId, channelId, userId,
+      request: "Run the operation.", status: "failed", metadata: { appRevision: "test-runtime-revision" },
+    });
+    await agentRuntimeRepo.createExecution({
+      executionId, sessionId, traceId, status: "failed", metadata: { appRevision: "test-runtime-revision" },
+    });
+    await agentRuntimeRepo.storeArtifact({
+      sessionId, executionId, kind: "turn_envelope", name: "Agent runtime turn envelope", contentType: "application/json",
+      content: JSON.stringify({ text: "Run the operation.", visibleChannelIds: [channelId] }),
+    });
     const caseRecord = await repo.recordImprovementSignal({
       source: "runtime_detection", sourceKey: `source-${randomUUID()}`, reporterKind: "automation",
+      reporterId: userId, guildId, channelId, executionId,
       summary: "A runtime failure needs repair.", scope: "deployment",
     });
     await repo.addImprovementEvidence({ caseId: caseRecord.case.caseId, kind: "runtime_trace", disposition: "supports", summary: "A terminal execution failed." });
-    await repo.acceptImprovementContract({
+    const check = { kind: "runtime_event", name: "agent.execution.failed", expectation: "forbidden" } as const;
+    const contract = await repo.acceptImprovementContract({
       caseId: caseRecord.case.caseId,
       expectedBehavior: "The deployed execution succeeds.",
-      checks: [{ kind: "runtime_event", name: "agent.execution.failed", expectation: "forbidden" }],
+      checks: [check],
       createdBy: "operator",
     });
     await repo.transitionImprovementCase({ caseId: caseRecord.case.caseId, to: "actionable", actorKind: "operator" });
     await repo.transitionImprovementCase({ caseId: caseRecord.case.caseId, to: "in_progress", actorKind: "operator" });
     await repo.transitionImprovementCase({ caseId: caseRecord.case.caseId, to: "verifying", actorKind: "system" });
     await repo.markDeploymentVerified({ revision: "test-runtime-revision", deploymentId: "deployment-runtime" });
-    const sessionId = `agent-session-${randomUUID()}`;
-    const executionId = `agent-execution-${randomUUID()}`;
-    await agentRuntimeRepo.upsertSession({ sessionId, threadKey: `verification:${sessionId}`, request: "verification", status: "failed", metadata: { appRevision: "test-runtime-revision" } });
-    await agentRuntimeRepo.createExecution({ executionId, sessionId, status: "failed", metadata: { appRevision: "test-runtime-revision" } });
     await agentRuntimeRepo.recordEvent({ sessionId, executionId, kind: "error", level: "error", eventName: "agent.execution.failed" });
+    await repo.recordImprovementEvalResults([{
+      caseId: caseRecord.case.caseId,
+      contractId: contract.contractId,
+      contractVersion: contract.version,
+      revision: "test-runtime-revision",
+      deploymentId: "deployment-runtime",
+      status: "failed",
+      referenceId: `improvement-${caseRecord.case.caseId}-v${contract.version}`,
+      runKey: "run-failed",
+      durationMs: 80,
+      traceId,
+      checkResults: [{ checkHash: improvementCheckHash(check), status: "failed" }],
+    }]);
 
     const result = await repo.verifyImprovementCase({
       caseId: caseRecord.case.caseId,
       revision: "test-runtime-revision",
       deploymentId: "deployment-runtime",
-      executionId,
       actorId: "operator",
     });
-    expect(result).toMatchObject({ recorded: true, case: { status: "actionable" }, receipt: { status: "failed", applied: true } });
+    expect(result).toMatchObject({
+      recorded: true,
+      case: { status: "actionable" },
+      receipt: { status: "failed", applied: true, executionId },
+    });
   });
 
   it("withdraws and reactivates an idempotent member signal", async () => {

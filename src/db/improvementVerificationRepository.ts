@@ -2,12 +2,13 @@ import { randomUUID } from "node:crypto";
 import type { PoolClient } from "pg";
 import type { DbPool } from "./pool.js";
 import type { ImprovementCase, ImprovementContractCheck, ImprovementPrivacy } from "./types.js";
+import type { ImprovementReplayCheckResult } from "../observability/improvementContractReplay.js";
+import { improvementCheckHash, improvementProofAdapterForCheck } from "../improvements/proofAdapters.js";
 import {
   buildImprovementVerificationDossier,
   improvementVerificationApplicationKey,
   type ImprovementVerificationContract,
   type ImprovementVerificationDossier,
-  type ImprovementVerificationExecution,
   type ImprovementVerificationProof,
   type ImprovementVerificationReceipt,
   type ImprovementVerificationStatus,
@@ -23,6 +24,8 @@ export type ImprovementEvalResultProof = {
   referenceId: string;
   runKey: string;
   durationMs: number;
+  traceId: string | null;
+  checkResults: ImprovementReplayCheckResult[];
 };
 
 export async function recordImprovementEvalResults(pool: DbPool, results: ImprovementEvalResultProof[]) {
@@ -32,20 +35,45 @@ export async function recordImprovementEvalResults(pool: DbPool, results: Improv
     let recorded = 0;
     for (const input of results) {
       const proofId = `ivp-${randomUUID()}`;
+      const contractRecord = await client.query(
+        "SELECT checks FROM improvement_contracts WHERE contract_id = $1 AND case_id = $2 AND version = $3",
+        [input.contractId, input.caseId, input.contractVersion],
+      );
+      if (!contractRecord.rows[0]) continue;
+      const checkResults = safeCheckResultsForContract(
+        input.checkResults,
+        (contractRecord.rows[0].checks ?? []) as ImprovementContractCheck[],
+      );
+      if (proofStatus(checkResults) !== input.status) {
+        throw new Error("Improvement replay aggregate status does not match its per-check conclusions.");
+      }
+      const execution = input.traceId ? await client.query(
+        `SELECT execution.execution_id
+         FROM agent_runtime_executions execution
+         JOIN agent_runtime_sessions session ON session.session_id = execution.session_id
+         WHERE execution.trace_id = $1
+           AND coalesce(nullif(execution.metadata->>'appRevision',''),nullif(session.metadata->>'appRevision',''),'unknown') = $2
+         ORDER BY execution.created_at DESC LIMIT 1`,
+        [bounded(input.traceId, "traceId", 300), bounded(input.revision, "revision", 200)],
+      ) : null;
+      if (input.status !== "inconclusive" && !execution?.rows[0]) {
+        throw new Error("A terminal private replay proof requires a revision-matched runtime execution.");
+      }
       const inserted = await client.query(
         `INSERT INTO improvement_verification_proofs(
            proof_id,case_id,contract_id,contract_version,revision,deployment_id,source,status,
-           reference_type,reference_id,run_key,summary,metadata
+           reference_type,reference_id,run_key,summary,metadata,execution_id,check_results
          )
          SELECT $1,contract.case_id,contract.contract_id,contract.version,$2,$3,'private_eval',$4,
-                'private_eval_case',$5,$6,$7,$8
+                'private_eval_case',$5,$6,$7,$8,$9,$10
          FROM improvement_contracts contract
-         WHERE contract.contract_id = $9 AND contract.case_id = $10 AND contract.version = $11
+         WHERE contract.contract_id = $11 AND contract.case_id = $12 AND contract.version = $13
          ON CONFLICT(source,contract_id,deployment_id,reference_id,run_key) DO NOTHING
          RETURNING proof_id`,
         [proofId, bounded(input.revision, "revision", 200), bounded(input.deploymentId, "deploymentId", 300), input.status,
           bounded(input.referenceId, "referenceId", 300), bounded(input.runKey, "runKey", 200), proofSummary(input.status),
-          JSON.stringify({ durationMs: Math.max(0, Math.trunc(input.durationMs)) }), input.contractId, input.caseId, input.contractVersion],
+          JSON.stringify({ durationMs: Math.max(0, Math.trunc(input.durationMs)) }), execution?.rows[0]?.execution_id ?? null,
+          JSON.stringify(checkResults), input.contractId, input.caseId, input.contractVersion],
       );
       recorded += inserted.rowCount ?? 0;
     }
@@ -81,7 +109,10 @@ export async function recordImprovementRevisionQualityResult(pool: DbPool, input
      FROM improvement_cases case_row
      JOIN improvement_contracts contract ON contract.case_id = case_row.case_id AND contract.active = true
      WHERE case_row.status = 'verifying'
-       AND contract.checks @> '[{"kind":"deployment_canary","reference":"revision-quality-gate"}]'::jsonb
+       AND (
+         contract.checks @> '[{"kind":"deployment_canary","reference":"revision-quality-gate"}]'::jsonb
+         OR contract.checks @> '[{"kind":"delivery_state","state":"delivered"}]'::jsonb
+       )
      ON CONFLICT(source,contract_id,deployment_id,reference_id,run_key) DO NOTHING
      RETURNING proof_id`,
     [revision, deploymentId, input.status, bounded(input.runKey, "runKey", 200), qualityProofSummary(input.status)],
@@ -93,7 +124,6 @@ export async function inspectImprovementVerification(pool: DbPool, input: {
   caseId: string;
   revision: string;
   deploymentId?: string | null;
-  executionId?: string | null;
 }) {
   return loadVerificationDossier(pool, input);
 }
@@ -103,7 +133,6 @@ export async function verifyImprovementCase(pool: DbPool, input: {
   caseId: string;
   revision: string;
   deploymentId?: string | null;
-  executionId?: string | null;
   actorId: string;
   actorKind?: "operator" | "automation";
 }) {
@@ -143,7 +172,7 @@ export async function verifyImprovementCasesForDeployment(pool: DbPool, input: {
 
 async function loadVerificationDossier(
   database: Pick<DbPool, "query">,
-  input: { caseId: string; revision: string; deploymentId?: string | null; executionId?: string | null },
+  input: { caseId: string; revision: string; deploymentId?: string | null },
 ): Promise<ImprovementVerificationDossier> {
   const caseResult = await database.query("SELECT * FROM improvement_cases WHERE case_id = $1", [input.caseId]);
   if (!caseResult.rows[0]) throw new Error(`Improvement case ${input.caseId} was not found.`);
@@ -176,9 +205,6 @@ async function loadVerificationDossier(
      ORDER BY created_at DESC, proof_id DESC`,
     [contract.contractId, revision, deploymentId],
   );
-  const execution = input.executionId
-    ? await loadExecution(database, bounded(input.executionId, "executionId", 300))
-    : null;
   return buildImprovementVerificationDossier({
     improvementCase,
     contract,
@@ -186,7 +212,6 @@ async function loadVerificationDossier(
     deploymentId,
     deploymentVerifiedAt: new Date(deployment.rows[0].verified_at),
     proofs: uniqueProofSources(proofResult.rows.map(verificationProof)),
-    execution,
   });
 }
 
@@ -287,43 +312,6 @@ async function applyVerificationDossier(
   }
 }
 
-async function loadExecution(database: Pick<DbPool, "query">, executionId: string): Promise<ImprovementVerificationExecution> {
-  const result = await database.query(
-    `SELECT execution.execution_id,execution.status,
-            coalesce(nullif(execution.metadata->>'appRevision',''),nullif(session.metadata->>'appRevision',''),'unknown') AS revision,
-            obligation.state AS delivery_state,
-            response.content AS response_text
-     FROM agent_runtime_executions execution
-     JOIN agent_runtime_sessions session ON session.session_id = execution.session_id
-     LEFT JOIN discord_delivery_obligations obligation ON obligation.execution_id = execution.execution_id
-     LEFT JOIN LATERAL (
-       SELECT string_agg(chunk.content, '' ORDER BY chunk.chunk_index) AS content
-       FROM agent_runtime_artifacts artifact
-       JOIN agent_runtime_artifact_chunks chunk USING (artifact_id)
-       WHERE artifact.execution_id = execution.execution_id AND artifact.kind = 'response'
-         AND (artifact.expires_at IS NULL OR artifact.expires_at > now())
-       GROUP BY artifact.artifact_id,artifact.created_at
-       ORDER BY artifact.created_at DESC LIMIT 1
-     ) response ON true
-     WHERE execution.execution_id = $1`,
-    [executionId],
-  );
-  if (!result.rows[0]) throw new Error(`Verification execution ${executionId} was not found.`);
-  const events = await database.query(
-    "SELECT event_name,metadata FROM agent_runtime_events WHERE execution_id = $1 ORDER BY sequence ASC",
-    [executionId],
-  );
-  return {
-    executionId,
-    revision: String(result.rows[0].revision),
-    status: String(result.rows[0].status),
-    observedTools: [...new Set(events.rows.flatMap((row) => row.event_name === "agent.tool.complete" && typeof row.metadata?.toolName === "string" ? [String(row.metadata.toolName)] : []))],
-    eventNames: [...new Set(events.rows.map((row) => String(row.event_name)))],
-    deliveryState: nullable(result.rows[0].delivery_state),
-    responseText: nullable(result.rows[0].response_text),
-  };
-}
-
 export function rowToImprovementVerificationReceipt(row: Record<string, unknown>): ImprovementVerificationReceipt {
   return {
     receiptId: String(row.receipt_id),
@@ -372,6 +360,8 @@ function verificationProof(row: Record<string, unknown>): ImprovementVerificatio
     referenceType: String(row.reference_type),
     referenceId: String(row.reference_id),
     summary: String(row.summary),
+    executionId: nullable(row.execution_id),
+    checkResults: Array.isArray(row.check_results) ? row.check_results as ImprovementReplayCheckResult[] : [],
     createdAt: date(row.created_at),
   };
 }
@@ -418,6 +408,30 @@ function bounded(value: string, name: string, max: number) {
   const normalized = value.trim().slice(0, max);
   if (!normalized) throw new Error(`${name} is required.`);
   return normalized;
+}
+
+function safeCheckResultsForContract(results: ImprovementReplayCheckResult[], checks: ImprovementContractCheck[]) {
+  const expected = checks
+    .filter((check) => improvementProofAdapterForCheck(check)?.id === "private_replay")
+    .map(improvementCheckHash);
+  const seen = new Set<string>();
+  const safe = results.map((result) => {
+    if (!/^[a-f0-9]{64}$/.test(result.checkHash)) throw new Error("Improvement replay check hash is invalid.");
+    if (!(["passed", "failed", "inconclusive"] as const).includes(result.status)) throw new Error("Improvement replay check status is invalid.");
+    if (seen.has(result.checkHash)) throw new Error("Improvement replay check results contain a duplicate conclusion.");
+    seen.add(result.checkHash);
+    return { checkHash: result.checkHash, status: result.status };
+  });
+  if (safe.length !== expected.length || expected.some((checkHash) => !seen.has(checkHash))) {
+    throw new Error("Improvement replay check results do not match the contract's private-replay checks.");
+  }
+  return safe;
+}
+
+function proofStatus(results: ImprovementReplayCheckResult[]): ImprovementVerificationStatus {
+  if (results.some((result) => result.status === "failed")) return "failed";
+  if (results.length > 0 && results.every((result) => result.status === "passed")) return "passed";
+  return "inconclusive";
 }
 
 function nullable(value: unknown) { return value == null ? null : String(value); }

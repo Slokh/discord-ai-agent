@@ -133,7 +133,8 @@ async function runRetainedNanoCodexTurn(input: {
   // A stable full schema improves NanoCodex prompt-cache reuse and removes the
   // old mid-turn tool-expansion protocol. Deployment filtering still prevents
   // unavailable capabilities from entering the model contract.
-  const localTools = deploymentToolset(ctx.config).localTools;
+  const deployedLocalTools = deploymentToolset(ctx.config).localTools;
+  const localTools = ctx.proofReplay ? deployedLocalTools.filter((tool) => !tool.mutates) : deployedLocalTools;
   const toolDefinitions = localToolDefinitionsForModel(localTools);
   const model = input.capabilities.model ?? ctx.config.openRouter.chatModel;
   const resumeContract = nanoCodexSessionResumeContract({

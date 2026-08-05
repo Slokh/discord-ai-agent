@@ -49,10 +49,10 @@
       "id": "ops-debug-recent-failure",
       "category": "ops",
       "prompt": "why did the last answer fail?",
-      "expectedTools": [
-        "inspectAgentLogs"
+      "forbiddenTools": [
+        "searchDiscordHistory"
       ],
-      "notes": "Debugging the bot itself should inspect traces/logs, not search server history first."
+      "notes": "The conversational tool surface cannot inspect private runtime logs; it should state that limitation rather than invent evidence or search server history."
     },
     {
       "id": "history-job-hunting",

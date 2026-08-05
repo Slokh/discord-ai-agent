@@ -20,11 +20,14 @@ const basePrompt: EvalPrompt = {
   category: "history",
   prompt: "what did people say about jobs?",
   notes: undefined,
+  improvementChecks: [],
   expectedTools: [],
   forbiddenTools: [],
   expectedRequestedTools: [],
   mustContain: [],
   mustNotContain: [],
+  expectedRuntimeEvents: [],
+  forbiddenRuntimeEvents: [],
   auditMustNotMatch: [],
   promptArgs: [],
   noMemory: true,
@@ -75,7 +78,7 @@ describe("eval runner", () => {
         runId: "run-secret",
         traceId: "trace-secret",
         answer: "private answer",
-        evidence: { requestedTools: [], selectedTools: [], auditedTools: [], toolAuditLines: [], traceEventCount: 0, toolAuditCount: 0 },
+        evidence: { requestedTools: [], selectedTools: [], auditedTools: [], toolAuditLines: [], eventNames: [], traceEventCount: 0, toolAuditCount: 0 },
         failures: ["private assertion"],
       }],
     };
@@ -112,6 +115,11 @@ describe("eval runner", () => {
       command: "npm",
       args: ["run", "prompt", "--", "--json", "--no-memory", "--channel=general", "what happened recently?"]
     });
+    expect(buildPromptCommand({
+      ...basePrompt,
+      improvementCaseId: "imp-1",
+      prompt: "replay safely",
+    }).args).toContain("--read-only");
   });
 
   it("extracts prompt JSON even when surrounding output exists", () => {
@@ -145,6 +153,7 @@ describe("eval runner", () => {
       selectedTools: ["findDiscordUsers", "summarizeDiscordHistory"],
       auditedTools: ["findDiscordUsers", "summarizeDiscordHistory"],
       toolAuditLines: ["findDiscordUsers", 'summarizeDiscordHistory {"query":"jobs"} 3 messages'],
+      eventNames: [],
       traceEventCount: 1,
       toolAuditCount: 2
     });
@@ -170,6 +179,7 @@ describe("eval runner", () => {
             selectedTools: ["searchDiscordHistory"],
             auditedTools: [],
             toolAuditLines: [],
+            eventNames: ["agent.execution.succeeded"],
             traceEventCount: 1,
             toolAuditCount: 0
           }
@@ -197,6 +207,7 @@ describe("eval runner", () => {
             selectedTools: ["searchDiscordHistory"],
             auditedTools: [],
             toolAuditLines: [],
+            eventNames: ["agent.execution.failed"],
             traceEventCount: 1,
             toolAuditCount: 0
           }
@@ -228,6 +239,7 @@ describe("eval runner", () => {
         selectedTools: ["drawRandom"],
         auditedTools: ["drawRandom"],
         toolAuditLines,
+        eventNames: [],
         traceEventCount: 1,
         toolAuditCount: toolAuditLines.length
       }
@@ -285,6 +297,7 @@ describe("eval runner", () => {
             selectedTools: ["searchDiscordHistory"],
             auditedTools: ["searchDiscordHistory"],
             toolAuditLines: [],
+            eventNames: [],
             traceEventCount: 2,
             toolAuditCount: 1
           },
@@ -322,6 +335,7 @@ describe("eval runner", () => {
             selectedTools: [],
             auditedTools: [],
             toolAuditLines: [],
+            eventNames: [],
             traceEventCount: 1,
             toolAuditCount: 0
           },
@@ -341,6 +355,7 @@ describe("eval runner", () => {
             selectedTools: ["searchDiscordHistory"],
             auditedTools: ["searchDiscordHistory"],
             toolAuditLines: [],
+            eventNames: [],
             traceEventCount: 1,
             toolAuditCount: 1
           },
@@ -362,6 +377,7 @@ describe("eval runner", () => {
             selectedTools: ["searchDiscordHistory"],
             auditedTools: ["searchDiscordHistory"],
             toolAuditLines: [],
+            eventNames: [],
             traceEventCount: 1,
             toolAuditCount: 1
           },
@@ -377,6 +393,7 @@ describe("eval runner", () => {
             selectedTools: ["getDiscordStats"],
             auditedTools: ["getDiscordStats"],
             toolAuditLines: [],
+            eventNames: [],
             traceEventCount: 1,
             toolAuditCount: 1
           },

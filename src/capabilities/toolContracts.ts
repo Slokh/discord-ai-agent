@@ -17,7 +17,7 @@ import { walletAdminToolContracts } from "../tools/contracts/wallet-admin.js";
 import { spotifyCollectionToolContracts } from "../tools/contracts/spotify-collections.js";
 import { spotifyCatalogToolContracts } from "../tools/contracts/spotify-catalog.js";
 import { externalResearchToolContracts } from "../tools/contracts/external-research.js";
-import { TOOL_NAMES, type ToolName, type ToolRegistryEntry } from "../tools/toolDefinition.js";
+import { MUTATING_TOOL_NAMES, TOOL_NAMES, type ToolName, type ToolRegistryEntry } from "../tools/toolDefinition.js";
 
 const definitions = [
   ...coreToolContracts,
@@ -46,6 +46,11 @@ if (byName.size !== definitions.length) throw new Error("Duplicate local tool co
 const knownNames = new Set<string>(TOOL_NAMES);
 const unknownContracts = definitions.map((tool) => tool.name).filter((name) => !knownNames.has(name));
 if (unknownContracts.length) throw new Error(`Unknown local tool contracts: ${unknownContracts.join(", ")}.`);
+const mutatingNames = new Set<ToolName>(MUTATING_TOOL_NAMES);
+const mutationDrift = definitions
+  .filter((tool) => tool.mutates !== mutatingNames.has(tool.name))
+  .map((tool) => tool.name);
+if (mutationDrift.length) throw new Error(`Tool mutation taxonomy drift: ${mutationDrift.join(", ")}.`);
 
 export const installedToolContracts: readonly ToolRegistryEntry[] = Object.freeze(
   TOOL_NAMES.map((name) => requiredContract(name)),

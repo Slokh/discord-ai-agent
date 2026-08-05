@@ -1,7 +1,12 @@
 import { describe, expect, it } from "vitest";
+import type { ImprovementContractCheck } from "../../src/db/types.js";
 import { improvementFingerprint, normalizeImprovementTitle } from "../../src/improvements/coalescing.js";
 import { assertActionableContract, assertImprovementTransition, improvementChecksExecutable } from "../../src/improvements/policy.js";
-import { improvementContractAssertions, improvementContractReplaySkipReason } from "../../src/observability/improvementContractReplay.js";
+import {
+  improvementContractAssertions,
+  improvementContractReplayResults,
+  improvementContractReplaySkipReason,
+} from "../../src/observability/improvementContractReplay.js";
 
 describe("improvement domain", () => {
   it("coalesces only stable normalized fingerprint inputs", () => {
@@ -17,18 +22,71 @@ describe("improvement domain", () => {
     expect(() => assertImprovementTransition("open", "resolved")).toThrow(/Invalid improvement/);
     expect(() => assertImprovementTransition("verifying", "resolved")).not.toThrow();
     expect(improvementChecksExecutable([{ kind: "manual", description: "look" }])).toBe(false);
-    expect(() => assertActionableContract([{ kind: "manual", description: "look" }])).toThrow(/machine-executable/);
-    expect(() => assertActionableContract([{ kind: "test", reference: "unit" }])).not.toThrow();
+    expect(() => assertActionableContract([{ kind: "manual", description: "look" }])).toThrow(/registered proof adapter/);
+    expect(() => assertActionableContract([{ kind: "test", reference: "unknown-gate" }])).toThrow(/registered proof adapter/);
+    expect(() => assertActionableContract([{ kind: "tool", name: "inspectDiscordFile", expectation: "required" }])).toThrow(/registered proof adapter/);
+    expect(() => assertActionableContract([{ kind: "tool", name: "transferWalletFunds", expectation: "required" }])).toThrow(/registered proof adapter/);
+    expect(() => assertActionableContract([{ kind: "tool", name: "transferWalletFunds", expectation: "forbidden" }])).toThrow(/registered proof adapter/);
+    expect(() => assertActionableContract([{ kind: "test", reference: "release-verify" }])).not.toThrow();
   });
 
   it("projects accepted contracts into private prompt-eval assertions", () => {
     const assertions = improvementContractAssertions([
       { kind: "tool", name: "searchDiscordHistory", expectation: "required" },
       { kind: "answer_text", value: "source", expectation: "required" },
-      { kind: "test", reference: "unit" },
+      { kind: "runtime_event", name: "agent.execution.failed", expectation: "forbidden" },
+      { kind: "test", reference: "release-verify" },
     ]);
-    expect(assertions).toEqual({ expectedTools: ["searchDiscordHistory"], forbiddenTools: [], mustContain: ["source"], mustNotContain: [] });
-    expect(improvementContractReplaySkipReason({ hasAssertion: true, hasReplayScope: true, expectedTools: assertions.expectedTools })).toBeNull();
-    expect(improvementContractReplaySkipReason({ hasAssertion: false, hasReplayScope: true, expectedTools: [] })).toMatch(/no tool or answer-text/);
+    expect(assertions).toEqual({
+      expectedTools: ["searchDiscordHistory"],
+      forbiddenTools: [],
+      mustContain: ["source"],
+      mustNotContain: [],
+      expectedRuntimeEvents: [],
+      forbiddenRuntimeEvents: ["agent.execution.failed"],
+    });
+    expect(improvementContractReplaySkipReason({ hasAssertion: true, hasReplayScope: true })).toBeNull();
+    expect(improvementContractReplaySkipReason({ hasAssertion: false, hasReplayScope: true })).toMatch(/no private-replay assertion/);
+  });
+
+  it("derives content-free pass and failure conclusions for every private replay check kind", () => {
+    const checks: ImprovementContractCheck[] = [
+      { kind: "tool", name: "searchDiscordHistory", expectation: "required" },
+      { kind: "tool", name: "getDiscordStats", expectation: "forbidden" },
+      { kind: "answer_text", value: "source", expectation: "required" },
+      { kind: "answer_text", value: "secret", expectation: "forbidden" },
+      { kind: "runtime_event", name: "agent.execution.succeeded", expectation: "required" },
+      { kind: "runtime_event", name: "agent.execution.failed", expectation: "forbidden" },
+      { kind: "test", reference: "release-verify" },
+    ];
+
+    expect(improvementContractReplayResults(checks, {
+      answer: "The SOURCE is linked.",
+      observedTools: ["searchDiscordHistory"],
+      eventNames: ["agent.execution.succeeded"],
+      available: true,
+    }).map((result) => result.status)).toEqual(Array(6).fill("passed"));
+
+    expect(improvementContractReplayResults(checks, {
+      answer: "The secret is unavailable.",
+      observedTools: ["getDiscordStats"],
+      eventNames: ["agent.execution.failed"],
+      available: true,
+    }).map((result) => result.status)).toEqual(Array(6).fill("failed"));
+  });
+
+  it("marks every private replay check inconclusive when replay evidence is unavailable", () => {
+    const checks: ImprovementContractCheck[] = [
+      { kind: "tool", name: "searchDiscordHistory", expectation: "required" },
+      { kind: "answer_text", value: "source", expectation: "required" },
+      { kind: "runtime_event", name: "agent.execution.succeeded", expectation: "required" },
+      { kind: "database_invariant", reference: "release-db-verify" },
+    ];
+    expect(improvementContractReplayResults(checks, {
+      answer: "",
+      observedTools: [],
+      eventNames: [],
+      available: false,
+    }).map((result) => result.status)).toEqual(Array(3).fill("inconclusive"));
   });
 });

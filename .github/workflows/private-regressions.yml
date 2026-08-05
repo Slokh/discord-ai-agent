@@ -38,7 +38,7 @@ jobs:
           regression_status="$?"
           if [ "$regression_status" -eq 0 ]; then
             kubectl --namespace "$K8S_NAMESPACE" exec "deployment/$HELM_RELEASE-worker" -- \
-              node dist/scripts/eval.js --private-only --safe-summary
+              node dist/scripts/eval.js --private-only --safe-summary --record-improvement-results
             regression_status="$?"
           fi
           set -e

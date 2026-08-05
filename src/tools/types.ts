@@ -52,6 +52,7 @@ export type ToolContext = {
   chatModelOverrideLoaded?: boolean;
   /** True only for a current Discord message that may authorize model-selected mutations. */
   mutationAuthorizedByCurrentInput: boolean;
+  proofReplay?: boolean;
   statusChannelId?: string;
   statusMessageId?: string;
   visibleIndexedChannelIds?: string[];

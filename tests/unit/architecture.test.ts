@@ -66,6 +66,7 @@ describe("architecture guardrails", () => {
     );
     expect(scheduled).toContain("--safe-summary");
     expect(scheduled).toContain("--private-only");
+    expect(scheduled).toContain("--record-improvement-results");
     expect(scheduled).toContain("dist/scripts/exportImprovementEvals.js");
     expect(scheduled).toContain("dist/scripts/improve.js");
     expect(scheduled).toContain("eval_detection");

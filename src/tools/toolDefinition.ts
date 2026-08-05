@@ -30,6 +30,27 @@ export const TOOL_NAMES_BY_CAPABILITY = {
 
 export type ToolName = (typeof TOOL_NAMES_BY_CAPABILITY)[keyof typeof TOOL_NAMES_BY_CAPABILITY][number];
 export const TOOL_NAMES: readonly ToolName[] = Object.values(TOOL_NAMES_BY_CAPABILITY).flat();
+export const MUTATING_TOOL_NAMES = [
+  "setMyTimezone",
+  "setAgentModel",
+  "runCodingAgent",
+  "retryAgentTask",
+  "cancelAgentTask",
+  "undoConversationTurns",
+  "addDiscordReaction",
+  "createDiscordPoll",
+  "createDiscordEmoji",
+  "updateBotAvatar",
+  "drawRandom",
+  "awaitRandomWagerAction",
+  "settleRandomWager",
+  "revealRandomness",
+  "transferWalletFunds",
+  "requestStarterFunds",
+  "adminTransferWalletFunds",
+  "adminSetWalletStarterAmount",
+  "reconcileWalletTransfers",
+] as const satisfies readonly ToolName[];
 
 export type ToolGroup = "core" | "discord-retrieval" | "generated-data" | "presentation" | "discord-action" | "image" | "spotify" | "codegen" | "ops" | "external";
 

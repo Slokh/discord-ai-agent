@@ -11,6 +11,7 @@ import type {
 } from "./types.js";
 import type { DbPool } from "./pool.js";
 import { assertActionableContract, assertImprovementChecks, assertImprovementTransition, improvementChecksExecutable } from "../improvements/policy.js";
+import { improvementProofAdapterForCheck, PRIVATE_REPLAY_MUTATING_TOOL_NAMES } from "../improvements/proofAdapters.js";
 import { normalizeImprovementTitle } from "../improvements/coalescing.js";
 import {
   improvementTriageApplicationKey,
@@ -303,9 +304,10 @@ export async function transitionImprovementCase(pool: DbPool, input: {
     if (input.expectedVersion != null && current.version !== input.expectedVersion) throw new Error(`Improvement case ${input.caseId} changed; expected version ${input.expectedVersion}, found ${current.version}.`);
     if (input.to === "resolved") throw new Error("Improvement cases resolve only through a passed verification receipt.");
     assertImprovementTransition(current.status, input.to);
+    if ((["actionable", "in_progress", "verifying"] as ImprovementCaseStatus[]).includes(input.to)) {
+      await assertImprovementProofPlan(client, input.caseId);
+    }
     if (input.to === "actionable") {
-      const contract = await client.query("SELECT checks FROM improvement_contracts WHERE case_id = $1 AND active = true", [input.caseId]);
-      assertActionableContract((contract.rows[0]?.checks ?? []) as ImprovementContractCheck[]);
       const evidence = await client.query("SELECT 1 FROM improvement_evidence WHERE case_id = $1 AND disposition = 'supports' LIMIT 1", [input.caseId]);
       if (!evidence.rowCount) throw new Error("An actionable improvement case requires supporting evidence.");
     }
@@ -352,6 +354,7 @@ export async function acceptImprovementContract(pool: DbPool, input: {
     if (["actionable", "in_progress", "verifying"].includes(String(caseResult.rows[0].status)) && !executable) {
       throw new Error("An actionable, in-progress, or verifying case must retain an executable contract.");
     }
+    if (executable) await assertImprovementProofInputs(client, input.caseId, input.checks);
     const versionResult = await client.query("SELECT coalesce(max(version),0)::int + 1 AS version FROM improvement_contracts WHERE case_id = $1", [input.caseId]);
     const version = Number(versionResult.rows[0]?.version ?? 1);
     await client.query("UPDATE improvement_contracts SET active = false WHERE case_id = $1 AND active = true", [input.caseId]);
@@ -482,6 +485,7 @@ export async function applyImprovementTriage(
     if (input.verdict === "confirmed") {
       if (!input.contract) throw new Error("Confirmed triage requires an executable acceptance contract.");
       assertActionableContract(input.contract.checks);
+      await assertImprovementProofInputs(client, input.caseId, input.contract.checks);
       const versionResult = await client.query("SELECT coalesce(max(version),0)::int + 1 AS version FROM improvement_contracts WHERE case_id = $1", [input.caseId]);
       const version = Number(versionResult.rows[0]?.version ?? 1);
       await client.query("UPDATE improvement_contracts SET active = false WHERE case_id = $1 AND active = true", [input.caseId]);
@@ -549,6 +553,7 @@ export async function completeImprovementWorkForTask(pool: DbPool, input: {
     const current = rowToImprovementCase(result.rows[0]);
     const target: ImprovementCaseStatus = input.succeeded ? "verifying" : "actionable";
     if (current.status !== "in_progress") { await client.query("COMMIT"); return current; }
+    if (input.succeeded) await assertImprovementProofPlan(client, current.caseId);
     const updated = await client.query(
       `UPDATE improvement_cases SET status = $2, version = version + 1, updated_at = now()
        WHERE case_id = $1 RETURNING *`,
@@ -575,6 +580,7 @@ export async function linkImprovementCaseTask(pool: DbPool, input: { caseId: str
     if (!caseResult.rows[0]) throw new Error(`Improvement case ${input.caseId} was not found.`);
     const improvement = rowToImprovementCase(caseResult.rows[0]);
     if (improvement.status !== "actionable") throw new Error("Only an actionable improvement case can start work.");
+    await assertImprovementProofPlan(client, input.caseId);
     const taskResult = await client.query("SELECT status, improvement_case_id FROM agent_tasks WHERE task_id = $1 FOR UPDATE", [input.taskId]);
     if (!taskResult.rows[0]) throw new Error(`Agent task ${input.taskId} was not found.`);
     if (!["queued", "running"].includes(String(taskResult.rows[0].status))) throw new Error("Only queued or running work can be linked to an improvement case.");
@@ -611,6 +617,53 @@ export async function clearImprovementDataForUser(pool: DbPool, userId: string) 
   }
   await pool.query("UPDATE improvement_case_events SET actor_id = NULL WHERE actor_id = $1", [userId]);
   return result.rowCount ?? 0;
+}
+
+async function assertImprovementProofInputs(
+  database: Pick<DbPool, "query">,
+  caseId: string,
+  checks: readonly ImprovementContractCheck[],
+) {
+  if (!checks.some((check) => improvementProofAdapterForCheck(check)?.id === "private_replay")) return;
+  const replay = await database.query(
+    `SELECT 1
+     FROM improvement_signals signal
+     JOIN agent_runtime_executions execution ON execution.execution_id = signal.execution_id
+     JOIN agent_runtime_sessions session ON session.session_id = execution.session_id
+     JOIN LATERAL (
+       SELECT string_agg(chunk.content, '' ORDER BY chunk.chunk_index)::jsonb AS envelope
+       FROM agent_runtime_artifacts artifact
+       JOIN agent_runtime_artifact_chunks chunk USING (artifact_id)
+       WHERE artifact.execution_id = execution.execution_id AND artifact.kind = 'turn_envelope'
+       GROUP BY artifact.artifact_id, artifact.created_at
+       ORDER BY artifact.created_at DESC LIMIT 1
+     ) turn ON true
+     WHERE signal.case_id = $1 AND signal.active = true
+       AND signal.guild_id IS NOT NULL AND signal.channel_id IS NOT NULL AND signal.reporter_id IS NOT NULL
+       AND coalesce(nullif(turn.envelope->>'text', ''), nullif(session.request, '')) IS NOT NULL
+       AND jsonb_typeof(turn.envelope->'visibleChannelIds') = 'array'
+       AND jsonb_array_length(turn.envelope->'visibleChannelIds') > 0
+       AND NOT EXISTS (
+         SELECT 1 FROM agent_runtime_events event
+         WHERE event.execution_id = execution.execution_id
+           AND event.metadata->>'toolName' = ANY($2::text[])
+       )
+     LIMIT 1`,
+    [caseId, PRIVATE_REPLAY_MUTATING_TOOL_NAMES],
+  );
+  if (!replay.rowCount) {
+    throw new Error("Private-replay checks require safe retained input: requester, channel, prompt, visible-channel scope, and no mutating tool use.");
+  }
+}
+
+async function assertImprovementProofPlan(database: Pick<DbPool, "query">, caseId: string) {
+  const contract = await database.query(
+    "SELECT checks FROM improvement_contracts WHERE case_id = $1 AND active = true",
+    [caseId],
+  );
+  const checks = (contract.rows[0]?.checks ?? []) as ImprovementContractCheck[];
+  assertActionableContract(checks);
+  await assertImprovementProofInputs(database, caseId, checks);
 }
 
 async function insertCaseEvent(client: Pick<DbPool, "query">, input: {

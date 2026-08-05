@@ -18,6 +18,7 @@ type PromptArgs = {
   visibleChannelIds?: string[];
   memory: boolean;
   useDiscordMemory: boolean;
+  readOnly: boolean;
   verbose: boolean;
   json: boolean;
   saveFilesDir: string;
@@ -153,7 +154,8 @@ async function main() {
               sessionMessages: priorSessionMessages,
               requestId,
               requestMessageId: requestId,
-              mutationAuthorizedByCurrentInput: true,
+              mutationAuthorizedByCurrentInput: !args.readOnly,
+              proofReplay: args.readOnly,
             },
             text: stripOptionalBotAddress(args.prompt, config.discord.clientId, config.discord.botName),
             timeoutMs: config.chatTimeouts.hardMs,
@@ -248,6 +250,7 @@ function parseArgs(argv: string[]): PromptArgs {
     userName: "Local CLI",
     memory: true,
     useDiscordMemory: false,
+    readOnly: false,
     verbose: false,
     json: false,
     saveFilesDir: ".discord-ai-agent/prompt-files"
@@ -262,6 +265,8 @@ function parseArgs(argv: string[]): PromptArgs {
       args.memory = false;
     } else if (arg === "--use-discord-memory") {
       args.useDiscordMemory = true;
+    } else if (arg === "--read-only") {
+      args.readOnly = true;
     } else if (arg === "--verbose") {
       args.verbose = true;
     } else if (arg === "--json") {
@@ -487,6 +492,7 @@ Options:
   --user-name <name>            Local requester display name. Defaults to Local CLI.
   --no-memory                   Do not load or store CLI conversation memory.
   --use-discord-memory          Read the real Discord channel memory without writing a CLI run into it. Default uses separate CLI memory.
+  --read-only                   Deny all mutating tool calls; used by automatic private contract replays.
   --verbose                     Show normal Discord AI Agent debug/info logs.
   --json                        Print structured JSON.
   --save-files-dir <path>       Directory for generated files. Defaults to .discord-ai-agent/prompt-files.

@@ -2,8 +2,9 @@ import { createHash } from "node:crypto";
 import type { DbPool } from "../db/pool.js";
 import type { AutomatedImprovementDetectionInput } from "../improvements/detections.js";
 import { TOOL_NAMES_BY_CAPABILITY } from "../tools/toolDefinition.js";
-
-const MEMBER_COHORT_SQL = "coalesce(nullif(execution.metadata->>'qualityCohort', ''), nullif(session.metadata->>'qualityCohort', '')) = 'member'";
+import type { QualityCohortIdentity } from "./runtimeVersions.js";
+import { APP_REVISION_SQL, MEMBER_COHORT_SQL, QUALITY_COHORT_SQL } from "./revisionQualityCohort.js";
+export { findBaselineQualityCohort, findRevisionQualityCohort } from "./revisionQualityCohort.js";
 const SUCCESSFUL_TOOL_STATUSES = ["ok", "succeeded", "success", "reused"];
 const MAX_CLUSTER_EXECUTIONS = 20;
 
@@ -30,6 +31,9 @@ export type RevisionQualityPrivateFailureCluster = RevisionQualityFailureCluster
 
 export type RevisionQuality = {
   revision: string;
+  qualityVersion: string | null;
+  qualityCohort: QualityCohortIdentity | null;
+  contributingRevisions: string[];
   windowHours: number;
   generatedAt: string;
   answers: Record<string, unknown>[];
@@ -232,8 +236,9 @@ export async function collectRevisionQuality(
   pool: DbPool,
   revision: string,
   hours: number,
+  cohort: QualityCohortIdentity | null = null,
 ): Promise<RevisionQuality> {
-  return (await collectRevisionQualityObservation(pool, revision, hours)).quality;
+  return (await collectRevisionQualityObservation(pool, revision, hours, cohort)).quality;
 }
 
 /** Collects private execution references for intake while returning only safe clusters in the public quality view. */
@@ -241,8 +246,18 @@ export async function collectRevisionQualityObservation(
   pool: DbPool,
   revision: string,
   hours: number,
+  cohort: QualityCohortIdentity | null = null,
 ): Promise<{ quality: RevisionQuality; failureClusters: RevisionQualityPrivateFailureCluster[] }> {
-  const [answers, tools, signals, deliveries, improvements, failures] = await Promise.all([
+  const statisticalScope = cohort ? QUALITY_COHORT_SQL : `${APP_REVISION_SQL} = $2`;
+  const statisticalParams = cohort
+    ? [hours, cohort.promptVersion, cohort.toolVersion, cohort.configVersion, cohort.qualityRuntimeVersion]
+    : [hours, revision];
+  const improvementScope = cohort
+    ? `((signal.execution_id IS NOT NULL AND ${QUALITY_COHORT_SQL})
+         OR (signal.execution_id IS NULL AND signal.app_revision = $6))`
+    : "signal.app_revision = $2";
+  const improvementParams = cohort ? [...statisticalParams, revision] : statisticalParams;
+  const [answers, tools, signals, deliveries, improvements, failures, revisions] = await Promise.all([
     pool.query(
       `SELECT coalesce(nullif(execution.model, ''), 'unknown') AS model,
               execution.status,
@@ -256,10 +271,10 @@ export async function collectRevisionQualityObservation(
          AND execution.task_id IS NULL
          AND execution.harness = 'nanocodex'
          AND ${MEMBER_COHORT_SQL}
-         AND coalesce(nullif(execution.metadata->>'appRevision', ''), nullif(session.metadata->>'appRevision', ''), 'unknown') = $2
+         AND ${statisticalScope}
        GROUP BY 1, execution.status
        ORDER BY 1, execution.status`,
-      [hours, revision],
+      statisticalParams,
     ),
     pool.query(
       `WITH tool_attempts AS (
@@ -281,7 +296,7 @@ export async function collectRevisionQualityObservation(
          AND execution.task_id IS NULL
          AND execution.harness = 'nanocodex'
          AND ${MEMBER_COHORT_SQL}
-         AND coalesce(nullif(execution.metadata->>'appRevision', ''), nullif(session.metadata->>'appRevision', ''), 'unknown') = $2
+         AND ${statisticalScope}
        )
        SELECT tool, status, count(*)::int AS count,
               sum(attempt_count)::int AS attempt_count,
@@ -298,7 +313,7 @@ export async function collectRevisionQualityObservation(
        WHERE terminal_rank = 1
        GROUP BY tool, status
        ORDER BY tool, status`,
-      [hours, revision],
+      statisticalParams,
     ),
     pool.query(
       `SELECT event.level, count(*)::int AS count
@@ -334,20 +349,37 @@ export async function collectRevisionQualityObservation(
       `SELECT signal.source, case_row.classification, count(*)::int AS count
        FROM improvement_signals signal
        JOIN improvement_cases case_row ON case_row.case_id = signal.case_id
+       LEFT JOIN agent_runtime_executions execution ON execution.execution_id = signal.execution_id
+       LEFT JOIN agent_runtime_sessions session ON session.session_id = execution.session_id
        WHERE signal.observed_at >= now() - ($1::text || ' hours')::interval
          AND signal.active = true
-         AND signal.app_revision = $2
+         AND ${improvementScope}
          AND signal.source IN ('member_report','agent_report','operator_report','developer_report')
        GROUP BY signal.source, case_row.classification
        ORDER BY signal.source, case_row.classification`,
-      [hours, revision],
+      improvementParams,
     ),
     pool.query(REVISION_FAILURE_OCCURRENCES_SQL, [hours, revision]),
+    pool.query(
+      `SELECT DISTINCT ${APP_REVISION_SQL} AS revision
+       FROM agent_runtime_executions execution
+       JOIN agent_runtime_sessions session ON session.session_id = execution.session_id
+       WHERE execution.created_at >= now() - ($1::text || ' hours')::interval
+         AND execution.task_id IS NULL
+         AND execution.harness = 'nanocodex'
+         AND ${MEMBER_COHORT_SQL}
+         AND ${statisticalScope}
+       ORDER BY revision`,
+      statisticalParams,
+    ),
   ]);
 
   const failureClusters = groupFailureOccurrences(failures.rows.map(rowToFailureOccurrence));
   const quality = {
     revision,
+    qualityVersion: cohort?.qualityVersion ?? null,
+    qualityCohort: cohort,
+    contributingRevisions: [...new Set([revision, ...revisions.rows.map((row) => String(row.revision))])].sort(),
     windowHours: hours,
     generatedAt: new Date().toISOString(),
     answers: answers.rows,
@@ -358,26 +390,6 @@ export async function collectRevisionQualityObservation(
     failureClusters: failureClusters.map(({ executionIds: _executionIds, ...cluster }) => cluster),
   };
   return { quality, failureClusters };
-}
-
-/** Finds the most recently active prior revision in the same observation window. */
-export async function findBaselineRevision(pool: DbPool, revision: string, hours: number): Promise<string | null> {
-  const result = await pool.query(
-    `SELECT coalesce(nullif(execution.metadata->>'appRevision', ''), nullif(session.metadata->>'appRevision', ''), 'unknown') AS revision,
-            max(execution.created_at) AS latest_at
-     FROM agent_runtime_executions execution
-     JOIN agent_runtime_sessions session ON session.session_id = execution.session_id
-     WHERE execution.created_at >= now() - ($1::text || ' hours')::interval
-       AND execution.task_id IS NULL
-       AND execution.harness = 'nanocodex'
-       AND ${MEMBER_COHORT_SQL}
-       AND coalesce(nullif(execution.metadata->>'appRevision', ''), nullif(session.metadata->>'appRevision', ''), 'unknown') NOT IN ($2, 'unknown')
-     GROUP BY 1
-     ORDER BY latest_at DESC
-     LIMIT 1`,
-    [hours, revision],
-  );
-  return result.rows[0]?.revision ? String(result.rows[0].revision) : null;
 }
 
 export function assessRevisionQuality(
@@ -504,6 +516,8 @@ export function revisionQualityDetectionInputs(
         maxDurationMs: cluster.maxDurationMs,
         occurrenceCount: cluster.count,
         sampledExecutionCount: executionIds.length,
+        qualityVersion: quality.qualityVersion,
+        contributingRevisionCount: quality.contributingRevisions.length,
       },
     }));
   });

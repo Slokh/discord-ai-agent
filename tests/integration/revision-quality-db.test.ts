@@ -1,8 +1,14 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { IsolatedTestDatabase } from "./testDatabase.js";
 import { createIsolatedTestDatabase } from "./testDatabase.js";
-import { assessRevisionQuality, collectRevisionQuality, findBaselineRevision } from "../../src/observability/revisionQuality.js";
+import {
+  assessRevisionQuality,
+  collectRevisionQuality,
+  findBaselineQualityCohort,
+  findRevisionQualityCohort,
+} from "../../src/observability/revisionQuality.js";
 import { AgentRuntimeRepository } from "../../src/db/agentRuntimeRepository.js";
+import { qualityCohortIdentity } from "../../src/observability/runtimeVersions.js";
 
 const runDbTests = process.env.DISCORD_AI_AGENT_DB_TESTS === "true";
 
@@ -27,7 +33,13 @@ describe.skipIf(!runDbTests)("revision quality database contract", () => {
       deliveries: [],
       improvements: [],
     });
-    await expect(findBaselineRevision(database.pool, "test-revision", 48)).resolves.toBeNull();
+    await expect(findRevisionQualityCohort(database.pool, "test-revision")).resolves.toBeNull();
+    await expect(findBaselineQualityCohort(database.pool, qualityCohortIdentity({
+      promptVersion: "prompt",
+      toolVersion: "tool",
+      configVersion: "config",
+      qualityRuntimeVersion: "1",
+    }), 48)).resolves.toBeNull();
   });
 
   it("keeps task-linked failures out of chat revision quality", async () => {
@@ -124,6 +136,62 @@ describe.skipIf(!runDbTests)("revision quality database contract", () => {
     await expect(collectRevisionQuality(database.pool, "organic-quality-revision", 48)).resolves.toMatchObject({
       deliveries: [{ state: "abandoned", count: 1 }],
     });
+  });
+
+  it("combines behavior-compatible traffic without inheriting another revision's hard failures", async () => {
+    const runtime = new AgentRuntimeRepository(database.pool);
+    const cohort = qualityCohortIdentity({
+      promptVersion: "cohort-prompt",
+      toolVersion: "cohort-tools",
+      configVersion: "cohort-config",
+      qualityRuntimeVersion: "1",
+    });
+    const revisions = [
+      { revision: "cohort-revision-a", metadata: cohort },
+      { revision: "cohort-revision-b", metadata: cohort },
+      { revision: "cohort-revision-c", metadata: { ...cohort, configVersion: "other-config" } },
+    ];
+    for (const { revision, metadata } of revisions) {
+      const sessionId = `${revision}-session`;
+      const executionId = `${revision}-execution`;
+      const runtimeMetadata = { ...metadata, appRevision: revision, qualityCohort: "member" };
+      await runtime.upsertSession({ sessionId, threadKey: `${revision}-thread`, request: "test", metadata: runtimeMetadata });
+      await runtime.createExecution({
+        executionId,
+        sessionId,
+        harness: "nanocodex",
+        status: "succeeded",
+        metadata: runtimeMetadata,
+      });
+      await runtime.recordEvent({
+        sessionId,
+        executionId,
+        kind: "tool",
+        level: "info",
+        eventName: "agent.tool.complete",
+        metadata: { toolName: "web__run", status: "ok" },
+      });
+    }
+    await runtime.recordEvent({
+      sessionId: "cohort-revision-a-session",
+      executionId: "cohort-revision-a-execution",
+      kind: "error",
+      level: "error",
+      eventName: "quality.test.failed",
+      metadata: { errorKind: "provider_timeout" },
+    });
+
+    const quality = await collectRevisionQuality(database.pool, "cohort-revision-b", 48, cohort);
+
+    expect(quality).toMatchObject({
+      qualityVersion: cohort.qualityVersion,
+      contributingRevisions: ["cohort-revision-a", "cohort-revision-b"],
+      answers: [{ status: "succeeded", count: 2 }],
+      tools: [{ tool: "web__run", status: "ok", count: 2 }],
+      signals: [],
+      failureClusters: [],
+    });
+    await expect(findRevisionQualityCohort(database.pool, "cohort-revision-b")).resolves.toEqual(cohort);
   });
 
   it("counts the final per-run capability outcome while retaining recovered retries", async () => {

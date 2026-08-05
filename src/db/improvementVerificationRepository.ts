@@ -94,6 +94,8 @@ export async function recordImprovementEvalResults(pool: DbPool, results: Improv
 
 export async function recordImprovementRevisionQualityResult(pool: DbPool, input: {
   revision: string;
+  qualityVersion?: string | null;
+  contributingRevisions?: string[];
   status: ImprovementVerificationStatus;
   runKey: string;
   presentFailureReferences?: string[];
@@ -125,6 +127,10 @@ export async function recordImprovementRevisionQualityResult(pool: DbPool, input
       status,
     ]));
     const runKey = bounded(input.runKey, "runKey", 200);
+    const qualityVersion = input.qualityVersion ? bounded(input.qualityVersion, "qualityVersion", 200) : null;
+    const contributingRevisions = [...new Set((input.contributingRevisions ?? [revision])
+      .map((candidate) => bounded(candidate, "contributingRevision", 200)))].slice(0, 100);
+    const qualityMetadata = JSON.stringify({ qualityVersion, contributingRevisions });
     let recorded = 0;
     for (const row of candidates.rows) {
       const references = revisionQualityReferences((row.checks ?? []) as ImprovementContractCheck[]);
@@ -141,11 +147,11 @@ export async function recordImprovementRevisionQualityResult(pool: DbPool, input
              proof_id,case_id,contract_id,contract_version,revision,deployment_id,source,status,
              reference_type,reference_id,run_key,summary,metadata
            ) VALUES ('ivp-' || gen_random_uuid(),$1,$2,$3,$4,$5,'revision_quality',$6,
-                     'revision_quality',$7,$8,$9,'{}'::jsonb)
+                     'revision_quality',$7,$8,$9,$10)
            ON CONFLICT(source,contract_id,deployment_id,reference_id,run_key) DO NOTHING
            RETURNING proof_id`,
           [String(row.case_id), String(row.contract_id), Number(row.version), revision, deploymentId, status,
-            reference, runKey, qualityProofSummary(status, reference)],
+            reference, runKey, qualityProofSummary(status, reference, qualityVersion, contributingRevisions.length), qualityMetadata],
         );
         recorded += result.rowCount ?? 0;
       }
@@ -427,11 +433,23 @@ function proofSummary(status: ImprovementVerificationStatus) {
   return "The case-specific private contract replay did not produce executable proof.";
 }
 
-function qualityProofSummary(status: ImprovementVerificationStatus, reference = "revision-quality-gate") {
+function qualityProofSummary(
+  status: ImprovementVerificationStatus,
+  reference = "revision-quality-gate",
+  qualityVersion: string | null = null,
+  contributingRevisionCount = 1,
+) {
   if (reference !== "revision-quality-gate") {
     if (status === "passed") return "The deployed revision had enough relevant traffic and did not reproduce this quality cluster.";
     if (status === "failed") return "Production observation reproduced this quality cluster on the deployed revision.";
     return "The deployed revision does not yet have enough relevant member traffic to disprove this quality cluster.";
+  }
+  if (qualityVersion) {
+    const cohort = qualityVersion.slice(0, 12);
+    const revisions = `${contributingRevisionCount} exact revision${contributingRevisionCount === 1 ? "" : "s"}`;
+    if (status === "passed") return `Production behavior cohort ${cohort} passed its traffic-sampled quality gate across ${revisions}.`;
+    if (status === "failed") return `Production behavior cohort ${cohort} failed its traffic-sampled quality gate across ${revisions}.`;
+    return `Production behavior cohort ${cohort} does not yet have enough member traffic across ${revisions} for its quality gate.`;
   }
   if (status === "passed") return "The deployed revision passed its traffic-sampled production quality gate.";
   if (status === "failed") return "The deployed revision failed its traffic-sampled production quality gate.";

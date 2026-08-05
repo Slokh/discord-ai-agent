@@ -112,4 +112,49 @@ describe.skipIf(!runDbTests)("improvement revision-quality proof", () => {
       .resolves.toContainEqual({ caseId: caseRecord.case.caseId, status: "passed", recorded: true });
     await expect(repo.getImprovementCase(caseRecord.case.caseId)).resolves.toMatchObject({ case: { status: "resolved" } });
   });
+
+  it("retains the behavior cohort and contributing revisions on aggregate gate proof", async () => {
+    const caseRecord = await repo.recordImprovementSignal({
+      source: "runtime_detection",
+      sourceKey: `source-${randomUUID()}`,
+      reporterKind: "automation",
+      summary: "The deployed behavior cohort failed its aggregate gate.",
+      scope: "deployment",
+    });
+    await repo.addImprovementEvidence({
+      caseId: caseRecord.case.caseId,
+      kind: "runtime_gate",
+      disposition: "supports",
+      summary: "Production observation recorded the aggregate regression.",
+    });
+    await repo.acceptImprovementContract({
+      caseId: caseRecord.case.caseId,
+      expectedBehavior: "The deployed behavior cohort satisfies the production quality policy.",
+      checks: [{ kind: "deployment_canary", reference: "revision-quality-gate" }],
+      createdBy: "automation",
+    });
+    await repo.transitionImprovementCase({ caseId: caseRecord.case.caseId, to: "actionable", actorKind: "automation" });
+    await repo.transitionImprovementCase({ caseId: caseRecord.case.caseId, to: "in_progress", actorKind: "operator" });
+    await repo.transitionImprovementCase({ caseId: caseRecord.case.caseId, to: "verifying", actorKind: "system" });
+    await repo.markDeploymentVerified({ revision: "cohort-candidate", deploymentId: "cohort-deployment" });
+
+    await expect(repo.recordImprovementRevisionQualityResult({
+      revision: "cohort-candidate",
+      qualityVersion: "0123456789abcdef",
+      contributingRevisions: ["cohort-prior", "cohort-candidate"],
+      status: "passed",
+      runKey: "cohort-quality-run",
+    })).resolves.toEqual({ recorded: 1, deploymentId: "cohort-deployment" });
+    const proof = await database.pool.query(
+      "SELECT summary,metadata FROM improvement_verification_proofs WHERE case_id = $1 AND source = 'revision_quality'",
+      [caseRecord.case.caseId],
+    );
+    expect(proof.rows).toEqual([{
+      summary: "Production behavior cohort 0123456789ab passed its traffic-sampled quality gate across 2 exact revisions.",
+      metadata: {
+        qualityVersion: "0123456789abcdef",
+        contributingRevisions: ["cohort-prior", "cohort-candidate"],
+      },
+    }]);
+  });
 });

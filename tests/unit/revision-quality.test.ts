@@ -3,7 +3,8 @@ import type { DbPool } from "../../src/db/pool.js";
 import {
   assessRevisionQuality,
   collectRevisionQualityObservation,
-  findBaselineRevision,
+  findBaselineQualityCohort,
+  findRevisionQualityCohort,
   revisionQualityClusterAbsenceStatuses,
   revisionQualityDetectionInputs,
   type RevisionQuality,
@@ -22,7 +23,8 @@ describe("collectRevisionQuality", () => {
         kind: "runtime_event", category: "model", event_name: "agent.model.call.failed",
         error_kind: "openrouter_timeout_error", error_code: null, error_status: null,
         tool_name: null, status: null, execution_id: "private-execution-a",
-      }] });
+      }] })
+      .mockResolvedValueOnce({ rows: [{ revision: "revision-1" }] });
     const pool = { query } as unknown as DbPool;
 
     const observation = await collectRevisionQualityObservation(pool, "revision-1", 48);
@@ -30,6 +32,8 @@ describe("collectRevisionQuality", () => {
 
     expect(result).toMatchObject({
       revision: "revision-1",
+      qualityVersion: null,
+      contributingRevisions: ["revision-1"],
       windowHours: 48,
       answers: [{ model: "test/model", status: "succeeded", count: 2, p95_ms: 50 }],
       tools: [{ tool: "web__run", status: "ok", count: 1, attempt_count: 4, retry_count: 3, recovered_validation_retry_count: 3 }],
@@ -47,7 +51,7 @@ describe("collectRevisionQuality", () => {
     expect(JSON.stringify(result)).not.toContain("private-execution-a");
     expect(observation.failureClusters[0]?.executionIds).toEqual(["private-execution-a"]);
     expect(result.generatedAt).toEqual(expect.any(String));
-    expect(query).toHaveBeenCalledTimes(6);
+    expect(query).toHaveBeenCalledTimes(7);
     expect(query.mock.calls[3]?.[0]).toContain("obligation.state");
     expect(query.mock.calls[3]?.[0]).toContain("interval '5 minutes'");
     expect(query.mock.calls.slice(0, 4).every((call) => call[0].includes("qualityCohort"))).toBe(true);
@@ -55,10 +59,64 @@ describe("collectRevisionQuality", () => {
     expect(query.mock.calls[4]?.[0]).toContain("signal.source IN");
   });
 
-  it("finds the most recently active prior revision", async () => {
-    const query = vi.fn().mockResolvedValue({ rows: [{ revision: "revision-0" }] });
-    await expect(findBaselineRevision({ query } as unknown as DbPool, "revision-1", 48)).resolves.toBe("revision-0");
-    expect(query.mock.calls[0]?.[1]).toEqual([48, "revision-1"]);
+  it("coalesces statistical evidence by behavior identity but keeps hard evidence revision-scoped", async () => {
+    const cohort = {
+      qualityVersion: "quality-a",
+      promptVersion: "prompt-a",
+      toolVersion: "tool-a",
+      configVersion: "config-a",
+      qualityRuntimeVersion: "1",
+    };
+    const query = vi.fn()
+      .mockResolvedValueOnce({ rows: [{ model: "test/model", status: "succeeded", count: 12 }] })
+      .mockResolvedValueOnce({ rows: [{ tool: "web__run", status: "ok", count: 6 }] })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [{ revision: "revision-0" }, { revision: "revision-1" }] });
+
+    const result = await collectRevisionQualityObservation({ query } as unknown as DbPool, "revision-1", 48, cohort);
+
+    expect(result.quality).toMatchObject({
+      qualityVersion: "quality-a",
+      contributingRevisions: ["revision-0", "revision-1"],
+    });
+    for (const index of [0, 1, 6]) {
+      expect(query.mock.calls[index]?.[0]).toContain("promptVersion");
+      expect(query.mock.calls[index]?.[1]).toEqual([48, "prompt-a", "tool-a", "config-a", "1"]);
+    }
+    expect(query.mock.calls[4]?.[0]).toContain("signal.execution_id IS NOT NULL");
+    expect(query.mock.calls[4]?.[1]).toEqual([48, "prompt-a", "tool-a", "config-a", "1", "revision-1"]);
+    for (const index of [2, 3, 5]) {
+      expect(query.mock.calls[index]?.[0]).toContain("appRevision");
+      expect(query.mock.calls[index]?.[1]).toEqual([48, "revision-1"]);
+    }
+  });
+
+  it("resolves exact and prior behavior identities from retained runtime metadata", async () => {
+    const row = {
+      revision: "revision-0",
+      prompt_version: "prompt-a",
+      tool_version: "tool-a",
+      config_version: "config-a",
+      quality_runtime_version: "1",
+    };
+    const query = vi.fn().mockResolvedValue({ rows: [row] });
+    const pool = { query } as unknown as DbPool;
+    await expect(findRevisionQualityCohort(pool, "revision-1")).resolves.toMatchObject({ promptVersion: "prompt-a" });
+    const current = {
+      qualityVersion: "current",
+      promptVersion: "prompt-b",
+      toolVersion: "tool-b",
+      configVersion: "config-b",
+      qualityRuntimeVersion: "1",
+    };
+    await expect(findBaselineQualityCohort(pool, current, 48)).resolves.toMatchObject({
+      revision: "revision-0",
+      cohort: { promptVersion: "prompt-a" },
+    });
+    expect(query.mock.calls[1]?.[1]).toEqual([48, "prompt-b", "tool-b", "config-b", "1"]);
   });
 });
 
@@ -207,6 +265,9 @@ function quality(
 ): RevisionQuality {
   return {
     revision: "test-revision",
+    qualityVersion: null,
+    qualityCohort: null,
+    contributingRevisions: ["test-revision"],
     windowHours: 48,
     generatedAt: new Date(0).toISOString(),
     answers: Object.entries(statuses).map(([status, count]) => ({ model: "test/model", status, count, p95_ms: overrides.p95Ms ?? 100 })),

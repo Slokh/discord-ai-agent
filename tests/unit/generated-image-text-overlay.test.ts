@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import sharp from "sharp";
 import {
   imageTextOverlayBasePrompt,
+  imageTextOverlayLayout,
   renderExactImageTextOverlay,
 } from "../../src/tools/generatedImageTextOverlay.js";
 
@@ -17,6 +18,19 @@ describe("generated image exact-text overlay", () => {
     expect(prompt).toContain("Keep the synthetic reference palette.");
     expect(prompt).toContain("render no readable text");
     expect(prompt).toContain("exact typography can be added by code");
+  });
+
+  it("wraps long labels before shrinking text and keeps the caption panel within the image", () => {
+    const layout = imageTextOverlayLayout(360, 180, [
+      "A descriptive chart label that needs multiple readable lines",
+      "Second legend label",
+    ]);
+
+    expect(layout.lines).toHaveLength(3);
+    expect(layout.lines.slice(0, 2).join("")).toBe("A descriptive chart label that needs multiple readable lines");
+    expect(layout.lines[2]).toBe("Second legend label");
+    expect(layout.fontSize).toBeGreaterThanOrEqual(16);
+    expect(layout.panelHeight).toBeLessThanOrEqual(180);
   });
 
   it("renders XML-sensitive exact text onto a URL-backed generated image", async () => {

@@ -182,6 +182,11 @@ describe.skipIf(!runDbTests)("forward migration upgrades", () => {
         await expect(client.query("SELECT to_regclass($1) AS relation", [retired]))
           .resolves.toEqual(expect.objectContaining({ rows: [{ relation: null }] }));
       }
+      await client.query(`
+        INSERT INTO improvement_cases(case_id, scope, title) VALUES ('linked-case', 'repository', 'Linked work');
+        INSERT INTO agent_tasks(task_id, task_type, title, request, requested_by, status, improvement_case_id)
+        VALUES ('linked-task', 'code_update', 'Linked task', 'Repair it', 'operator', 'running', 'linked-case');
+      `);
       await client.query(await readFile(path.resolve("migrations/040_user_preferences.sql"), "utf8"));
       await expect(client.query("SELECT user_id, preference_key, preference_value FROM user_preferences LIMIT 0"))
         .resolves.toEqual(expect.objectContaining({ rows: [] }));
@@ -193,6 +198,11 @@ describe.skipIf(!runDbTests)("forward migration upgrades", () => {
       await client.query(await readFile(path.resolve("migrations/042_improvement_proof_execution.sql"), "utf8"));
       await expect(client.query("SELECT execution_id, check_results FROM improvement_verification_proofs LIMIT 0"))
         .resolves.toEqual(expect.objectContaining({ rows: [] }));
+      await client.query(await readFile(path.resolve("migrations/043_improvement_work_attempts.sql"), "utf8"));
+      await expect(client.query("SELECT case_id, source, source_key, status, task_id FROM improvement_work_attempts WHERE task_id = 'linked-task'"))
+        .resolves.toEqual(expect.objectContaining({ rows: [expect.objectContaining({
+          case_id: "linked-case", source: "agent_task", source_key: "agent_task:linked-task", status: "in_progress", task_id: "linked-task",
+        })] }));
     } finally {
       await client.query("RESET search_path").catch(() => undefined);
       await client.query(`DROP SCHEMA IF EXISTS ${schema} CASCADE`).catch(() => undefined);

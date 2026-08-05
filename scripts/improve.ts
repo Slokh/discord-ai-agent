@@ -16,6 +16,8 @@ import {
   improvementTriageApplication,
   type ImprovementTriageVerdict,
 } from "../src/improvements/triage.js";
+import { fetchGitHubPullRequestSnapshot } from "../src/github/pullRequests.js";
+import { reconcileImprovementPullRequestWork } from "../src/improvements/work.js";
 
 const args = process.argv.slice(2);
 const target = option("--target");
@@ -154,6 +156,13 @@ try {
     print(await repo.linkImprovementCaseTask({
       caseId: requiredPositional(1, "case id"), taskId: requiredOption("--task"), actorId: process.env.USER ?? "operator",
     }));
+  } else if (command === "link-pr") {
+    const pullRequest = await fetchGitHubPullRequestSnapshot(config, requiredOption("--pr"));
+    print(await repo.linkImprovementCasePullRequest({
+      caseId: requiredPositional(1, "case id"), pullRequest, actorId: process.env.USER ?? "operator",
+    }));
+  } else if (command === "sync-prs") {
+    print(await reconcileImprovementPullRequestWork(repo, config, process.env.USER ?? "operator"));
   } else if (command === "merge") {
     await repo.mergeImprovementCases({
       sourceCaseId: requiredPositional(1, "source case id"),
@@ -187,4 +196,4 @@ function parseCheck(value: string): ImprovementContractCheck { try { const parse
 function print(value: unknown) { process.stdout.write(`${JSON.stringify(value, null, 2)}\n`); }
 function fail(message: string): never { throw new Error(message); }
 function assertDatabaseTarget(selected: "local" | "production", databaseUrl: string) { const host = new URL(databaseUrl).hostname; const local = ["localhost", "127.0.0.1", "::1", "postgres"].includes(host); if (selected === "local" && !local) fail(`Refusing --target local for database host ${host}.`); if (selected === "production" && (process.env.NODE_ENV !== "production" || local)) fail("Production target requires NODE_ENV=production and a non-local database host."); }
-function usage() { return "Usage: npm run improve -- --target local|production [--confirm-production] inbox|show|suggest|triage|report|detect|transition|evidence|contract|link-task|verify|merge ..."; }
+function usage() { return "Usage: npm run improve -- --target local|production [--confirm-production] inbox|show|suggest|triage|report|detect|transition|evidence|contract|link-task|link-pr|sync-prs|verify|merge ..."; }

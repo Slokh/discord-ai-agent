@@ -54,6 +54,8 @@ export type ImprovementClassification = "unknown" | "defect" | "product_gap" | "
 export type ImprovementSeverity = "low" | "medium" | "high" | "critical";
 export type ImprovementPrivacy = "private" | "publication_safe";
 export type ImprovementSignalSource = "member_report" | "agent_report" | "operator_report" | "developer_report" | "runtime_detection" | "deployment_detection" | "ci_detection" | "eval_detection";
+export type ImprovementWorkSource = "agent_task" | "github_pull_request";
+export type ImprovementWorkStatus = "in_progress" | "succeeded" | "failed" | "cancelled";
 
 export type ImprovementCase = {
   caseId: string;
@@ -103,6 +105,34 @@ export type ImprovementSignal = {
   withdrawnAt: Date | null;
   createdAt: Date;
   updatedAt: Date;
+};
+
+export type ImprovementWorkAttempt = {
+  workId: string;
+  caseId: string;
+  source: ImprovementWorkSource;
+  sourceKey: string;
+  status: ImprovementWorkStatus;
+  taskId: string | null;
+  repository: string | null;
+  pullRequestNumber: number | null;
+  pullRequestUrl: string | null;
+  headRevision: string | null;
+  mergeRevision: string | null;
+  metadata: Record<string, unknown>;
+  startedAt: Date;
+  completedAt: Date | null;
+  createdAt: Date;
+  updatedAt: Date;
+};
+
+export type ImprovementPullRequestSnapshot = {
+  repository: string;
+  pullRequestNumber: number;
+  pullRequestUrl: string;
+  state: "open" | "closed" | "merged";
+  headRevision: string;
+  mergeRevision?: string | null;
 };
 
 export type ImprovementContractCheck =

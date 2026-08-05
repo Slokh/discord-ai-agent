@@ -1,6 +1,6 @@
 import type { DbPool } from "./pool.js";
 import { queuedAgentTaskStatusMessage, removeUndefinedValues } from "./shared.js";
-import { completeImprovementWorkForTask } from "./improvementRepository.js";
+import { completeImprovementWorkForTask, linkImprovementCaseTask } from "./improvementWorkRepository.js";
 
 export async function upsertAgentTaskQueued(pool: DbPool, input: {
     taskId: string;
@@ -42,7 +42,7 @@ export async function upsertAgentTaskQueued(pool: DbPool, input: {
           discord_response_channel_id = coalesce(EXCLUDED.discord_response_channel_id, agent_tasks.discord_response_channel_id),
           discord_response_message_id = coalesce(EXCLUDED.discord_response_message_id, agent_tasks.discord_response_message_id),
           retried_from_task_id = coalesce(EXCLUDED.retried_from_task_id, agent_tasks.retried_from_task_id),
-          improvement_case_id = coalesce(EXCLUDED.improvement_case_id, agent_tasks.improvement_case_id),
+          improvement_case_id = agent_tasks.improvement_case_id,
           task_type = EXCLUDED.task_type,
           title = EXCLUDED.title,
           request = EXCLUDED.request,
@@ -65,7 +65,7 @@ export async function upsertAgentTaskQueued(pool: DbPool, input: {
         input.discordResponseChannelId ?? null,
         input.discordResponseMessageId ?? null,
         input.retriedFromTaskId ?? null,
-        input.improvementCaseId ?? null,
+        null,
         input.taskType,
         input.title,
         input.request,
@@ -74,6 +74,14 @@ export async function upsertAgentTaskQueued(pool: DbPool, input: {
         statusMessage
       ]
     );
+    if (input.improvementCaseId) {
+      await linkImprovementCaseTask(pool, {
+        caseId: input.improvementCaseId,
+        taskId: input.taskId,
+        actorId: input.requestedBy,
+        actorKind: "system",
+      });
+    }
   }
 
 export async function attachAgentTasksToDiscordResponse(pool: DbPool, input: { traceId: string; channelId: string; messageId: string }): Promise<number> {

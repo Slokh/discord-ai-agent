@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { createAgentUpdateFromRequest } from "../../src/tools/agentTaskTools.js";
+import { createAgentUpdateFromRequest, retryAgentTask } from "../../src/tools/agentTaskTools.js";
 import { improvementToolHandlers } from "../../src/tools/handlers/improvements.js";
 import { listMyImprovementSignals } from "../../src/tools/improvementTools.js";
 import type { ToolContext } from "../../src/tools/types.js";
@@ -153,7 +153,7 @@ describe("improvement tools", () => {
     expect(getImprovementCase).toHaveBeenCalledWith("case-1");
   });
 
-  it("returns a linked case to actionable when task enqueue fails", async () => {
+  it("leaves an actionable linked case unchanged when task enqueue never starts", async () => {
     const transitionImprovementCase = vi.fn(async () => undefined);
     const ctx = codeUpdateContext({
       getImprovementCase: vi.fn(async () => ({
@@ -166,17 +166,29 @@ describe("improvement tools", () => {
     await expect(createAgentUpdateFromRequest(ctx, "fix it", null, {
       improvementCaseId: "case-1",
     })).rejects.toThrow(/queue is unavailable/);
-    expect(transitionImprovementCase).toHaveBeenNthCalledWith(1, {
-      caseId: "case-1",
-      to: "in_progress",
-      actorKind: "operator",
-      actorId: "user-1",
+    expect(transitionImprovementCase).not.toHaveBeenCalled();
+  });
+
+  it("validates linked retry work before attempting to enqueue it", async () => {
+    const getImprovementCase = vi.fn(async () => ({
+      case: { caseId: "case-1", guildId: "guild-1", status: "actionable" },
+      signals: [{ reporterId: "user-1" }],
+    }));
+    const ctx = codeUpdateContext({
+      getAgentTask: vi.fn(async () => ({
+        taskId: "task-1",
+        guildId: "guild-1",
+        channelId: "channel-1",
+        status: "failed",
+        taskType: "code_update",
+        title: "Repair the invariant",
+        request: "Fix the failing invariant.",
+        improvementCaseId: "case-1",
+      })),
+      getImprovementCase,
     });
-    expect(transitionImprovementCase).toHaveBeenNthCalledWith(2, {
-      caseId: "case-1",
-      to: "actionable",
-      actorKind: "system",
-      resolution: "Task enqueue failed.",
-    });
+
+    await expect(retryAgentTask(ctx, { taskId: "task-1" })).rejects.toThrow(/queue is unavailable/);
+    expect(getImprovementCase).toHaveBeenCalledWith("case-1");
   });
 });

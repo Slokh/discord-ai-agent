@@ -39,15 +39,7 @@ export async function createAgentUpdateFromRequest(
   const requestedBy = `${ctx.userDisplayName} (${ctx.userId})`;
   if (target.improvementCaseId && target.taskType === "diagnosis") throw new Error("Linked improvement work must produce a code change; evidence collection is a separate lifecycle step.");
   if (target.improvementCaseId) await assertImprovementCaseWorkAllowed(ctx, target.improvementCaseId);
-  let result;
-  try {
-    result = await enqueueAgentCodeUpdateTask(ctx, { request, updateName, requestedBy, ...target });
-  } catch (error) {
-    if (target.improvementCaseId) {
-      await ctx.repo.transitionImprovementCase({ caseId: target.improvementCaseId, to: "actionable", actorKind: "system", resolution: "Task enqueue failed." }).catch(() => undefined);
-    }
-    throw error;
-  }
+  const result = await enqueueAgentCodeUpdateTask(ctx, { request, updateName, requestedBy, ...target });
   const response = formatAgentTaskResult(result);
   await ctx.updateStatus?.(response).catch(() => undefined);
 
@@ -116,7 +108,6 @@ async function assertImprovementCaseWorkAllowed(ctx: ToolContext, caseId: string
     throw new Error("That improvement case is not visible to the current requester.");
   }
   if (record.case.status !== "actionable") throw new Error("An improvement case must have accepted executable checks before work can start.");
-  await ctx.repo.transitionImprovementCase({ caseId, to: "in_progress", actorKind: "operator", actorId: ctx.userId });
 }
 
 export async function getAgentTaskStatus(ctx: ToolContext, input: { taskId?: string; limit?: number } = {}): Promise<string> {
@@ -416,20 +407,14 @@ export async function retryAgentTask(ctx: ToolContext, input: { taskId?: string 
 
   const requestedBy = `${ctx.userDisplayName} (${ctx.userId}) retrying ${task.taskId}`;
   if (task.improvementCaseId) await assertImprovementCaseWorkAllowed(ctx, task.improvementCaseId);
-  let result;
-  try {
-    result = await enqueueAgentCodeUpdateTask(ctx, {
-      request: task.request,
-      updateName: task.title,
-      requestedBy,
-      taskType: task.taskType === "diagnosis" ? "diagnosis" : "code_update",
-      improvementCaseId: task.improvementCaseId,
-      retriedFromTaskId: task.taskId
-    });
-  } catch (error) {
-    if (task.improvementCaseId) await ctx.repo.transitionImprovementCase({ caseId: task.improvementCaseId, to: "actionable", actorKind: "system", resolution: "Task retry enqueue failed." }).catch(() => undefined);
-    throw error;
-  }
+  const result = await enqueueAgentCodeUpdateTask(ctx, {
+    request: task.request,
+    updateName: task.title,
+    requestedBy,
+    taskType: task.taskType === "diagnosis" ? "diagnosis" : "code_update",
+    improvementCaseId: task.improvementCaseId,
+    retriedFromTaskId: task.taskId
+  });
 
   await ctx.repo.auditTool({
     guildId: ctx.guildId,

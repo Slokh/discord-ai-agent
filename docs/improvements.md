@@ -8,9 +8,10 @@ Improvement cases are the one lifecycle for anything that says the product or it
 - A **signal** is immutable source provenance plus an active/withdrawn state. Its source key provides exact idempotency.
 - **Evidence** supports, contradicts, or leaves the case inconclusive. Large or sensitive source detail remains in the canonical runtime ledger and is referenced rather than copied.
 - A **contract** versions expected behavior and acceptance checks. Every check must resolve to a registered proof adapter before a case becomes actionable.
+- A **work attempt** links an authorized execution source to the case. Agent tasks and GitHub pull requests share this record and lifecycle.
 - A **case event** records each lifecycle decision for the operator stream.
 
-The canonical tables are `improvement_cases`, `improvement_signals`, `improvement_evidence`, `improvement_contracts`, `improvement_verification_proofs`, `improvement_verification_receipts`, and `improvement_case_events`. `src/db/improvementRepository.ts` owns intake and lifecycle state; `src/db/improvementVerificationRepository.ts` owns source proofs and receipt application. `agent_tasks.improvement_case_id` links explicitly authorized code work without turning the task projection into a second case tracker.
+The canonical tables are `improvement_cases`, `improvement_signals`, `improvement_evidence`, `improvement_contracts`, `improvement_work_attempts`, `improvement_verification_proofs`, `improvement_verification_receipts`, and `improvement_case_events`. `src/db/improvementRepository.ts` owns intake and case lifecycle, `src/db/improvementWorkRepository.ts` owns source-independent work attempts, and `src/db/improvementVerificationRepository.ts` owns source proofs and receipt application. `agent_tasks.improvement_case_id` remains a rolling-deploy projection, not the owner of work linkage.
 
 ```mermaid
 flowchart LR
@@ -21,9 +22,10 @@ flowchart LR
   E --> F["Accepted executable contract"]
   F --> G["Actionable"]
   G --> H["Explicit linked work"]
-  H --> I["In progress"]
-  I -->|"task failed"| G
-  I -->|"task succeeded"| J["Verifying"]
+  H --> I["Source-independent work attempt"]
+  I --> L["In progress"]
+  L -->|"task or PR failed"| G
+  L -->|"task succeeded or PR merged"| J["Verifying"]
   J -->|"deployed checks pass"| K["Resolved"]
 ```
 
@@ -46,7 +48,7 @@ Privacy deletion removes reporter-owned signals and evidence directly linked to 
 The allowed states are `open`, `needs_evidence`, `actionable`, `in_progress`, `verifying`, `resolved`, and `dismissed`.
 
 - `actionable` requires supporting evidence and an active contract whose checks all have registered proof adapters. Private-replay checks additionally require retained requester, channel, prompt, visible-channel scope, and an original execution with no mutating tool use.
-- Work starts only from `actionable`. Enqueue failure restores `actionable`.
+- Work starts only from `actionable`, and a case has at most one active work attempt. Enqueue failure or a pull request closed without merging restores `actionable`.
 - Successful linked work moves to `verifying`; failed, cancelled, or no-diff work returns to `actionable`.
 - `resolved` requires a passed receipt for the active contract on an exact durable deployment. The receipt, supporting `deployment_verification` evidence, event, and transition are written atomically.
 - Withdrawing the last signal dismisses only an untriaged `open` or `needs_evidence` case. Re-adding the signal reopens that specific automatically dismissed case.
@@ -96,10 +98,14 @@ npm run improve -- --target local evidence <case-id> --kind runtime_trace --disp
 npm run improve -- --target local contract <case-id> --expected "..." --check '{"kind":"test","reference":"release-verify"}'
 npm run improve -- --target local transition <case-id> actionable
 npm run improve -- --target local link-task <case-id> --task <task-id>
+npm run improve -- --target local link-pr <case-id> --pr https://github.com/owner/repo/pull/123
+npm run improve -- --target local sync-prs
 npm run improve -- --target local verify <case-id> --revision <sha>
 npm run improve -- --target local verify <case-id> --revision <sha> --apply
 ```
 
 Production commands require `--target production --confirm-production`, `NODE_ENV=production`, and a non-local configured database host. The CLI refuses a target/database mismatch.
+
+`link-pr` accepts only a pull request in the configured repository and derives its state and revisions from the live GitHub API. Open pull requests move the case to `in_progress`; a closed unmerged pull request returns it to `actionable`; a merged pull request moves it to `verifying`. Exact retries update the same deterministic work attempt. `sync-prs` reconciles all active PR attempts, and release promotion runs that reconciliation before applying deployed proof so a merged and deployed PR can proceed directly through verification. Reconciliation failures are reported without blocking an otherwise valid release.
 
 Active private-replay contracts export with `npm run eval:export-improvements`; `npm run eval:regressions` runs the resulting read-only private suite. Other registered contract kinds stay in their owning CI, delivery, observation, or deployment producer.

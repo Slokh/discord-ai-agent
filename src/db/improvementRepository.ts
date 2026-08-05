@@ -11,7 +11,7 @@ import type {
 } from "./types.js";
 import type { DbPool } from "./pool.js";
 import { assertActionableContract, assertImprovementChecks, assertImprovementTransition, improvementChecksExecutable } from "../improvements/policy.js";
-import { improvementProofAdapterForCheck, PRIVATE_REPLAY_MUTATING_TOOL_NAMES } from "../improvements/proofAdapters.js";
+import { assertImprovementProofInputs, assertImprovementProofPlan } from "../improvements/proofPlan.js";
 import { normalizeImprovementTitle } from "../improvements/coalescing.js";
 import {
   improvementTriageApplicationKey,
@@ -19,6 +19,7 @@ import {
   type ImprovementTriageApplication,
 } from "../improvements/triage.js";
 import { rowToImprovementVerificationReceipt } from "./improvementVerificationRepository.js";
+import { rowToImprovementWorkAttempt } from "./improvementWorkRows.js";
 
 export type RecordImprovementSignalInput = {
   source: ImprovementSignalSource;
@@ -265,11 +266,12 @@ export async function suggestImprovementCaseMerges(pool: DbPool, input: { caseId
 }
 
 export async function getImprovementCase(pool: DbPool, caseId: string) {
-  const [caseResult, signals, evidence, contracts, verificationReceipts, events] = await Promise.all([
+  const [caseResult, signals, evidence, contracts, workAttempts, verificationReceipts, events] = await Promise.all([
     pool.query("SELECT * FROM improvement_cases WHERE case_id = $1", [caseId]),
     pool.query("SELECT * FROM improvement_signals WHERE case_id = $1 ORDER BY observed_at ASC", [caseId]),
     pool.query("SELECT * FROM improvement_evidence WHERE case_id = $1 ORDER BY created_at ASC", [caseId]),
     pool.query("SELECT * FROM improvement_contracts WHERE case_id = $1 ORDER BY version DESC", [caseId]),
+    pool.query("SELECT * FROM improvement_work_attempts WHERE case_id = $1 ORDER BY created_at ASC", [caseId]),
     pool.query("SELECT * FROM improvement_verification_receipts WHERE case_id = $1 ORDER BY created_at DESC", [caseId]),
     pool.query("SELECT * FROM improvement_case_events WHERE case_id = $1 ORDER BY event_id ASC", [caseId]),
   ]);
@@ -279,6 +281,7 @@ export async function getImprovementCase(pool: DbPool, caseId: string) {
     signals: signals.rows.map(rowToImprovementSignal),
     evidence: evidence.rows.map(rowToEvidence),
     contracts: contracts.rows.map(rowToContract),
+    workAttempts: workAttempts.rows.map(rowToImprovementWorkAttempt),
     verificationReceipts: verificationReceipts.rows.map(rowToImprovementVerificationReceipt),
     events: events.rows.map(rowToEvent),
   };
@@ -381,8 +384,11 @@ export async function mergeImprovementCases(pool: DbPool, input: { sourceCaseId:
     if (cases[0]?.guildId !== cases[1]?.guildId || cases[0]?.privacy !== cases[1]?.privacy) {
       throw new Error("Improvement cases can only merge within the same guild and privacy boundary.");
     }
+    const work = await client.query("SELECT 1 FROM improvement_work_attempts WHERE case_id = ANY($1::text[]) LIMIT 1", [[input.sourceCaseId, input.targetCaseId]]);
+    if (work.rowCount) throw new Error("Improvement cases with linked work cannot be merged.");
     await client.query("UPDATE improvement_signals SET case_id = $2, updated_at = now() WHERE case_id = $1", [input.sourceCaseId, input.targetCaseId]);
     await client.query("UPDATE improvement_evidence SET case_id = $2 WHERE case_id = $1", [input.sourceCaseId, input.targetCaseId]);
+    await client.query("UPDATE improvement_work_attempts SET case_id = $2, updated_at = now() WHERE case_id = $1", [input.sourceCaseId, input.targetCaseId]);
     await client.query("UPDATE improvement_contracts SET active = false WHERE case_id = $1", [input.sourceCaseId]);
     await client.query("UPDATE improvement_cases SET status = 'dismissed', merged_into_case_id = $2, resolution = $3, resolved_at = now(), version = version + 1, updated_at = now() WHERE case_id = $1", [input.sourceCaseId, input.targetCaseId, `Merged into ${input.targetCaseId}.`]);
     await client.query("UPDATE improvement_cases SET first_seen_at = least(first_seen_at, (SELECT first_seen_at FROM improvement_cases WHERE case_id = $1)), last_seen_at = greatest(last_seen_at, (SELECT last_seen_at FROM improvement_cases WHERE case_id = $1)), version = version + 1, updated_at = now() WHERE case_id = $2", [input.sourceCaseId, input.targetCaseId]);
@@ -534,66 +540,6 @@ export async function applyImprovementTriage(
   }
 }
 
-export async function completeImprovementWorkForTask(pool: DbPool, input: {
-  taskId: string;
-  succeeded: boolean;
-  prUrl?: string | null;
-  summary?: string | null;
-}) {
-  const client = await pool.connect();
-  try {
-    await client.query("BEGIN");
-    const result = await client.query(
-      `SELECT case_row.* FROM improvement_cases case_row
-       JOIN agent_tasks task ON task.improvement_case_id = case_row.case_id
-       WHERE task.task_id = $1 FOR UPDATE`,
-      [input.taskId],
-    );
-    if (!result.rows[0]) { await client.query("COMMIT"); return undefined; }
-    const current = rowToImprovementCase(result.rows[0]);
-    const target: ImprovementCaseStatus = input.succeeded ? "verifying" : "actionable";
-    if (current.status !== "in_progress") { await client.query("COMMIT"); return current; }
-    if (input.succeeded) await assertImprovementProofPlan(client, current.caseId);
-    const updated = await client.query(
-      `UPDATE improvement_cases SET status = $2, version = version + 1, updated_at = now()
-       WHERE case_id = $1 RETURNING *`,
-      [current.caseId, target],
-    );
-    await insertCaseEvent(client, {
-      caseId: current.caseId,
-      eventName: input.succeeded ? "work.completed" : "work.failed",
-      actorKind: "automation",
-      summary: input.summary ?? (input.succeeded ? "Linked code work completed; deployment verification is required." : "Linked code work did not complete."),
-      metadata: { taskId: input.taskId, prUrl: input.prUrl ?? null },
-    });
-    await client.query("COMMIT");
-    return rowToImprovementCase(updated.rows[0]);
-  } catch (error) { await client.query("ROLLBACK").catch(() => undefined); throw error; }
-  finally { client.release(); }
-}
-
-export async function linkImprovementCaseTask(pool: DbPool, input: { caseId: string; taskId: string; actorId: string }) {
-  const client = await pool.connect();
-  try {
-    await client.query("BEGIN");
-    const caseResult = await client.query("SELECT * FROM improvement_cases WHERE case_id = $1 FOR UPDATE", [input.caseId]);
-    if (!caseResult.rows[0]) throw new Error(`Improvement case ${input.caseId} was not found.`);
-    const improvement = rowToImprovementCase(caseResult.rows[0]);
-    if (improvement.status !== "actionable") throw new Error("Only an actionable improvement case can start work.");
-    await assertImprovementProofPlan(client, input.caseId);
-    const taskResult = await client.query("SELECT status, improvement_case_id FROM agent_tasks WHERE task_id = $1 FOR UPDATE", [input.taskId]);
-    if (!taskResult.rows[0]) throw new Error(`Agent task ${input.taskId} was not found.`);
-    if (!["queued", "running"].includes(String(taskResult.rows[0].status))) throw new Error("Only queued or running work can be linked to an improvement case.");
-    if (taskResult.rows[0].improvement_case_id && taskResult.rows[0].improvement_case_id !== input.caseId) throw new Error("The agent task is already linked to another improvement case.");
-    await client.query("UPDATE agent_tasks SET improvement_case_id = $2, updated_at = now() WHERE task_id = $1", [input.taskId, input.caseId]);
-    const updated = await client.query("UPDATE improvement_cases SET status = 'in_progress', version = version + 1, updated_at = now() WHERE case_id = $1 RETURNING *", [input.caseId]);
-    await insertCaseEvent(client, { caseId: input.caseId, eventName: "work.started", actorKind: "operator", actorId: input.actorId, metadata: { taskId: input.taskId } });
-    await client.query("COMMIT");
-    return rowToImprovementCase(updated.rows[0]);
-  } catch (error) { await client.query("ROLLBACK").catch(() => undefined); throw error; }
-  finally { client.release(); }
-}
-
 export async function clearImprovementDataForUser(pool: DbPool, userId: string) {
   await pool.query(
     `DELETE FROM improvement_evidence evidence
@@ -617,53 +563,6 @@ export async function clearImprovementDataForUser(pool: DbPool, userId: string) 
   }
   await pool.query("UPDATE improvement_case_events SET actor_id = NULL WHERE actor_id = $1", [userId]);
   return result.rowCount ?? 0;
-}
-
-async function assertImprovementProofInputs(
-  database: Pick<DbPool, "query">,
-  caseId: string,
-  checks: readonly ImprovementContractCheck[],
-) {
-  if (!checks.some((check) => improvementProofAdapterForCheck(check)?.id === "private_replay")) return;
-  const replay = await database.query(
-    `SELECT 1
-     FROM improvement_signals signal
-     JOIN agent_runtime_executions execution ON execution.execution_id = signal.execution_id
-     JOIN agent_runtime_sessions session ON session.session_id = execution.session_id
-     JOIN LATERAL (
-       SELECT string_agg(chunk.content, '' ORDER BY chunk.chunk_index)::jsonb AS envelope
-       FROM agent_runtime_artifacts artifact
-       JOIN agent_runtime_artifact_chunks chunk USING (artifact_id)
-       WHERE artifact.execution_id = execution.execution_id AND artifact.kind = 'turn_envelope'
-       GROUP BY artifact.artifact_id, artifact.created_at
-       ORDER BY artifact.created_at DESC LIMIT 1
-     ) turn ON true
-     WHERE signal.case_id = $1 AND signal.active = true
-       AND signal.guild_id IS NOT NULL AND signal.channel_id IS NOT NULL AND signal.reporter_id IS NOT NULL
-       AND coalesce(nullif(turn.envelope->>'text', ''), nullif(session.request, '')) IS NOT NULL
-       AND jsonb_typeof(turn.envelope->'visibleChannelIds') = 'array'
-       AND jsonb_array_length(turn.envelope->'visibleChannelIds') > 0
-       AND NOT EXISTS (
-         SELECT 1 FROM agent_runtime_events event
-         WHERE event.execution_id = execution.execution_id
-           AND event.metadata->>'toolName' = ANY($2::text[])
-       )
-     LIMIT 1`,
-    [caseId, PRIVATE_REPLAY_MUTATING_TOOL_NAMES],
-  );
-  if (!replay.rowCount) {
-    throw new Error("Private-replay checks require safe retained input: requester, channel, prompt, visible-channel scope, and no mutating tool use.");
-  }
-}
-
-async function assertImprovementProofPlan(database: Pick<DbPool, "query">, caseId: string) {
-  const contract = await database.query(
-    "SELECT checks FROM improvement_contracts WHERE case_id = $1 AND active = true",
-    [caseId],
-  );
-  const checks = (contract.rows[0]?.checks ?? []) as ImprovementContractCheck[];
-  assertActionableContract(checks);
-  await assertImprovementProofInputs(database, caseId, checks);
 }
 
 async function insertCaseEvent(client: Pick<DbPool, "query">, input: {

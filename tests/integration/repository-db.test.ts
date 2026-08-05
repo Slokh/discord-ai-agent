@@ -2416,6 +2416,12 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
       topUsers: [{ authorId: userId, authorUsername: "riverrunner", messageCount: 2 }],
       topChannels: [{ channelId, channelName: "general-chat", messageCount: 2 }]
     });
+    await expect(repo.discordStats({ guildId, visibleChannelIds: [channelId], metric: "uniqueActiveDays", limit: 5 })).resolves.toMatchObject({
+      totalMessages: 2,
+      totalValue: 1,
+      activeDays: 1, topUsers: [{ authorId: userId, value: 1 }],
+      topChannels: [{ channelId, value: 1 }]
+    });
     await expect(repo.discordStats({
       guildId,
       visibleChannelIds: [channelId],
@@ -2648,6 +2654,13 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
         expect.objectContaining({ channelId: parentChannelId, channelName: "parent", value: 1 })
       ])
     );
+    await expect(repo.discordStats({ guildId, visibleChannelIds, limit: 5 })).resolves.toMatchObject({
+      channelCount: 3,
+      topChannels: [
+        { channelId: parentChannelId, channelName: "parent", messageCount: 2 },
+        { channelId: quietChannelId, channelName: "quiet", messageCount: 1 }
+      ]
+    });
   });
 
   it("loads parent-channel topic candidates with stored embeddings", async () => {

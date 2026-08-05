@@ -1,6 +1,7 @@
 import type { DbPool } from "./pool.js";
 import { buildDiscordStatsBaseQuery, discordStatsMetricSql, discordStatsEffectiveChannelIdSql, discordStatsEffectiveChannelNameSql, discordStatsChannelAgeDaysSql, discordStatsGrouping, defaultDiscordStatsSort, discordStatsOrderBy, rowToDiscordStatsRow, rowToDiscordChannelTopicCandidate, emptyDiscordStats, rowToDiscordAttachmentSearchResult, normalizeFilterIds } from "./shared.js";
 import type { DiscordAttachmentSearchResult, DiscordStats, DiscordStatsMetric, DiscordStatsGroupBy, DiscordStatsSort, DiscordChannelTopicCandidate } from "./shared.js";
+import { discordUsernames, excludedRetrievalAuthorIds, resolveRetrievalChannels } from "./retrievalScope.js";
 
 export async function messageAttachments(pool: DbPool, input: {
     guildId: string;
@@ -68,6 +69,9 @@ export async function discordStats(pool: DbPool, input: {
     const groupBy = input.groupBy ?? "overall";
     if (input.visibleChannelIds.length === 0) {
       return emptyDiscordStats(metric, groupBy);
+    }
+    if (groupBy === "overall" && metric !== "messagesPerChannelDay") {
+      return discordOverallStats(pool, input, metric);
     }
 
     const includeOverallBreakdowns = groupBy === "overall";
@@ -191,6 +195,225 @@ export async function discordStats(pool: DbPool, input: {
       }))
     };
   }
+
+type OverallStatsAggregate = {
+  messageCount: number;
+  metricValue: number;
+  attachmentCount: number;
+  reactionCount: number;
+};
+
+async function discordOverallStats(pool: DbPool, input: {
+  guildId: string;
+  visibleChannelIds: string[];
+  limit: number;
+  authorIds?: string[];
+  channelIds?: string[];
+  dateFrom?: Date;
+  dateTo?: Date;
+  metric?: DiscordStatsMetric;
+  includeBots?: boolean;
+  query?: string;
+  attachmentContentType?: string;
+}, metric: DiscordStatsMetric): Promise<DiscordStats> {
+  const [channels, excludedAuthorIds] = await Promise.all([
+    resolveRetrievalChannels(pool, {
+      guildId: input.guildId,
+      visibleChannelIds: input.visibleChannelIds,
+      requestedChannelIds: input.channelIds
+    }),
+    excludedRetrievalAuthorIds(pool, Boolean(input.includeBots))
+  ]);
+  if (channels.length === 0) return emptyDiscordStats(metric, "overall");
+
+  const params: unknown[] = [input.guildId, channels.map((channel) => channel.id)];
+  const addParam = (value: unknown) => {
+    params.push(value);
+    return `$${params.length}`;
+  };
+  const conditions = [
+    "m.guild_id = $1",
+    "m.channel_id = ANY($2::text[])",
+    "m.deleted_at IS NULL",
+    "m.normalized_content <> ''"
+  ];
+  if (excludedAuthorIds.length > 0) {
+    conditions.push(`NOT (m.author_id = ANY(${addParam(excludedAuthorIds)}::text[]))`);
+  }
+  const authorIds = normalizeFilterIds(input.authorIds);
+  if (authorIds.length > 0) conditions.push(`m.author_id = ANY(${addParam(authorIds)}::text[])`);
+  if (input.dateFrom) conditions.push(`m.created_at >= ${addParam(input.dateFrom)}::timestamptz`);
+  if (input.dateTo) conditions.push(`m.created_at <= ${addParam(input.dateTo)}::timestamptz`);
+  const query = input.query?.trim();
+  if (query) {
+    conditions.push(`to_tsvector('english', m.normalized_content) @@ plainto_tsquery('english', ${addParam(query)})`);
+  }
+
+  const attachmentContentType = input.attachmentContentType?.trim().toLowerCase();
+  const attachmentFilter = attachmentContentType
+    ? `AND lower(coalesce(a.content_type, '')) LIKE ${addParam(attachmentContentType)} || '%'`
+    : "";
+  const activeDaySql = "date_trunc('day', m.created_at)";
+  const needsPerGroupActiveDays = metric === "uniqueActiveDays" || metric === "messagesPerActiveDay";
+  const groupingSets = needsPerGroupActiveDays
+    ? `((), (m.author_id), (m.channel_id), (${activeDaySql}), (m.author_id, ${activeDaySql}), (m.channel_id, ${activeDaySql}))`
+    : `((), (m.author_id), (m.channel_id), (${activeDaySql}))`;
+  const metricSql = overallStatsMetricSql(metric);
+  const result = await pool.query(
+    `
+      SELECT
+        GROUPING(m.author_id)::int AS author_grouping,
+        GROUPING(m.channel_id)::int AS channel_grouping,
+        GROUPING(${activeDaySql})::int AS day_grouping,
+        m.author_id,
+        m.channel_id,
+        ${activeDaySql} AS active_day,
+        count(*)::int AS message_count,
+        coalesce(sum(attachment_stats.attachment_count), 0)::int AS attachment_count,
+        coalesce(sum(reaction_stats.reaction_count), 0)::int AS reaction_count,
+        ${metricSql} AS metric_value
+      FROM messages m
+      LEFT JOIN LATERAL (
+        SELECT count(*)::int AS attachment_count
+        FROM attachments a
+        WHERE a.message_id = m.id
+          ${attachmentFilter}
+      ) attachment_stats ON true
+      LEFT JOIN LATERAL (
+        SELECT coalesce(sum(coalesce((reaction->>'count')::int, 0)), 0)::int AS reaction_count
+        FROM jsonb_array_elements(
+          CASE
+            WHEN jsonb_typeof(m.raw->'reactions') = 'array' THEN m.raw->'reactions'
+            ELSE '[]'::jsonb
+          END
+        ) reaction
+      ) reaction_stats ON true
+      WHERE ${conditions.join("\n        AND ")}
+      GROUP BY GROUPING SETS ${groupingSets}
+    `,
+    params
+  );
+
+  const channelById = new Map(channels.map((channel) => [channel.id, channel]));
+  const authorRows = new Map<string, OverallStatsAggregate>();
+  const rawChannelRows = new Map<string, OverallStatsAggregate>();
+  const authorActiveDays = new Map<string, Set<string>>();
+  const channelActiveDays = new Map<string, Set<string>>();
+  let overall: OverallStatsAggregate = emptyOverallStatsAggregate();
+  let activeDays = 0;
+
+  for (const row of result.rows) {
+    const authorGrouped = Number(row.author_grouping) === 0;
+    const channelGrouped = Number(row.channel_grouping) === 0;
+    const dayGrouped = Number(row.day_grouping) === 0;
+    if (!authorGrouped && !channelGrouped && !dayGrouped) {
+      overall = rowToOverallStatsAggregate(row);
+    } else if (authorGrouped && !channelGrouped && !dayGrouped) {
+      authorRows.set(String(row.author_id), rowToOverallStatsAggregate(row));
+    } else if (!authorGrouped && channelGrouped && !dayGrouped) {
+      rawChannelRows.set(String(row.channel_id), rowToOverallStatsAggregate(row));
+    } else if (!authorGrouped && !channelGrouped && dayGrouped) {
+      activeDays += 1;
+    } else if (authorGrouped && !channelGrouped && dayGrouped) {
+      addActiveDay(authorActiveDays, String(row.author_id), row.active_day);
+    } else if (!authorGrouped && channelGrouped && dayGrouped) {
+      const channel = channelById.get(String(row.channel_id));
+      if (channel) addActiveDay(channelActiveDays, channel.effectiveId, row.active_day);
+    }
+  }
+
+  const usernames = await discordUsernames(pool, [...authorRows.keys()]);
+  const topUsers = [...authorRows.entries()]
+    .map(([authorId, aggregate]) => ({
+      authorId,
+      authorUsername: usernames.get(authorId) ?? null,
+      messageCount: aggregate.messageCount,
+      value: overallStatsValue(metric, aggregate, authorActiveDays.get(authorId)?.size ?? 0)
+    }))
+    .sort((left, right) => descendingValueThenId(left.value, right.value, left.authorId, right.authorId))
+    .slice(0, input.limit);
+
+  const effectiveChannels = new Map<string, OverallStatsAggregate & { channelName: string | null }>();
+  for (const [channelId, aggregate] of rawChannelRows) {
+    const channel = channelById.get(channelId);
+    if (!channel) continue;
+    const current = effectiveChannels.get(channel.effectiveId) ?? {
+      ...emptyOverallStatsAggregate(),
+      channelName: channel.effectiveName
+    };
+    current.messageCount += aggregate.messageCount;
+    current.metricValue += aggregate.metricValue;
+    current.attachmentCount += aggregate.attachmentCount;
+    current.reactionCount += aggregate.reactionCount;
+    effectiveChannels.set(channel.effectiveId, current);
+  }
+  const topChannels = [...effectiveChannels.entries()]
+    .map(([channelId, aggregate]) => ({
+      channelId,
+      channelName: aggregate.channelName,
+      messageCount: aggregate.messageCount,
+      value: overallStatsValue(metric, aggregate, channelActiveDays.get(channelId)?.size ?? 0)
+    }))
+    .sort((left, right) => descendingValueThenId(left.value, right.value, left.channelId, right.channelId))
+    .slice(0, input.limit);
+
+  return {
+    totalMessages: overall.messageCount,
+    totalValue: overallStatsValue(metric, overall, activeDays),
+    totalAttachments: overall.attachmentCount,
+    totalReactions: overall.reactionCount,
+    userCount: authorRows.size,
+    channelCount: rawChannelRows.size,
+    activeDays,
+    metric,
+    groupBy: "overall",
+    rows: [],
+    topUsers,
+    topChannels
+  };
+}
+
+function overallStatsMetricSql(metric: DiscordStatsMetric) {
+  if (metric === "characters") return "coalesce(sum(char_length(m.normalized_content)), 0)::bigint";
+  if (metric === "words") {
+    return "coalesce(sum(coalesce(cardinality(regexp_split_to_array(nullif(btrim(m.normalized_content), ''), '\\s+')), 0)), 0)::bigint";
+  }
+  if (metric === "attachments") return "coalesce(sum(attachment_stats.attachment_count), 0)::int";
+  if (metric === "reactions") return "coalesce(sum(reaction_stats.reaction_count), 0)::int";
+  return "count(*)::int";
+}
+
+function emptyOverallStatsAggregate(): OverallStatsAggregate {
+  return { messageCount: 0, metricValue: 0, attachmentCount: 0, reactionCount: 0 };
+}
+
+function rowToOverallStatsAggregate(row: any): OverallStatsAggregate {
+  return {
+    messageCount: Number(row.message_count ?? 0),
+    metricValue: Number(row.metric_value ?? 0),
+    attachmentCount: Number(row.attachment_count ?? 0),
+    reactionCount: Number(row.reaction_count ?? 0)
+  };
+}
+
+function addActiveDay(target: Map<string, Set<string>>, key: string, value: unknown) {
+  const days = target.get(key) ?? new Set<string>();
+  days.add(new Date(value as string | number | Date).toISOString());
+  target.set(key, days);
+}
+
+function overallStatsValue(metric: DiscordStatsMetric, aggregate: OverallStatsAggregate, activeDays: number) {
+  if (metric === "uniqueActiveDays") return activeDays;
+  if (metric === "messagesPerActiveDay") {
+    return Number((aggregate.messageCount / Math.max(1, activeDays)).toFixed(4));
+  }
+  return aggregate.metricValue;
+}
+
+function descendingValueThenId(leftValue: number, rightValue: number, leftId: string, rightId: string) {
+  if (leftValue !== rightValue) return rightValue - leftValue;
+  return leftId < rightId ? -1 : leftId > rightId ? 1 : 0;
+}
 
 
 export async function discordChannelTopicCandidates(pool: DbPool, input: {

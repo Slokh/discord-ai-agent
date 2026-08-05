@@ -107,20 +107,23 @@ export type ImprovementSignal = {
   updatedAt: Date;
 };
 
-export type ImprovementReporterUpdate = {
-  updateId: string;
+export type ImprovementReporterConversation = {
+  conversationId: string;
   caseId: string;
-  signalId: string;
+  guildId: string;
+  sourceChannelId: string;
+  sourceMessageId: string;
   reporterId: string;
   signalActive: boolean;
   caseStatus: ImprovementCaseStatus;
   caseResolution: string | null;
+  deliveryKind: "thread" | "dm" | null;
+  deliveryChannelId: string | null;
+  deliveryMessageId: string | null;
   clarificationTaskId: string | null;
   clarificationQuestion: string | null;
   clarificationAnswer: string | null;
   answerSignalId: string | null;
-  dmChannelId: string | null;
-  dmMessageId: string | null;
   lastRenderedSignature: string | null;
   lastRenderedAt: Date | null;
   deliveryAttempts: number;

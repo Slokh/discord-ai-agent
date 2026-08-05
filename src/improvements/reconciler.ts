@@ -34,7 +34,7 @@ type ImprovementReconciliationRepository = Pick<
   | "getAgentTask"
   | "applyImprovementTriage"
   | "recordImprovementReconciliationDecision"
-  | "ensureImprovementReporterUpdatesForCase"
+  | "ensureImprovementReporterConversationsForCase"
   | "listActiveImprovementPullRequestWork"
   | "linkImprovementCasePullRequest"
   | "latestDeploymentVerification"
@@ -100,7 +100,7 @@ async function reconcileTriage(input: {
     try {
       const record = await input.repo.getImprovementCase(candidate.caseId);
       if (!record || !TRIAGE_STATUSES.includes(record.case.status)) continue;
-      await input.repo.ensureImprovementReporterUpdatesForCase(record.case.caseId);
+      await input.repo.ensureImprovementReporterConversationsForCase(record.case.caseId);
       const activeSignals = record.signals.filter((signal) => signal.active);
       const runtime = await collectImprovementRuntimeObservations(activeSignals, {
         runtime: input.runtime,

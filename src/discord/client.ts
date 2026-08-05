@@ -25,7 +25,7 @@ import { handleDiscordRichInteraction } from "./components/interactionHandler.js
 import { DiscordInteractionResponder } from "./components/interactionResponder.js";
 import { DiscordTaskSupervisor } from "./taskSupervisor.js";
 import { waitForDeploymentPromotion } from "./deploymentPromotion.js";
-import { handleImprovementClarificationReply } from "./improvementReporterUpdates.js";
+import { handleImprovementClarificationReply } from "./improvementReporterConversations.js";
 
 export type DiscordAiAgentBotRuntime = {
   client: Client;

@@ -72,6 +72,7 @@ Randomness and wagers add two rules: exposure is reserved before entropy is cons
 - Plain text is the default; Components V2 is for choices, forms, media, or hierarchy that materially benefit from native UI.
 - A loading reaction may indicate work. If that reaction cannot be added, the bot stays silent until the final response instead of posting a placeholder reply that competes with it.
 - A member can add `🔄` or `🔃` to retry a terminal code/bug task or their own non-mutating bot reply. Each active reaction is durable and idempotent; retries never repeat a completed mutation.
+- A `🐛` report gets a follow-up thread attached to the reported message when Discord supports it. The bot posts questions and outcomes as turns in that thread, whose audience is inherited from the source channel; DM is the fallback when a thread cannot be created safely.
 - Final content, files, components, and non-model footers are delivered through one durable response path. Every terminal prompt reply includes a compact elapsed-time footer independent of operator tooling.
 - Long-running code updates edit a dedicated task status message and finish with a PR or a concrete terminal reason.
 - Deployment announcements explain member-visible and internal changes concretely in plain English. Technical names are included only when useful and are explained rather than presented as unexplained jargon; available details are not hidden behind generic maintenance or reliability language.

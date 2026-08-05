@@ -8,7 +8,7 @@ import { embedStoredMessage, embedStoredMessages } from "./memory/embedding.js";
 import { DiscordCrawler } from "./discord/crawler.js";
 import { createDiscordAiAgentBot } from "./discord/client.js";
 import { startAgentTaskNotifier } from "./discord/taskNotifications.js";
-import { startImprovementReporterNotifier } from "./discord/improvementReporterUpdates.js";
+import { startImprovementReporterNotifier } from "./discord/improvementReporterConversations.js";
 import { startJobs } from "./jobs/queue.js";
 import { logger } from "./util/logger.js";
 import { createAgentRuntimeRunner } from "./discord/agentRuntimeRunner.js";

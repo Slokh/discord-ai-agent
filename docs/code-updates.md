@@ -82,7 +82,7 @@ Recovery produces an explicit terminal reason. It never silently publishes an un
 
 Members can add `🔄` or `🔃` to a terminal task update to queue a fresh retry. The reaction is durably deduplicated per member and target message, and the new task links back to the failed task. Tasks linked to an improvement case create a new source-independent work attempt while retaining the case projection; the case remains `in_progress` during the retry and still requires explicit deployed verification before resolution.
 
-Report-authorized `improvement_report` tasks are two-phase. The first phase is evidence-only and must leave the checkout clean. Unsupported reports finish without GitHub work; insufficient evidence names the exact human clarification needed. A confirmed defect must include registered machine-executable checks before the second phase may edit. A successfully verified repair opens a diff-described PR and enables auto-merge after required checks; private report evidence never enters the branch, commit, or PR metadata.
+Report-authorized `improvement_report` tasks are two-phase. The first phase is evidence-only and must leave the checkout clean. Unsupported reports finish without GitHub work; insufficient evidence names the exact reporter clarification needed. A confirmed defect must include registered machine-executable checks before the second phase may edit. A successfully verified repair opens a diff-described PR and enables auto-merge after required checks; private report evidence never enters the branch, commit, or PR metadata.
 
 ## Operations and verification
 

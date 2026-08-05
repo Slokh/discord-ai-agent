@@ -65,10 +65,13 @@ export async function handleDiscordImprovementReaction(
     }),
     metadata: { reaction: DISCORD_IMPROVEMENT_EMOJI, messageAuthorIsBot: message.author.bot },
   });
-  await input.repo.ensureImprovementReporterUpdate({
+  await input.repo.ensureImprovementReporterConversation({
     caseId: recorded.case.caseId,
     signalId: recorded.signal.signalId,
     reporterId: user.id,
+    guildId: message.guildId,
+    channelId: message.channelId,
+    messageId: message.id,
   });
   await wakeImprovementReconciliation(input.jobs);
   return true;

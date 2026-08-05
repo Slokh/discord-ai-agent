@@ -139,6 +139,57 @@ describe.skipIf(!runDbTests)("revision quality database contract", () => {
     });
   });
 
+  it("records successful over-budget capability calls as content-free latency clusters", async () => {
+    const runtime = new AgentRuntimeRepository(database.pool);
+    await runtime.upsertSession({
+      sessionId: "slow-success-session",
+      threadKey: "slow-success-thread",
+      request: "test",
+      metadata: { appRevision: "slow-success-revision", qualityCohort: "member" },
+    });
+    await runtime.createExecution({
+      executionId: "slow-success-execution",
+      sessionId: "slow-success-session",
+      harness: "nanocodex",
+      status: "succeeded",
+      metadata: { appRevision: "slow-success-revision", qualityCohort: "member" },
+    });
+    await runtime.recordEvent({
+      sessionId: "slow-success-session",
+      executionId: "slow-success-execution",
+      kind: "tool",
+      eventName: "agent.tool.complete",
+      durationMs: 31_000,
+      metadata: {
+        toolName: "getRecentDiscordMessages",
+        status: "ok",
+        latencyBudgetMs: 15_000,
+        latencyBudgetExceeded: true,
+      },
+    });
+
+    const quality = await collectRevisionQuality(database.pool, "slow-success-revision", 48);
+    expect(quality.tools).toEqual([expect.objectContaining({
+      tool: "getRecentDiscordMessages",
+      status: "ok",
+      count: 1,
+      p50_ms: 31_000,
+      p95_ms: 31_000,
+      max_ms: 31_000,
+      latency_budget_ms: 15_000,
+      slow_success_count: 1,
+    })]);
+    expect(quality.failureClusters).toEqual([expect.objectContaining({
+      reference: expect.stringMatching(/^revision-quality:tool_latency:[a-f0-9]{24}$/),
+      kind: "tool_latency",
+      toolName: "getRecentDiscordMessages",
+      latencyBudgetMs: 15_000,
+      maxDurationMs: 31_000,
+      count: 1,
+    })]);
+    expect(JSON.stringify(quality)).not.toContain("slow-success-execution");
+  });
+
   it("counts one root failure when an execution emits several wrapper errors", async () => {
     const runtime = new AgentRuntimeRepository(database.pool);
     await runtime.upsertSession({

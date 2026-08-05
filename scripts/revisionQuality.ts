@@ -7,6 +7,7 @@ import {
   collectRevisionQuality,
   collectRevisionQualityObservation,
   findBaselineRevision,
+  revisionQualityClusterAbsenceStatuses,
   revisionQualityDetectionInputs,
 } from "../src/observability/revisionQuality.js";
 
@@ -57,6 +58,7 @@ try {
         clusterAbsenceStatus: assessment.sample.answersRemaining === 0 && assessment.sample.toolCallsRemaining === 0
           ? "passed"
           : "inconclusive",
+        clusterAbsenceStatuses: revisionQualityClusterAbsenceStatuses(quality),
       });
       const receipts = proof.deploymentId
         ? await repo.verifyImprovementCasesForDeployment({ revision, deploymentId: proof.deploymentId, actorId: "revision-quality" })

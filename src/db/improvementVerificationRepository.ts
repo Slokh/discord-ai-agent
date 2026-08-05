@@ -3,7 +3,12 @@ import type { PoolClient } from "pg";
 import type { DbPool } from "./pool.js";
 import type { ImprovementCase, ImprovementContractCheck, ImprovementPrivacy } from "./types.js";
 import type { ImprovementReplayCheckResult } from "../observability/improvementContractReplay.js";
-import { improvementCheckHash, improvementProofAdapterForCheck, isRevisionQualityClusterReference } from "../improvements/proofAdapters.js";
+import {
+  improvementCheckHash,
+  improvementProofAdapterForCheck,
+  isRevisionQualityClusterReference,
+  isRevisionQualityToolLatencyReference,
+} from "../improvements/proofAdapters.js";
 import {
   buildImprovementVerificationDossier,
   improvementVerificationApplicationKey,
@@ -93,6 +98,7 @@ export async function recordImprovementRevisionQualityResult(pool: DbPool, input
   runKey: string;
   presentFailureReferences?: string[];
   clusterAbsenceStatus?: Extract<ImprovementVerificationStatus, "passed" | "inconclusive">;
+  clusterAbsenceStatuses?: Record<string, Extract<ImprovementVerificationStatus, "passed" | "inconclusive">>;
 }) {
   const revision = bounded(input.revision, "revision", 200);
   const client = await pool.connect();
@@ -114,6 +120,10 @@ export async function recordImprovementRevisionQualityResult(pool: DbPool, input
        WHERE case_row.status = 'verifying'`,
     );
     const present = new Set((input.presentFailureReferences ?? []).map((reference) => bounded(reference, "failureReference", 200)));
+    const clusterAbsenceStatuses = new Map(Object.entries(input.clusterAbsenceStatuses ?? {}).map(([reference, status]) => [
+      bounded(reference, "failureReference", 200),
+      status,
+    ]));
     const runKey = bounded(input.runKey, "runKey", 200);
     let recorded = 0;
     for (const row of candidates.rows) {
@@ -123,7 +133,9 @@ export async function recordImprovementRevisionQualityResult(pool: DbPool, input
           ? input.status
           : present.has(reference)
             ? "failed"
-            : input.clusterAbsenceStatus ?? "inconclusive";
+            : isRevisionQualityToolLatencyReference(reference)
+              ? clusterAbsenceStatuses.get(reference) ?? "inconclusive"
+              : input.clusterAbsenceStatus ?? "inconclusive";
         const result = await client.query(
           `INSERT INTO improvement_verification_proofs(
              proof_id,case_id,contract_id,contract_version,revision,deployment_id,source,status,
@@ -417,9 +429,9 @@ function proofSummary(status: ImprovementVerificationStatus) {
 
 function qualityProofSummary(status: ImprovementVerificationStatus, reference = "revision-quality-gate") {
   if (reference !== "revision-quality-gate") {
-    if (status === "passed") return "The deployed revision had enough traffic and did not reproduce this failure cluster.";
-    if (status === "failed") return "Production observation reproduced this failure cluster on the deployed revision.";
-    return "The deployed revision does not yet have enough member traffic to disprove this failure cluster.";
+    if (status === "passed") return "The deployed revision had enough relevant traffic and did not reproduce this quality cluster.";
+    if (status === "failed") return "Production observation reproduced this quality cluster on the deployed revision.";
+    return "The deployed revision does not yet have enough relevant member traffic to disprove this quality cluster.";
   }
   if (status === "passed") return "The deployed revision passed its traffic-sampled production quality gate.";
   if (status === "failed") return "The deployed revision failed its traffic-sampled production quality gate.";

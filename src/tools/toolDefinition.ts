@@ -72,11 +72,12 @@ export type ToolRegistryEntry = {
   auditEvents: string[];
   argumentExamples: Record<string, unknown>[];
   repeatPolicy: "allow" | "reuse_identical_success";
+  latencyBudgetMs: number;
   parameters: FunctionToolDefinition["function"]["parameters"];
 };
 
-type ToolDefinitionInput = Omit<ToolRegistryEntry, "outputContract" | "permissionRequirements" | "auditEvents" | "argumentExamples" | "accessPolicy" | "repeatPolicy"> &
-  Partial<Pick<ToolRegistryEntry, "outputContract" | "permissionRequirements" | "auditEvents" | "argumentExamples" | "accessPolicy" | "repeatPolicy">>;
+type ToolDefinitionInput = Omit<ToolRegistryEntry, "outputContract" | "permissionRequirements" | "auditEvents" | "argumentExamples" | "accessPolicy" | "repeatPolicy" | "latencyBudgetMs"> &
+  Partial<Pick<ToolRegistryEntry, "outputContract" | "permissionRequirements" | "auditEvents" | "argumentExamples" | "accessPolicy" | "repeatPolicy" | "latencyBudgetMs">>;
 
 const outputContractByToolClass: Record<ToolClass, string[]> = {
   resolver: ["resolved IDs", "display names", "match confidence or ambiguity notes", "result count"],
@@ -91,12 +92,26 @@ const outputContractByToolClass: Record<ToolClass, string[]> = {
   external: ["external request", "returned source data", "source URLs when available"]
 };
 
+const latencyBudgetMsByToolClass: Record<ToolClass, number> = {
+  resolver: 10_000,
+  retrieval: 15_000,
+  memory: 10_000,
+  stats: 20_000,
+  summary: 60_000,
+  image: 60_000,
+  generation: 120_000,
+  coding: 10_000,
+  ops: 15_000,
+  external: 30_000,
+};
+
 /** Materializes one complete contract from explicit taxonomy plus generic policy defaults. */
 export function defineTool<const T extends ToolDefinitionInput>(definition: T): T & ToolRegistryEntry {
   return {
     ...definition,
     accessPolicy: definition.accessPolicy ?? "default",
     repeatPolicy: definition.repeatPolicy ?? "allow",
+    latencyBudgetMs: definition.latencyBudgetMs ?? latencyBudgetMsByToolClass[definition.toolClass],
     outputContract: definition.outputContract ?? outputContractByToolClass[definition.toolClass],
     permissionRequirements: definition.permissionRequirements ?? (
       definition.mutates

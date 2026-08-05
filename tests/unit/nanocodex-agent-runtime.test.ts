@@ -376,7 +376,12 @@ describe("NanoCodex agent runtime executor", () => {
     expect(executeToolRoute).toHaveBeenCalledTimes(1);
     expect(runtime.recordEvent).toHaveBeenCalledWith(expect.objectContaining({
       eventName: "agent.tool.complete",
-      metadata: expect.objectContaining({ status: "reused", reusedCallId: "call-1" }),
+      metadata: expect.objectContaining({
+        status: "reused",
+        reusedCallId: "call-1",
+        latencyBudgetMs: 120_000,
+        latencyBudgetExceeded: false,
+      }),
     }));
   });
 

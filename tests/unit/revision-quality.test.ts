@@ -4,6 +4,7 @@ import {
   assessRevisionQuality,
   collectRevisionQualityObservation,
   findBaselineRevision,
+  revisionQualityClusterAbsenceStatuses,
   revisionQualityDetectionInputs,
   type RevisionQuality,
   type RevisionQualityPrivateFailureCluster,
@@ -154,6 +155,50 @@ describe("assessRevisionQuality", () => {
     const waitingQuality = quality({ succeeded: 0 }, { tools: [] });
     expect(revisionQualityDetectionInputs(waitingQuality, assessRevisionQuality(waitingQuality), [])).toEqual([]);
   });
+
+  it("creates a medium-severity defect for a slow successful capability without failing the release gate", () => {
+    const current = quality({ succeeded: 10 }, {
+      failureClusters: [failureCluster("tool_latency", {
+        reference: "revision-quality:tool_latency:1234567890abcdef12345678",
+        category: "tool",
+        toolName: "getRecentDiscordMessages",
+        status: "budget_exceeded",
+        latencyBudgetMs: 15_000,
+        maxDurationMs: 46_000,
+      })],
+    });
+    const assessment = assessRevisionQuality(current);
+    const detections = revisionQualityDetectionInputs(current, assessment, [{
+      ...current.failureClusters[0]!,
+      executionIds: ["execution-slow"],
+    }]);
+
+    expect(assessment.status).toBe("pass");
+    expect(detections).toEqual([expect.objectContaining({
+      classification: "defect",
+      severity: "medium",
+      owningDomain: "retrieval",
+      executionId: "execution-slow",
+      metadata: expect.objectContaining({ latencyBudgetMs: 15_000, maxDurationMs: 46_000 }),
+    })]);
+  });
+
+  it("requires enough successful calls of the same tool before proving a slow-success cluster absent", () => {
+    const insufficient = revisionQualityClusterAbsenceStatuses(quality({ succeeded: 10 }, {
+      tools: [
+        { tool: "getRecentDiscordMessages", status: "ok", count: 2 },
+        { tool: "getDiscordStats", status: "ok", count: 20 },
+      ],
+    }));
+    const sufficient = revisionQualityClusterAbsenceStatuses(quality({ succeeded: 10 }, {
+      tools: [{ tool: "getRecentDiscordMessages", status: "ok", count: 3 }],
+    }));
+
+    expect(Object.keys(insufficient)).toHaveLength(1);
+    expect(Object.keys(sufficient)).toHaveLength(1);
+    expect(Object.keys(insufficient)[0]).not.toBe(Object.keys(sufficient)[0]);
+    expect(Object.values(sufficient)).toEqual(["passed"]);
+  });
 });
 
 function quality(
@@ -184,6 +229,8 @@ function failureCluster(kind: RevisionQuality["failureClusters"][number]["kind"]
     errorStatus: null,
     toolName: null,
     status: null,
+    latencyBudgetMs: null,
+    maxDurationMs: null,
     count: 1,
     ...overrides,
   };

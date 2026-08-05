@@ -11,6 +11,7 @@ import { extractHistorySearchSyntax, noHistoryResultsMessage } from "../../src/t
 import { reportStatus } from "../../src/tools/discordOpsTools.js";
 import {
   answerFromHistory,
+  getRecentDiscordMessages,
   getDiscordStats,
 } from "../../src/tools/discordRetrievalTools.js";
 import {
@@ -318,6 +319,58 @@ describe("Discord lookup tools", () => {
 });
 
 describe("getDiscordStats", () => {
+  it("records diagnostic spans for stats scope, SQL, and audit", async () => {
+    const recordEvent = vi.fn(async (_event: Record<string, unknown>) => undefined);
+    const ctx = {
+      repo: {
+        getVisibleIndexedChannelIds: vi.fn(async () => ["channel"]),
+        discordStats: vi.fn(async () => ({
+          totalMessages: 0, totalAttachments: 0, totalReactions: 0,
+          userCount: 0, channelCount: 0, activeDays: 0, metric: "messages", groupBy: "overall",
+          rows: [], topUsers: [], topChannels: [],
+        })),
+        auditTool: vi.fn(async () => undefined),
+      },
+      agentRuntime: { recordEvent },
+      agentRuntimeSession: { sessionId: "session", traceId: "trace" },
+      agentRuntimeExecutionId: "execution",
+      guildId: "guild", channelId: "channel", userId: "user", visibleChannelIds: ["channel"],
+    } as unknown as ToolContext;
+
+    await getDiscordStats(ctx);
+
+    const names = recordEvent.mock.calls.map(([event]) => event.eventName);
+    expect(names).toEqual(expect.arrayContaining([
+      "retrieval.stats_scope.completed",
+      "retrieval.stats_sql.completed",
+      "retrieval.stats_audit.completed",
+    ]));
+  });
+
+  it("records diagnostic spans for recent-message scope, SQL, and audit", async () => {
+    const recordEvent = vi.fn(async (_event: Record<string, unknown>) => undefined);
+    const ctx = {
+      repo: {
+        getVisibleIndexedChannelIds: vi.fn(async () => ["channel"]),
+        recentMessagesFromChannels: vi.fn(async () => []),
+        auditTool: vi.fn(async () => undefined),
+      },
+      agentRuntime: { recordEvent },
+      agentRuntimeSession: { sessionId: "session", traceId: "trace" },
+      agentRuntimeExecutionId: "execution",
+      guildId: "guild", channelId: "channel", userId: "user", visibleChannelIds: ["channel"],
+    } as unknown as ToolContext;
+
+    await getRecentDiscordMessages(ctx);
+
+    const names = recordEvent.mock.calls.map(([event]) => event.eventName);
+    expect(names).toEqual(expect.arrayContaining([
+      "retrieval.recent_scope.completed",
+      "retrieval.recent_messages_sql.completed",
+      "retrieval.recent_audit.completed",
+    ]));
+  });
+
   it("supports authoritative word totals grouped by user", async () => {
     const ctx = {
       repo: {

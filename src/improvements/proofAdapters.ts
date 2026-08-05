@@ -41,10 +41,14 @@ export const PRIVATE_REPLAY_MUTATING_TOOL_NAMES = Object.freeze(
   [...MUTATING_TOOL_NAMES],
 );
 
-const REVISION_QUALITY_CLUSTER_REFERENCE = /^revision-quality:(runtime_event|tool|delivery|answer_status|quality_metric):[a-f0-9]{24}$/;
+const REVISION_QUALITY_CLUSTER_REFERENCE = /^revision-quality:(runtime_event|tool|tool_latency|delivery|answer_status|quality_metric):[a-f0-9]{24}$/;
 
 export function isRevisionQualityClusterReference(reference: string) {
   return REVISION_QUALITY_CLUSTER_REFERENCE.test(reference);
+}
+
+export function isRevisionQualityToolLatencyReference(reference: string) {
+  return /^revision-quality:tool_latency:[a-f0-9]{24}$/.test(reference);
 }
 
 /** Resolves one contract check to the only trusted producer allowed to prove it. */

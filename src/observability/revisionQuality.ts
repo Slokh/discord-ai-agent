@@ -1,12 +1,13 @@
 import { createHash } from "node:crypto";
 import type { DbPool } from "../db/pool.js";
 import type { AutomatedImprovementDetectionInput } from "../improvements/detections.js";
+import { TOOL_NAMES_BY_CAPABILITY } from "../tools/toolDefinition.js";
 
 const MEMBER_COHORT_SQL = "coalesce(nullif(execution.metadata->>'qualityCohort', ''), nullif(session.metadata->>'qualityCohort', '')) = 'member'";
 const SUCCESSFUL_TOOL_STATUSES = ["ok", "succeeded", "success", "reused"];
 const MAX_CLUSTER_EXECUTIONS = 20;
 
-export type RevisionQualityFailureKind = "runtime_event" | "tool" | "delivery" | "answer_status" | "quality_metric";
+export type RevisionQualityFailureKind = "runtime_event" | "tool" | "tool_latency" | "delivery" | "answer_status" | "quality_metric";
 
 export type RevisionQualityFailureCluster = {
   reference: string;
@@ -18,6 +19,8 @@ export type RevisionQualityFailureCluster = {
   errorStatus: number | null;
   toolName: string | null;
   status: string | null;
+  latencyBudgetMs: number | null;
+  maxDurationMs: number | null;
   count: number;
 };
 
@@ -51,6 +54,7 @@ export type RevisionHealthViolationCode =
 export type RevisionHealthPolicy = {
   minimumAnswers: number;
   minimumToolCalls: number;
+  minimumToolLatencySamples: number;
   maxAnswerFailureRate: number;
   maxToolFailureRate: number;
   maxImprovementSignalRate: number;
@@ -96,6 +100,7 @@ export type RevisionHealthAssessment = {
 export const defaultRevisionHealthPolicy: RevisionHealthPolicy = Object.freeze({
   minimumAnswers: 10,
   minimumToolCalls: 5,
+  minimumToolLatencySamples: 3,
   maxAnswerFailureRate: 0.1,
   maxToolFailureRate: 0.15,
   maxImprovementSignalRate: 0.2,
@@ -152,6 +157,9 @@ WITH error_events AS (
          coalesce(nullif(event.metadata->>'toolName', ''), 'unknown') AS tool_name,
          coalesce(nullif(event.metadata->>'status', ''), 'ok') AS status,
          nullif(event.metadata->>'errorCode', '') AS error_code,
+         event.duration_ms,
+         CASE WHEN (event.metadata->>'latencyBudgetMs') ~ '^[0-9]+$' THEN (event.metadata->>'latencyBudgetMs')::int ELSE NULL END AS latency_budget_ms,
+         coalesce(event.metadata->>'latencyBudgetExceeded', 'false') = 'true' AS latency_budget_exceeded,
          row_number() OVER (
            PARTITION BY event.execution_id,event.metadata->>'toolName'
            ORDER BY event.sequence DESC
@@ -169,6 +177,14 @@ WITH error_events AS (
   SELECT execution_id,tool_name,status,error_code
   FROM terminal_tools
   WHERE terminal_rank = 1 AND status NOT IN ('ok','succeeded','success','reused')
+), tool_latency_occurrences AS (
+  SELECT execution_id,tool_name,
+         max(latency_budget_ms) AS latency_budget_ms,
+         max(duration_ms) AS max_duration_ms
+  FROM terminal_tools
+  WHERE status IN ('ok','succeeded','success')
+    AND latency_budget_exceeded = true
+  GROUP BY execution_id,tool_name
 ), delivery_failures AS (
   SELECT obligation.execution_id,obligation.state AS status
   FROM discord_delivery_obligations obligation
@@ -195,16 +211,19 @@ WITH error_events AS (
 )
 SELECT 'runtime_event' AS kind,root.category,root.event_name,
        coalesce(root.error_kind, 'unknown_error') AS error_kind,root.error_code,root.error_status,
-       NULL::text AS tool_name,NULL::text AS status,root.execution_id
+       NULL::text AS tool_name,NULL::text AS status,NULL::int AS latency_budget_ms,NULL::int AS max_duration_ms,root.execution_id
 FROM root_errors root
 UNION ALL
-SELECT 'tool', 'tool', NULL, NULL,tool.error_code,NULL,tool.tool_name,tool.status,tool.execution_id
+SELECT 'tool', 'tool', NULL, NULL,tool.error_code,NULL,tool.tool_name,tool.status,NULL,NULL,tool.execution_id
 FROM tool_failures tool
 UNION ALL
-SELECT 'delivery', 'delivery', NULL,NULL,NULL,NULL,NULL,delivery.status,delivery.execution_id
+SELECT 'tool_latency', 'tool', NULL,NULL,NULL,NULL,latency.tool_name,'budget_exceeded',latency.latency_budget_ms,latency.max_duration_ms,latency.execution_id
+FROM tool_latency_occurrences latency
+UNION ALL
+SELECT 'delivery', 'delivery', NULL,NULL,NULL,NULL,NULL,delivery.status,NULL,NULL,delivery.execution_id
 FROM delivery_failures delivery
 UNION ALL
-SELECT 'answer_status', 'system',NULL,NULL,NULL,NULL,NULL,answer.status,answer.execution_id
+SELECT 'answer_status', 'system',NULL,NULL,NULL,NULL,NULL,answer.status,NULL,NULL,answer.execution_id
 FROM answer_failures answer
 ORDER BY kind,event_name,tool_name,status,execution_id`;
 
@@ -247,6 +266,9 @@ export async function collectRevisionQualityObservation(
          SELECT event.execution_id,
                 coalesce(event.metadata->>'toolName', 'unknown') AS tool,
                 coalesce(event.metadata->>'status', 'ok') AS status,
+                event.duration_ms,
+                CASE WHEN (event.metadata->>'latencyBudgetMs') ~ '^[0-9]+$' THEN (event.metadata->>'latencyBudgetMs')::int ELSE NULL END AS latency_budget_ms,
+                coalesce(event.metadata->>'latencyBudgetExceeded', 'false') = 'true' AS latency_budget_exceeded,
                 row_number() OVER (PARTITION BY event.execution_id, event.metadata->>'toolName' ORDER BY event.sequence DESC) AS terminal_rank,
                 count(*) OVER (PARTITION BY event.execution_id, event.metadata->>'toolName') AS attempt_count,
                 count(*) FILTER (WHERE event.metadata->>'errorCode' = 'invalid_tool_arguments')
@@ -264,7 +286,14 @@ export async function collectRevisionQualityObservation(
        SELECT tool, status, count(*)::int AS count,
               sum(attempt_count)::int AS attempt_count,
               sum(greatest(attempt_count - 1, 0))::int AS retry_count,
-              sum(CASE WHEN status IN ('ok', 'succeeded', 'success', 'reused') THEN validation_retry_count ELSE 0 END)::int AS recovered_validation_retry_count
+              sum(CASE WHEN status IN ('ok', 'succeeded', 'success', 'reused') THEN validation_retry_count ELSE 0 END)::int AS recovered_validation_retry_count,
+              round(coalesce(percentile_cont(0.5) WITHIN GROUP (ORDER BY duration_ms)
+                FILTER (WHERE status IN ('ok','succeeded','success')), 0))::int AS p50_ms,
+              round(coalesce(percentile_cont(0.95) WITHIN GROUP (ORDER BY duration_ms)
+                FILTER (WHERE status IN ('ok','succeeded','success')), 0))::int AS p95_ms,
+              coalesce(max(duration_ms) FILTER (WHERE status IN ('ok','succeeded','success')), 0)::int AS max_ms,
+              max(latency_budget_ms) FILTER (WHERE status IN ('ok','succeeded','success')) AS latency_budget_ms,
+              count(*) FILTER (WHERE status IN ('ok','succeeded','success') AND latency_budget_exceeded = true)::int AS slow_success_count
        FROM tool_attempts
        WHERE terminal_rank = 1
        GROUP BY tool, status
@@ -430,16 +459,20 @@ export function revisionQualityDetectionInputs(
   assessment: RevisionHealthAssessment,
   failureClusters: RevisionQualityPrivateFailureCluster[],
 ): AutomatedImprovementDetectionInput[] {
-  if (assessment.status !== "fail") return [];
   const selected = new Map<string, RevisionQualityPrivateFailureCluster>();
-  for (const violationCode of assessment.violationCodes) {
-    const matches = failureClusters.filter((cluster) => clusterMatchesViolation(cluster, violationCode));
-    if (matches.length > 0) {
-      for (const cluster of matches) selected.set(cluster.reference, cluster);
-      continue;
+  for (const cluster of failureClusters) {
+    if (cluster.kind === "tool_latency") selected.set(cluster.reference, cluster);
+  }
+  if (assessment.status === "fail") {
+    for (const violationCode of assessment.violationCodes) {
+      const matches = failureClusters.filter((cluster) => clusterMatchesViolation(cluster, violationCode));
+      if (matches.length > 0) {
+        for (const cluster of matches) selected.set(cluster.reference, cluster);
+        continue;
+      }
+      const metric = metricFailureCluster(violationCode);
+      selected.set(metric.reference, metric);
     }
-    const metric = metricFailureCluster(violationCode);
-    selected.set(metric.reference, metric);
   }
   return [...selected.values()].flatMap((cluster) => {
     const executionIds = cluster.executionIds.slice(0, MAX_CLUSTER_EXECUTIONS);
@@ -452,8 +485,8 @@ export function revisionQualityDetectionInputs(
       executionId,
       appRevision: quality.revision,
       scope: "deployment",
-      classification: "external_incident",
-      severity: "high",
+      classification: cluster.kind === "tool_latency" ? "defect" : "external_incident",
+      severity: cluster.kind === "tool_latency" ? "medium" : "high",
       owningDomain: failureDomain(cluster),
       metadata: {
         assessmentStatus: assessment.status,
@@ -467,11 +500,47 @@ export function revisionQualityDetectionInputs(
         failureErrorStatus: cluster.errorStatus,
         failureToolName: cluster.toolName,
         failureStatus: cluster.status,
+        latencyBudgetMs: cluster.latencyBudgetMs,
+        maxDurationMs: cluster.maxDurationMs,
         occurrenceCount: cluster.count,
         sampledExecutionCount: executionIds.length,
       },
     }));
   });
+}
+
+/** Returns exact slow-success references that have enough healthy calls of the same capability to prove absence. */
+export function revisionQualityClusterAbsenceStatuses(
+  quality: RevisionQuality,
+  policy: RevisionHealthPolicy = defaultRevisionHealthPolicy,
+) {
+  const successfulCallsByTool = new Map<string, number>();
+  for (const row of quality.tools) {
+    const status = String(row.status);
+    if (!SUCCESSFUL_TOOL_STATUSES.includes(status) || status === "reused") continue;
+    const toolName = String(row.tool ?? "unknown");
+    successfulCallsByTool.set(toolName, (successfulCallsByTool.get(toolName) ?? 0) + numeric(row.count));
+  }
+  const statuses: Record<string, "passed"> = {};
+  for (const [toolName, count] of successfulCallsByTool) {
+    if (count < policy.minimumToolLatencySamples) continue;
+    const reference = clusterFromDimensions({
+      kind: "tool_latency",
+      category: "tool",
+      eventName: null,
+      errorKind: null,
+      errorCode: null,
+      errorStatus: null,
+      toolName,
+      status: "budget_exceeded",
+      latencyBudgetMs: null,
+      maxDurationMs: null,
+      executionIds: [],
+      count: 1,
+    }).reference;
+    statuses[reference] = "passed";
+  }
+  return statuses;
 }
 
 function qualityMetrics(quality: RevisionQuality): RevisionHealthAssessment["metrics"] {
@@ -523,6 +592,8 @@ function metricFailureCluster(code: RevisionHealthViolationCode): RevisionQualit
     errorStatus: null,
     toolName: null,
     status: code,
+    latencyBudgetMs: null,
+    maxDurationMs: null,
     executionIds: [],
     count: 1,
   });
@@ -539,6 +610,8 @@ function groupFailureOccurrences(occurrences: FailureOccurrence[]) {
       continue;
     }
     existing.count += 1;
+    existing.latencyBudgetMs = existing.latencyBudgetMs ?? candidate.latencyBudgetMs;
+    existing.maxDurationMs = Math.max(existing.maxDurationMs ?? 0, candidate.maxDurationMs ?? 0) || null;
     if (!existing.executionIds.includes(executionId)) existing.executionIds.push(executionId);
   }
   return [...grouped.values()]
@@ -566,6 +639,10 @@ function failureSummary(cluster: RevisionQualityFailureCluster) {
     return `Production member execution emitted ${cluster.eventName ?? "an unknown runtime error"}${kind}.`;
   }
   if (cluster.kind === "tool") return `Production tool ${cluster.toolName ?? "unknown"} ended ${cluster.status ?? "in error"}.`;
+  if (cluster.kind === "tool_latency") {
+    const budget = cluster.latencyBudgetMs == null ? "configured latency budget" : `${cluster.latencyBudgetMs}ms latency budget`;
+    return `Production tool ${cluster.toolName ?? "unknown"} exceeded its ${budget} while still succeeding.`;
+  }
   if (cluster.kind === "delivery") return `Production Discord delivery remained ${cluster.status ?? "unhealthy"}.`;
   if (cluster.kind === "answer_status") return `Production member execution ended ${cluster.status ?? "unsuccessfully"}.`;
   return `Production quality metric ${cluster.status ?? "unknown"} violated policy.`;
@@ -574,6 +651,12 @@ function failureSummary(cluster: RevisionQualityFailureCluster) {
 function failureDomain(cluster: RevisionQualityFailureCluster) {
   if (cluster.kind === "delivery") return "discord-delivery";
   if (cluster.kind === "tool") return "tools";
+  if (cluster.kind === "tool_latency") {
+    if (TOOL_NAMES_BY_CAPABILITY.discordContext.includes(cluster.toolName as never)) return "retrieval";
+    if (TOOL_NAMES_BY_CAPABILITY.images.includes(cluster.toolName as never)) return "images";
+    if (TOOL_NAMES_BY_CAPABILITY.externalResearch.includes(cluster.toolName as never)) return "external-research";
+    return "tools";
+  }
   if (cluster.kind === "answer_status") return "runtime";
   if (cluster.category === "model") return "models";
   if (cluster.category === "retrieval") return "retrieval";
@@ -593,6 +676,8 @@ function rowToFailureOccurrence(row: Record<string, unknown>): FailureOccurrence
     errorStatus: row.error_status == null ? null : numeric(row.error_status),
     toolName: nullableString(row.tool_name),
     status: nullableString(row.status),
+    latencyBudgetMs: row.latency_budget_ms == null ? null : numeric(row.latency_budget_ms),
+    maxDurationMs: row.max_duration_ms == null ? null : numeric(row.max_duration_ms),
     executionId: String(row.execution_id),
   };
 }

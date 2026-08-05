@@ -12,6 +12,7 @@ import type {
   ImprovementSignalSource,
 } from "../db/types.js";
 import { assertActionableContract } from "./policy.js";
+import { isRevisionQualityClusterReference } from "./proofAdapters.js";
 
 export type ImprovementTriageVerdict = "confirmed" | "not_reproduced" | "insufficient_evidence";
 
@@ -346,7 +347,7 @@ function contractForFailures(
       checks.push({ kind: "test", reference });
     } else if (signal.source === "ci_detection" && reference === "release-db-verify") {
       checks.push({ kind: "database_invariant", reference });
-    } else if (signal.source === "runtime_detection" && reference === "revision-quality-gate") {
+    } else if (signal.source === "runtime_detection" && (reference === "revision-quality-gate" || isRevisionQualityClusterReference(reference))) {
       checks.push({ kind: "deployment_canary", reference });
     } else if (signal.source === "deployment_detection" && knownPostDeployGate(reference)) {
       checks.push({ kind: "deployment_canary", reference });

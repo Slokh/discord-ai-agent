@@ -70,7 +70,7 @@ describe("runObservedModelCall", () => {
     expect(ctx.agentRuntime?.recordEvent).toHaveBeenCalledWith(expect.objectContaining({
       eventName: "agent.model.call.failed",
       level: "error",
-      metadata: expect.objectContaining({ error: "provider down" }),
+      metadata: expect.objectContaining({ errorKind: "error", error: "provider down" }),
     }));
   });
 

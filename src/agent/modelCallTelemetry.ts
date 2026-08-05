@@ -4,6 +4,7 @@ import type { ToolContext } from "../tools/types.js";
 import { durationMs, logger } from "../util/logger.js";
 import { recordAgentEvent } from "./runtimeTranscript.js";
 import { runtimeVersionMetadata } from "../observability/runtimeVersions.js";
+import { runtimeErrorDimensions } from "../observability/errorDimensions.js";
 import { promptMessageMetadata } from "./promptBuilder.js";
 
 type ChatInput = Parameters<OpenRouterClient["chat"]>[0];
@@ -170,7 +171,12 @@ export async function runObservedModelCall(
   } catch (error) {
     const providerDurationMs = durationMs(startedAt);
     const promptArtifactId = await promptArtifact;
-    const failed = { ...common, promptArtifactId, error: error instanceof Error ? error.message : String(error) };
+    const failed = {
+      ...common,
+      promptArtifactId,
+      ...runtimeErrorDimensions(error),
+      error: error instanceof Error ? error.message : String(error),
+    };
     await recordAgentEvent(ctx, {
       eventName: "agent.model.call.failed",
       level: "error",

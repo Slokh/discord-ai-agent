@@ -3,7 +3,7 @@ import type { PoolClient } from "pg";
 import type { DbPool } from "./pool.js";
 import type { ImprovementCase, ImprovementContractCheck, ImprovementPrivacy } from "./types.js";
 import type { ImprovementReplayCheckResult } from "../observability/improvementContractReplay.js";
-import { improvementCheckHash, improvementProofAdapterForCheck } from "../improvements/proofAdapters.js";
+import { improvementCheckHash, improvementProofAdapterForCheck, isRevisionQualityClusterReference } from "../improvements/proofAdapters.js";
 import {
   buildImprovementVerificationDossier,
   improvementVerificationApplicationKey,
@@ -91,33 +91,61 @@ export async function recordImprovementRevisionQualityResult(pool: DbPool, input
   revision: string;
   status: ImprovementVerificationStatus;
   runKey: string;
+  presentFailureReferences?: string[];
+  clusterAbsenceStatus?: Extract<ImprovementVerificationStatus, "passed" | "inconclusive">;
 }) {
   const revision = bounded(input.revision, "revision", 200);
-  const deployment = await pool.query(
-    "SELECT deployment_id FROM deployment_verifications WHERE revision = $1 ORDER BY verified_at DESC LIMIT 1",
-    [revision],
-  );
-  if (!deployment.rows[0]) return { recorded: 0, deploymentId: null };
-  const deploymentId = String(deployment.rows[0].deployment_id);
-  const result = await pool.query(
-    `INSERT INTO improvement_verification_proofs(
-       proof_id,case_id,contract_id,contract_version,revision,deployment_id,source,status,
-       reference_type,reference_id,run_key,summary,metadata
-     )
-     SELECT 'ivp-' || gen_random_uuid(),case_row.case_id,contract.contract_id,contract.version,$1,$2,
-            'revision_quality',$3,'revision_quality','revision-quality-gate',$4,$5,'{}'::jsonb
-     FROM improvement_cases case_row
-     JOIN improvement_contracts contract ON contract.case_id = case_row.case_id AND contract.active = true
-     WHERE case_row.status = 'verifying'
-       AND (
-         contract.checks @> '[{"kind":"deployment_canary","reference":"revision-quality-gate"}]'::jsonb
-         OR contract.checks @> '[{"kind":"delivery_state","state":"delivered"}]'::jsonb
-       )
-     ON CONFLICT(source,contract_id,deployment_id,reference_id,run_key) DO NOTHING
-     RETURNING proof_id`,
-    [revision, deploymentId, input.status, bounded(input.runKey, "runKey", 200), qualityProofSummary(input.status)],
-  );
-  return { recorded: result.rowCount ?? 0, deploymentId };
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const deployment = await client.query(
+      "SELECT deployment_id FROM deployment_verifications WHERE revision = $1 ORDER BY verified_at DESC LIMIT 1",
+      [revision],
+    );
+    if (!deployment.rows[0]) {
+      await client.query("COMMIT");
+      return { recorded: 0, deploymentId: null };
+    }
+    const deploymentId = String(deployment.rows[0].deployment_id);
+    const candidates = await client.query(
+      `SELECT case_row.case_id,contract.contract_id,contract.version,contract.checks
+       FROM improvement_cases case_row
+       JOIN improvement_contracts contract ON contract.case_id = case_row.case_id AND contract.active = true
+       WHERE case_row.status = 'verifying'`,
+    );
+    const present = new Set((input.presentFailureReferences ?? []).map((reference) => bounded(reference, "failureReference", 200)));
+    const runKey = bounded(input.runKey, "runKey", 200);
+    let recorded = 0;
+    for (const row of candidates.rows) {
+      const references = revisionQualityReferences((row.checks ?? []) as ImprovementContractCheck[]);
+      for (const reference of references) {
+        const status = reference === "revision-quality-gate"
+          ? input.status
+          : present.has(reference)
+            ? "failed"
+            : input.clusterAbsenceStatus ?? "inconclusive";
+        const result = await client.query(
+          `INSERT INTO improvement_verification_proofs(
+             proof_id,case_id,contract_id,contract_version,revision,deployment_id,source,status,
+             reference_type,reference_id,run_key,summary,metadata
+           ) VALUES ('ivp-' || gen_random_uuid(),$1,$2,$3,$4,$5,'revision_quality',$6,
+                     'revision_quality',$7,$8,$9,'{}'::jsonb)
+           ON CONFLICT(source,contract_id,deployment_id,reference_id,run_key) DO NOTHING
+           RETURNING proof_id`,
+          [String(row.case_id), String(row.contract_id), Number(row.version), revision, deploymentId, status,
+            reference, runKey, qualityProofSummary(status, reference)],
+        );
+        recorded += result.rowCount ?? 0;
+      }
+    }
+    await client.query("COMMIT");
+    return { recorded, deploymentId };
+  } catch (error) {
+    await client.query("ROLLBACK").catch(() => undefined);
+    throw error;
+  } finally {
+    client.release();
+  }
 }
 
 export async function inspectImprovementVerification(pool: DbPool, input: {
@@ -387,7 +415,12 @@ function proofSummary(status: ImprovementVerificationStatus) {
   return "The case-specific private contract replay did not produce executable proof.";
 }
 
-function qualityProofSummary(status: ImprovementVerificationStatus) {
+function qualityProofSummary(status: ImprovementVerificationStatus, reference = "revision-quality-gate") {
+  if (reference !== "revision-quality-gate") {
+    if (status === "passed") return "The deployed revision had enough traffic and did not reproduce this failure cluster.";
+    if (status === "failed") return "Production observation reproduced this failure cluster on the deployed revision.";
+    return "The deployed revision does not yet have enough member traffic to disprove this failure cluster.";
+  }
   if (status === "passed") return "The deployed revision passed its traffic-sampled production quality gate.";
   if (status === "failed") return "The deployed revision failed its traffic-sampled production quality gate.";
   return "The deployed revision does not yet have enough member traffic for the production quality gate.";
@@ -395,7 +428,21 @@ function qualityProofSummary(status: ImprovementVerificationStatus) {
 
 function uniqueProofSources(proofs: ImprovementVerificationProof[]) {
   const seen = new Set<string>();
-  return proofs.filter((proof) => !seen.has(proof.source) && Boolean(seen.add(proof.source)));
+  return proofs.filter((proof) => {
+    const key = `${proof.source}:${proof.referenceId}`;
+    return !seen.has(key) && Boolean(seen.add(key));
+  });
+}
+
+function revisionQualityReferences(checks: ImprovementContractCheck[]) {
+  const references = new Set<string>();
+  for (const check of checks) {
+    if (check.kind === "delivery_state" && check.state === "delivered") references.add("revision-quality-gate");
+    if (check.kind === "deployment_canary" && (check.reference === "revision-quality-gate" || isRevisionQualityClusterReference(check.reference))) {
+      references.add(check.reference);
+    }
+  }
+  return [...references];
 }
 
 function receiptSummary(status: ImprovementVerificationStatus, contractVersion: number, revision: string) {

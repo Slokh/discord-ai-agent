@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { IsolatedTestDatabase } from "./testDatabase.js";
 import { createIsolatedTestDatabase } from "./testDatabase.js";
-import { collectRevisionQuality, findBaselineRevision } from "../../src/observability/revisionQuality.js";
+import { assessRevisionQuality, collectRevisionQuality, findBaselineRevision } from "../../src/observability/revisionQuality.js";
 import { AgentRuntimeRepository } from "../../src/db/agentRuntimeRepository.js";
 
 const runDbTests = process.env.DISCORD_AI_AGENT_DB_TESTS === "true";
@@ -137,5 +137,50 @@ describe.skipIf(!runDbTests)("revision quality database contract", () => {
     await expect(collectRevisionQuality(database.pool, "retry-revision", 48)).resolves.toMatchObject({
       tools: [{ tool: "web__run", status: "ok", count: 1, attempt_count: 4, retry_count: 3, recovered_validation_retry_count: 3 }],
     });
+  });
+
+  it("counts one root failure when an execution emits several wrapper errors", async () => {
+    const runtime = new AgentRuntimeRepository(database.pool);
+    await runtime.upsertSession({
+      sessionId: "root-failure-session",
+      threadKey: "root-failure-thread",
+      request: "test",
+      metadata: { appRevision: "root-failure-revision", qualityCohort: "member" },
+    });
+    await runtime.createExecution({
+      executionId: "root-failure-execution",
+      sessionId: "root-failure-session",
+      harness: "nanocodex",
+      status: "failed",
+      metadata: { appRevision: "root-failure-revision", qualityCohort: "member" },
+    });
+    for (const event of [
+      { eventName: "retrieval.vector_sql.failed", metadata: { errorKind: "database_timeout", errorStatus: 504 } },
+      { eventName: "agent.nanocodex.runtime_failed", metadata: { errorKind: "providertimeout" } },
+      { eventName: "agent.execution.failed", metadata: {} },
+      { eventName: "agent.span", metadata: {} },
+    ]) {
+      await runtime.recordEvent({
+        sessionId: "root-failure-session",
+        executionId: "root-failure-execution",
+        kind: "error",
+        level: "error",
+        eventName: event.eventName,
+        metadata: event.metadata,
+      });
+    }
+
+    const quality = await collectRevisionQuality(database.pool, "root-failure-revision", 48);
+    expect(quality.signals).toEqual([{ level: "error", count: 4 }]);
+    expect(quality.failureClusters).toEqual([expect.objectContaining({
+      kind: "runtime_event",
+      category: "retrieval",
+      eventName: "retrieval.vector_sql.failed",
+      errorKind: "database_timeout",
+      errorStatus: 504,
+      count: 1,
+    })]);
+    expect(assessRevisionQuality(quality).metrics.errorSignals).toBe(1);
+    expect(JSON.stringify(quality)).not.toContain("root-failure-execution");
   });
 });

@@ -3,6 +3,7 @@ import type { DiscordAiAgentRepository, SearchResult } from "../db/repositories.
 import type { OpenRouterClient } from "../models/openrouter.js";
 import { durationMs, logger } from "../util/logger.js";
 import { normalizeMessageContent } from "./normalize.js";
+import { runtimeErrorDimensions } from "../observability/errorDimensions.js";
 
 export type RetrievalMatchSource = "keyword" | "semantic" | "recent_scope";
 
@@ -233,7 +234,7 @@ async function observeRetrievalStep<T>(
     return result;
   } catch (error) {
     const completedAt = new Date();
-    await input.observeSpan?.({ spanId, parentSpanId: input.parentSpanId, name, startedAt, completedAt, durationMs: completedAt.getTime() - startedAt.getTime(), status: "failed", metadata: { ...metadata, error: error instanceof Error ? error.message : String(error) } });
+    await input.observeSpan?.({ spanId, parentSpanId: input.parentSpanId, name, startedAt, completedAt, durationMs: completedAt.getTime() - startedAt.getTime(), status: "failed", metadata: { ...metadata, ...runtimeErrorDimensions(error), error: error instanceof Error ? error.message : String(error) } });
     throw error;
   }
 }

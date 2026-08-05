@@ -2,10 +2,11 @@ import { describe, expect, it, vi } from "vitest";
 import type { DbPool } from "../../src/db/pool.js";
 import {
   assessRevisionQuality,
-  collectRevisionQuality,
+  collectRevisionQualityObservation,
   findBaselineRevision,
-  revisionQualityDetectionInput,
+  revisionQualityDetectionInputs,
   type RevisionQuality,
+  type RevisionQualityPrivateFailureCluster,
 } from "../../src/observability/revisionQuality.js";
 
 describe("collectRevisionQuality", () => {
@@ -15,10 +16,16 @@ describe("collectRevisionQuality", () => {
       .mockResolvedValueOnce({ rows: [{ tool: "web__run", status: "ok", count: 1, attempt_count: 4, retry_count: 3, recovered_validation_retry_count: 3 }] })
       .mockResolvedValueOnce({ rows: [{ level: "warn", count: 1 }] })
       .mockResolvedValueOnce({ rows: [{ state: "delivered", count: 2 }] })
-      .mockResolvedValueOnce({ rows: [] });
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [{
+        kind: "runtime_event", category: "model", event_name: "agent.model.call.failed",
+        error_kind: "openrouter_timeout_error", error_code: null, error_status: null,
+        tool_name: null, status: null, execution_id: "private-execution-a",
+      }] });
     const pool = { query } as unknown as DbPool;
 
-    const result = await collectRevisionQuality(pool, "revision-1", 48);
+    const observation = await collectRevisionQualityObservation(pool, "revision-1", 48);
+    const result = observation.quality;
 
     expect(result).toMatchObject({
       revision: "revision-1",
@@ -28,13 +35,23 @@ describe("collectRevisionQuality", () => {
       signals: [{ level: "warn", count: 1 }],
       deliveries: [{ state: "delivered", count: 2 }],
       improvements: [],
+      failureClusters: [expect.objectContaining({
+        kind: "runtime_event",
+        category: "model",
+        eventName: "agent.model.call.failed",
+        errorKind: "openrouter_timeout_error",
+        count: 1,
+      })],
     });
+    expect(JSON.stringify(result)).not.toContain("private-execution-a");
+    expect(observation.failureClusters[0]?.executionIds).toEqual(["private-execution-a"]);
     expect(result.generatedAt).toEqual(expect.any(String));
-    expect(query).toHaveBeenCalledTimes(5);
+    expect(query).toHaveBeenCalledTimes(6);
     expect(query.mock.calls[3]?.[0]).toContain("obligation.state");
     expect(query.mock.calls[3]?.[0]).toContain("interval '5 minutes'");
     expect(query.mock.calls.slice(0, 4).every((call) => call[0].includes("qualityCohort"))).toBe(true);
     expect(query.mock.calls.every((call) => call[1]?.[0] === 48 && call[1]?.[1] === "revision-1")).toBe(true);
+    expect(query.mock.calls[4]?.[0]).toContain("signal.source IN");
   });
 
   it("finds the most recently active prior revision", async () => {
@@ -61,6 +78,7 @@ describe("assessRevisionQuality", () => {
     const assessment = assessRevisionQuality(quality({ succeeded: 2 }, {
       signals: [{ level: "error", count: 1 }],
       deliveries: [{ state: "pending", count: 1 }, { state: "abandoned", count: 1 }],
+      failureClusters: [failureCluster("runtime_event", { count: 1 })],
     }));
     expect(assessment.status).toBe("fail");
     expect(assessment.violations).toEqual(expect.arrayContaining([
@@ -98,30 +116,49 @@ describe("assessRevisionQuality", () => {
     expect(assessment.violations).not.toEqual(expect.arrayContaining([expect.stringContaining("tool failure rate")]));
   });
 
-  it("creates a safe runtime detection only for a failed quality assessment", () => {
+  it("creates exact execution-linked detections with root-cause identity", () => {
     const failedQuality = quality({ succeeded: 2 }, {
       signals: [{ level: "error", count: 1 }],
+      failureClusters: [failureCluster("runtime_event", {
+        reference: "revision-quality:runtime_event:timeout",
+        category: "model",
+        eventName: "agent.model.call.failed",
+        errorKind: "openrouter_timeout_error",
+        count: 2,
+      })],
     });
     const failed = assessRevisionQuality(failedQuality);
-    expect(revisionQualityDetectionInput(failedQuality, failed)).toMatchObject({
-      source: "runtime_detection",
-      sourceId: "revision-quality:test-revision",
-      stableCode: "revision-quality-gate",
-      appRevision: "test-revision",
-      metadata: {
-        assessmentStatus: "fail",
-        violations: ["1 error signals exceed 0"],
-      },
-    });
+    const privateClusters: RevisionQualityPrivateFailureCluster[] = [{
+      ...failedQuality.failureClusters[0]!,
+      executionIds: ["execution-a", "execution-b"],
+    }];
+    const detections = revisionQualityDetectionInputs(failedQuality, failed, privateClusters);
+    expect(detections).toHaveLength(2);
+    expect(detections).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        source: "runtime_detection",
+        stableCode: "revision-quality:runtime_event:timeout",
+        executionId: "execution-a",
+        appRevision: "test-revision",
+        owningDomain: "models",
+        metadata: expect.objectContaining({
+          assessmentStatus: "fail",
+          failureEventName: "agent.model.call.failed",
+          failureErrorKind: "openrouter_timeout_error",
+          occurrenceCount: 2,
+        }),
+      }),
+    ]));
+    expect(new Set(detections.map((detection) => detection.sourceId)).size).toBe(2);
 
     const waitingQuality = quality({ succeeded: 0 }, { tools: [] });
-    expect(revisionQualityDetectionInput(waitingQuality, assessRevisionQuality(waitingQuality))).toBeNull();
+    expect(revisionQualityDetectionInputs(waitingQuality, assessRevisionQuality(waitingQuality), [])).toEqual([]);
   });
 });
 
 function quality(
   statuses: Record<string, number>,
-  overrides: { p95Ms?: number; tools?: Record<string, unknown>[]; signals?: Record<string, unknown>[]; deliveries?: Record<string, unknown>[]; improvements?: Record<string, unknown>[] } = {},
+  overrides: { p95Ms?: number; tools?: Record<string, unknown>[]; signals?: Record<string, unknown>[]; deliveries?: Record<string, unknown>[]; improvements?: Record<string, unknown>[]; failureClusters?: RevisionQuality["failureClusters"] } = {},
 ): RevisionQuality {
   return {
     revision: "test-revision",
@@ -132,5 +169,22 @@ function quality(
     signals: overrides.signals ?? [],
     deliveries: overrides.deliveries ?? [{ state: "delivered", count: 1 }],
     improvements: overrides.improvements ?? [],
+    failureClusters: overrides.failureClusters ?? [],
+  };
+}
+
+function failureCluster(kind: RevisionQuality["failureClusters"][number]["kind"], overrides: Partial<RevisionQuality["failureClusters"][number]> = {}) {
+  return {
+    reference: `revision-quality:${kind}:test`,
+    kind,
+    category: null,
+    eventName: null,
+    errorKind: null,
+    errorCode: null,
+    errorStatus: null,
+    toolName: null,
+    status: null,
+    count: 1,
+    ...overrides,
   };
 }

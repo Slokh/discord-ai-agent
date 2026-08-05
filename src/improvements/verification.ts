@@ -191,7 +191,8 @@ function evaluateCheck(input: {
     return result(base, conclusion.status, "private_eval", replaySummary(conclusion.status), proof.referenceType, proof.referenceId);
   }
   if (adapter.id === "revision_quality") {
-    const proof = input.proofs.find((candidate) => candidate.source === "revision_quality") ?? null;
+    const expectedReference = input.check.kind === "deployment_canary" ? input.check.reference : "revision-quality-gate";
+    const proof = input.proofs.find((candidate) => candidate.source === "revision_quality" && candidate.referenceId === expectedReference) ?? null;
     if (!proof) return result(base, "inconclusive", "unavailable", "Production observation has not produced this check's traffic-sampled proof.");
     return result(base, proof.status, "revision_quality", proof.summary, proof.referenceType, proof.referenceId);
   }

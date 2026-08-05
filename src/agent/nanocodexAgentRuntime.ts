@@ -7,6 +7,7 @@ import { prepareAgentCapabilities } from "../capabilities/index.js";
 import { PRIMARY_AGENT_REASONING } from "./modelPolicy.js";
 import { loadSkills, renderSkillsForPrompt } from "../skills/loader.js";
 import { durationMs, previewText } from "../util/logger.js";
+import { runtimeErrorDimensions } from "../observability/errorDimensions.js";
 import type { AgentCapabilityRuntime } from "./capabilityRuntime.js";
 import { isAgentRuntimeTimeoutError, withAgentRuntimeTimeouts } from "./runtimeTimeouts.js";
 import { loadPromptOverlayText } from "./promptOverlay.js";
@@ -311,6 +312,7 @@ async function runRetainedNanoCodexTurn(input: {
         toolCalls: toolSequence,
         successfulMutationObserved: successfulMutatingToolResults.length > 0,
         successfulMutationCount: successfulMutatingToolResults.length,
+        ...runtimeErrorDimensions(error),
         error: error instanceof Error ? previewText(error.message, 300) : previewText(String(error), 300),
       },
     });

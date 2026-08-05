@@ -73,32 +73,33 @@ describe("web__run", () => {
     }));
   });
 
-  it("offers only the hosted capability requested by the operation", async () => {
-    const chat = vi.fn(async () => ({
-      content: "The current UTC date is August 3, 2026.",
-      model: "test/utility",
-      finishReason: "stop",
-      serverToolUse: { datetime_requests: 1 },
-      toolCalls: [],
-      raw: {},
-    }));
+  it("answers current time deterministically without a nested provider call", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-03T04:05:06.000Z"));
+    const chat = vi.fn();
 
-    const result = await externalResearchToolHandlers.web__run!(
-      context(chat),
-      {
-        id: "call-1",
-        name: "web__run",
-        arguments: { operations: [{ kind: "time", utcOffset: "+00:00" }] },
-        argumentsText: "{}",
-      },
-      "What is the date?",
-    );
+    try {
+      const result = await externalResearchToolHandlers.web__run!(
+        context(chat),
+        {
+          id: "call-1",
+          name: "web__run",
+          arguments: { operations: [
+            { kind: "time", utcOffset: "+00:00" },
+            { kind: "time", utcOffset: "-04:30" },
+          ] },
+          argumentsText: "{}",
+        },
+        "What is the date?",
+      );
 
-    expect(result).toEqual({ content: "The current UTC date is August 3, 2026." });
-    expect(chat).toHaveBeenCalledWith(expect.objectContaining({
-      tools: [{ type: "openrouter:datetime" }],
-      toolChoice: "required",
-    }));
+      expect(result).toEqual({
+        content: "Current time at UTC+00:00: 2026-08-03 04:05:06 UTC+00:00\nCurrent time at UTC-04:30: 2026-08-02 23:35:06 UTC-04:30",
+      });
+      expect(chat).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("does not turn an ungrounded provider answer into fresh evidence", async () => {
@@ -107,7 +108,7 @@ describe("web__run", () => {
       {
         id: "call-1",
         name: "web__run",
-        arguments: { operations: [{ kind: "time", utcOffset: "+00:00" }] },
+        arguments: { operations: [{ kind: "search", query: "current UTC date" }] },
         argumentsText: "{}",
       },
       "What is the date?",
@@ -128,7 +129,7 @@ describe("web__run", () => {
       {
         id: "call-1",
         name: "web__run",
-        arguments: { operations: [{ kind: "time", utcOffset: "+00:00" }] },
+        arguments: { operations: [{ kind: "search", query: "current UTC date" }] },
         argumentsText: "{}",
       },
       "What is the date?",
@@ -145,7 +146,7 @@ describe("web__run", () => {
       {
         id: "call-1",
         name: "web__run",
-        arguments: { operations: [{ kind: "time", utcOffset: "+00:00" }] },
+        arguments: { operations: [{ kind: "search", query: "current UTC date" }] },
         argumentsText: "{}",
       },
       "What is the date?",

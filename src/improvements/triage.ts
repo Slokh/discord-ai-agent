@@ -341,6 +341,10 @@ function contractForFailures(
     const reference = detectionCode(signal);
     if (signal.source === "eval_detection" && reference === "private-regression-suite") {
       checks.push({ kind: "eval", reference });
+    } else if (signal.source === "ci_detection" && reference === "release-verify") {
+      checks.push({ kind: "test", reference });
+    } else if (signal.source === "ci_detection" && reference === "release-db-verify") {
+      checks.push({ kind: "database_invariant", reference });
     } else if (signal.source === "runtime_detection" && reference === "revision-quality-gate") {
       checks.push({ kind: "deployment_canary", reference });
     } else if (signal.source === "deployment_detection" && knownPostDeployGate(reference)) {

@@ -145,6 +145,19 @@ describe("improvement triage", () => {
     expect(dossier).toMatchObject({ verdict: "confirmed", proposedContract: null, nextAction: "collect_evidence" });
     expect(() => improvementTriageApplication(dossier)).toThrow(/expected behavior/);
   });
+
+  it.each([
+    ["release-verify", { kind: "test", reference: "release-verify" }],
+    ["release-db-verify", { kind: "database_invariant", reference: "release-db-verify" }],
+  ])("maps the known CI detector %s to its registered proof adapter", (detectionCode, check) => {
+    const dossier = buildImprovementTriageDossier(record(signal({
+      source: "ci_detection",
+      metadata: { detectionCode },
+    })), []);
+
+    expect(dossier.proposedContract?.checks).toEqual([check]);
+    expect(dossier.nextAction).toBe("apply");
+  });
 });
 
 function record(input: ImprovementSignal) {

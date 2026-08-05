@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { startAgentRuntimeReconciler } from "../agent/runtimeReconciler.js";
 import type { AppConfig } from "../config/env.js";
 import type { AgentRuntimeRepository } from "../db/agentRuntimeRepository.js";
+import type { DeliveryObligationsRepository } from "../db/deliveryObligationsRepository.js";
 import type { AgentTaskJob, AgentTaskStartResult } from "../execution/types.js";
 import type { ExecutionBackend, ExecutionContext } from "../execution/backend.js";
 import type { DiscordAiAgentRepository } from "../db/repositories.js";
@@ -17,6 +18,7 @@ import {
 } from "../observability/backgroundJobRuntime.js";
 import { startDataRetentionMaintenance } from "../observability/dataRetention.js";
 import type { OpenRouterClient } from "../models/openrouter.js";
+import { runImprovementReconciliationOnce, type ImprovementReconciliationResult } from "../improvements/reconciler.js";
 import { durationMs, logger } from "../util/logger.js";
 import { currentTraceContext, runWithTrace } from "../util/trace.js";
 import { enqueueAgentTaskJob, type AgentTaskEnqueueInput, type AgentTaskEnqueueResult } from "./agentTaskEnqueue.js";
@@ -28,6 +30,7 @@ export const CRAWL_GUILD_JOB = "crawl.guild";
 export const EMBED_MESSAGE_JOB = "embedding.message";
 export const AGENT_TASK_JOB = "agent.task";
 export const AGENT_RUNTIME_EXECUTION_JOB = "agent.runtime.execution";
+export const IMPROVEMENT_RECONCILIATION_JOB = "improvement.reconcile";
 const EMBEDDING_JOB_BATCH_SIZE = 400;
 const AGENT_RUNTIME_JOB_EXPIRE_SECONDS = 10 * 60;
 
@@ -100,9 +103,11 @@ export async function startJobs(input: {
   embeddingWorker?: boolean;
   taskWorker?: boolean;
   agentRuntimeWorker?: boolean;
+  improvementWorker?: boolean;
   pgBossSchema?: string;
   repo?: DiscordAiAgentRepository;
   agentRuntimeRepo?: AgentRuntimeRepository;
+  deliveryObligations?: DeliveryObligationsRepository;
   openRouter?: OpenRouterClient;
   db?: DbPool;
 }): Promise<JobRuntime> {
@@ -110,11 +115,12 @@ export async function startJobs(input: {
   const embeddingWorkerEnabled = input.embeddingWorker ?? input.worker !== false;
   const taskWorkerEnabled = input.taskWorker ?? false;
   const agentRuntimeWorkerEnabled = input.agentRuntimeWorker ?? false;
+  const improvementWorkerEnabled = input.improvementWorker ?? false;
   const boss = input.pgBossSchema
     ? new PgBoss({ connectionString: input.config.databaseUrl, schema: input.pgBossSchema })
     : new PgBoss(input.config.databaseUrl);
   logger.info(
-    { crawlWorkerEnabled, embeddingWorkerEnabled, taskWorkerEnabled, agentRuntimeWorkerEnabled, schema: input.pgBossSchema ?? "pgboss" },
+    { crawlWorkerEnabled, embeddingWorkerEnabled, taskWorkerEnabled, agentRuntimeWorkerEnabled, improvementWorkerEnabled, schema: input.pgBossSchema ?? "pgboss" },
     "Starting pg-boss"
   );
   await boss.start();
@@ -136,18 +142,21 @@ export async function startJobs(input: {
     retryBackoff: true,
     expireInSeconds: AGENT_RUNTIME_JOB_EXPIRE_SECONDS
   });
+  await boss.createQueue(IMPROVEMENT_RECONCILIATION_JOB, { policy: "short", retryLimit: 2, retryDelay: 30, retryBackoff: true });
+  await boss.updateQueue(IMPROVEMENT_RECONCILIATION_JOB, { retryLimit: 2, retryDelay: 30, retryBackoff: true });
   logger.info(
     {
-      queues: [CRAWL_GUILD_JOB, EMBED_MESSAGE_JOB, AGENT_TASK_JOB, AGENT_RUNTIME_EXECUTION_JOB],
+      queues: [CRAWL_GUILD_JOB, EMBED_MESSAGE_JOB, AGENT_TASK_JOB, AGENT_RUNTIME_EXECUTION_JOB, IMPROVEMENT_RECONCILIATION_JOB],
       crawlWorkerEnabled,
       embeddingWorkerEnabled,
       taskWorkerEnabled,
-      agentRuntimeWorkerEnabled
+      agentRuntimeWorkerEnabled,
+      improvementWorkerEnabled
     },
     "pg-boss ready"
   );
   const agentTaskBackendName = input.agentTask?.name ?? defaultAgentTaskBackendName(input.config);
-  const runsAnyWorker = crawlWorkerEnabled || embeddingWorkerEnabled || taskWorkerEnabled || agentRuntimeWorkerEnabled;
+  const runsAnyWorker = crawlWorkerEnabled || embeddingWorkerEnabled || taskWorkerEnabled || agentRuntimeWorkerEnabled || improvementWorkerEnabled;
   const artifactRetentionMaintenance = runsAnyWorker
     ? startArtifactRetentionMaintenance({ agentRuntimeRepo: input.agentRuntimeRepo })
     : null;
@@ -251,6 +260,29 @@ export async function startJobs(input: {
       await boss.unschedule(CRAWL_GUILD_JOB);
       logger.info({ queue: CRAWL_GUILD_JOB }, "Reconciliation crawl schedule disabled");
     }
+  }
+
+  if (improvementWorkerEnabled && input.repo && input.agentRuntimeRepo && input.deliveryObligations) {
+    await boss.work(IMPROVEMENT_RECONCILIATION_JOB, { batchSize: 1, pollingIntervalSeconds: 2 }, async () => {
+      const result = await runImprovementReconciliationOnce({
+        repo: input.repo!,
+        config: input.config,
+        runtime: input.agentRuntimeRepo!,
+        deliveries: input.deliveryObligations!,
+      });
+      logger.info(improvementReconciliationLog(result), "Improvement reconciliation complete");
+    });
+    await boss.schedule(IMPROVEMENT_RECONCILIATION_JOB, input.config.improvementReconcileScheduleCron);
+    await boss.send(IMPROVEMENT_RECONCILIATION_JOB, {});
+    logger.info(
+      { queue: IMPROVEMENT_RECONCILIATION_JOB, cron: input.config.improvementReconcileScheduleCron },
+      "Registered improvement reconciliation schedule",
+    );
+  } else if (improvementWorkerEnabled) {
+    logger.warn(
+      { queue: IMPROVEMENT_RECONCILIATION_JOB },
+      "Improvement worker requested without repository, runtime, or delivery readers",
+    );
   }
 
   if (embeddingWorkerEnabled && input.embedding) {
@@ -598,6 +630,24 @@ function formatDurationSeconds(value: number) {
 
 function uniqueStrings(values: Array<string | undefined>): string[] {
   return [...new Set(values.filter((value): value is string => Boolean(value)))];
+}
+
+function improvementReconciliationLog(result: ImprovementReconciliationResult) {
+  return {
+    queue: IMPROVEMENT_RECONCILIATION_JOB,
+    triage: countStatuses(result.triage),
+    pullRequests: countStatuses(result.pullRequests),
+    verification: countStatuses(result.verification.cases),
+    verificationRevision: result.verification.deployment?.revision ?? null,
+    stalled: result.stalled.length,
+  };
+}
+
+function countStatuses(rows: readonly { status: string }[]) {
+  return rows.reduce<Record<string, number>>((counts, row) => {
+    counts[row.status] = (counts[row.status] ?? 0) + 1;
+    return counts;
+  }, {});
 }
 
 function isTerminalAgentRuntimeStatus(status: string) {

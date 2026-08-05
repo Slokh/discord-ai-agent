@@ -11,7 +11,6 @@ type ChatInput = Parameters<OpenRouterClient["chat"]>[0];
 const SERVER_TOOL_USAGE_NAMES: Record<string, string> = {
   web_search_requests: "openrouter:web_search",
   web_fetch_requests: "openrouter:web_fetch",
-  datetime_requests: "openrouter:datetime",
 };
 const serializedToolCache = new WeakMap<object, string>();
 

@@ -64,6 +64,12 @@ Known source-owned gates may propose an executable contract. Unknown detector co
 
 `--apply` performs one transaction: it records the dossier evidence, accepts the confirmed contract when present, updates classification/owner/severity, transitions confirmed cases to `actionable`, inconclusive cases to `needs_evidence`, or explicitly not-reproduced cases to `dismissed`, and appends one audit event. The operation compares the case version and locks the case. Its application key covers the signal snapshot, verdict, evidence, contract, and ownership decision, so concurrent exact retries are harmless while a later materially different conclusion may still be applied. Triage never starts a coding task or publishes anything to GitHub.
 
+## Automatic reconciliation
+
+The worker runs `improvement.reconcile` immediately at startup and on the source-controlled schedule. It advances only trusted automated detections whose stable code maps to a registered proof adapter: the private regression suite, repository and database release gates, known post-deploy canaries, and the revision-quality gate. Unknown detector codes and member, agent, operator, or developer reports remain in the operator queue; automation records an edge-triggered `reconciliation.awaiting_operator` or `reconciliation.awaiting_contract` decision instead of inventing evidence or a contract.
+
+Each pass also refreshes active GitHub pull-request work, retries verifying cases against the latest durable deployment, and records one `reconciliation.stalled` edge when `in_progress` or `verifying` has not advanced within the configured source-controlled interval. Existing case-version locks, triage application keys, work source keys, and verification receipt keys make concurrent or repeated passes harmless. Reconciliation never starts code work, merges cases, opens GitHub issues, replays an old mutation, or resolves a case without the normal deployed receipt.
+
 ## Deployment verification
 
 `improve verify <case-id> --revision <sha>` is read-only by default. It loads the active contract, exact durable deployment ID, and source-owned typed proofs, then emits one result per check without copying prompt, answer, event-summary, or tool-output content. `--apply` rebuilds the authoritative proof immediately before writing an immutable receipt. There is no operator-supplied execution override.
@@ -100,12 +106,13 @@ npm run improve -- --target local transition <case-id> actionable
 npm run improve -- --target local link-task <case-id> --task <task-id>
 npm run improve -- --target local link-pr <case-id> --pr https://github.com/owner/repo/pull/123
 npm run improve -- --target local sync-prs
+npm run improve -- --target local reconcile
 npm run improve -- --target local verify <case-id> --revision <sha>
 npm run improve -- --target local verify <case-id> --revision <sha> --apply
 ```
 
 Production commands require `--target production --confirm-production`, `NODE_ENV=production`, and a non-local configured database host. The CLI refuses a target/database mismatch.
 
-`link-pr` accepts only a pull request in the configured repository and derives its state and revisions from the live GitHub API. Open pull requests move the case to `in_progress`; a closed unmerged pull request returns it to `actionable`; a merged pull request moves it to `verifying`. Exact retries update the same deterministic work attempt. `sync-prs` reconciles all active PR attempts, and release promotion runs that reconciliation before applying deployed proof so a merged and deployed PR can proceed directly through verification. Reconciliation failures are reported without blocking an otherwise valid release.
+`link-pr` accepts only a pull request in the configured repository and derives its state and revisions from the live GitHub API. Open pull requests move the case to `in_progress`; a closed unmerged pull request returns it to `actionable`; a merged pull request moves it to `verifying`. Exact retries update the same deterministic work attempt. `sync-prs`, the scheduled reconciler, and release promotion refresh active PR attempts so a merged and deployed PR can proceed directly through verification. Reconciliation failures are reported without blocking an otherwise valid release.
 
 Active private-replay contracts export with `npm run eval:export-improvements`; `npm run eval:regressions` runs the resulting read-only private suite. Other registered contract kinds stay in their owning CI, delivery, observation, or deployment producer.

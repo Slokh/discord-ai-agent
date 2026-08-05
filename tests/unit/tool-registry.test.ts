@@ -227,9 +227,6 @@ describe("toolRegistry", () => {
           type: "openrouter:web_search"
         }),
         expect.objectContaining({
-          type: "openrouter:datetime"
-        }),
-        expect.objectContaining({
           type: "function",
           function: expect.objectContaining({
             name: "getDiscordStats",
@@ -394,8 +391,7 @@ describe("toolRegistry", () => {
   it("enables the initial hosted OpenRouter tools", () => {
     expect(openRouterServerToolRegistry.map((tool) => tool.type)).toEqual([
       "openrouter:web_search",
-      "openrouter:web_fetch",
-      "openrouter:datetime"
+      "openrouter:web_fetch"
     ]);
     expect(openRouterServerToolRegistry.every((tool) => tool.toolClass === "external" && tool.outputContract.length > 0)).toBe(true);
   });

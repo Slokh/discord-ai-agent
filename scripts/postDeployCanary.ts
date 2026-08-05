@@ -49,10 +49,10 @@ const statsPrompt = [
 ].join(" ");
 const webPrompt = [
   "This is an automated private post-deploy canary.",
-  "Use web__run exactly once to get the current UTC date.",
-  'Pass one object argument, not a JSON string: {operations: [{kind: "time", utcOffset: "+00:00"}]}.',
+  "Use web__run exactly once to search the public web for OpenAI's official website.",
+  'Pass one object argument, not a JSON string: {operations: [{kind: "search", query: "OpenAI official website"}]}.',
   "Do not call any other tool or retry this tool; report a failure immediately if it fails.",
-  "Reply with POST_DEPLOY_WEB_OK and the UTC date.",
+  "Reply with POST_DEPLOY_WEB_OK and the official website URL from the result.",
   privacyInstruction,
 ].join(" ");
 const randomPrompt = [

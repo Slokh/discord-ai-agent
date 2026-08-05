@@ -6,10 +6,12 @@ import {
   assessRevisionQuality,
   collectRevisionQuality,
   collectRevisionQualityObservation,
-  findBaselineRevision,
+  findBaselineQualityCohort,
+  findRevisionQualityCohort,
   revisionQualityClusterAbsenceStatuses,
   revisionQualityDetectionInputs,
 } from "../src/observability/revisionQuality.js";
+import { qualityCohortIdentityFromMetadata, runtimeVersionMetadata } from "../src/observability/runtimeVersions.js";
 
 const config = loadConfig();
 const revision = argument("--revision") ?? config.appRevision;
@@ -17,13 +19,16 @@ const hours = boundedNumber(argument("--hours") ?? "48", 1, 168);
 const pool = createPool(config);
 
 try {
-  const observation = await collectRevisionQualityObservation(pool, revision, hours);
+  const currentCohort = revision === config.appRevision
+    ? qualityCohortIdentityFromMetadata(runtimeVersionMetadata(config))
+    : await findRevisionQualityCohort(pool, revision);
+  const observation = await collectRevisionQualityObservation(pool, revision, hours, currentCohort);
   const quality = observation.quality;
-  const baselineRevision = process.argv.includes("--compare")
-    ? await findBaselineRevision(pool, revision, hours)
+  const baselineTarget = process.argv.includes("--compare") && currentCohort
+    ? await findBaselineQualityCohort(pool, currentCohort, hours)
     : null;
-  const baseline = baselineRevision
-    ? await collectRevisionQuality(pool, baselineRevision, hours)
+  const baseline = baselineTarget
+    ? await collectRevisionQuality(pool, baselineTarget.revision, hours, baselineTarget.cohort)
     : null;
   const assessment = assessRevisionQuality(quality, baseline);
   const detectionInputs = revisionQualityDetectionInputs(quality, assessment, observation.failureClusters);
@@ -49,6 +54,8 @@ try {
       const proofStatus = assessment.status === "pass" ? "passed" : assessment.status === "fail" ? "failed" : "inconclusive";
       const proof = await repo.recordImprovementRevisionQualityResult({
         revision,
+        qualityVersion: quality.qualityVersion,
+        contributingRevisions: quality.contributingRevisions,
         status: proofStatus,
         runKey: quality.generatedAt,
         presentFailureReferences: [...new Set([

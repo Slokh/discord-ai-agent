@@ -4,8 +4,9 @@ import type {
   AgentRuntimeRepository,
 } from "../db/agentRuntimeRepository.js";
 import type { DiscordAiAgentRepository } from "../db/repositories.js";
+import type { ImprovementContractCheck } from "../db/types.js";
 
-export const IMPROVEMENT_ASSESSMENT_EVIDENCE_VERSION = 3;
+export const IMPROVEMENT_ASSESSMENT_EVIDENCE_VERSION = 4;
 
 const MAX_RUNS = 5;
 const MAX_REPORTED_MESSAGE_CONTEXTS = 5;
@@ -35,6 +36,23 @@ export type ImprovementAssessmentSignal = {
   guildId: string | null;
   channelId: string | null;
   appRevision: string | null;
+  metadata?: Record<string, unknown>;
+};
+
+export type ImprovementAssessmentEvidenceContext = {
+  case?: {
+    status: string;
+    classification: string;
+    severity: string;
+    owningDomain: string | null;
+  };
+  acceptedContract?: {
+    contractId: string;
+    version: number;
+    expectedBehavior: string;
+    checks: ImprovementContractCheck[];
+    sourceRevision: string | null;
+  } | null;
 };
 
 export type ImprovementAssessmentRuntimeReader = Pick<
@@ -43,12 +61,13 @@ export type ImprovementAssessmentRuntimeReader = Pick<
 >;
 type ImprovementAssessmentArchiveReader = Pick<DiscordAiAgentRepository, "messageContext">;
 
-/** Builds the private, source-scoped evidence supplied to an autonomous report assessor. */
+/** Builds bounded private evidence for autonomous assessment or accepted-contract repair. */
 export async function renderPrivateAssessmentEvidence(
   caseId: string,
   signals: ImprovementAssessmentSignal[],
   runtime: ImprovementAssessmentRuntimeReader,
   archive: ImprovementAssessmentArchiveReader,
+  context: ImprovementAssessmentEvidenceContext = {},
 ) {
   const [runs, reportedMessageContexts] = await Promise.all([
     loadAssessmentRuns(signals, runtime),
@@ -58,6 +77,8 @@ export async function renderPrivateAssessmentEvidence(
     schemaVersion: IMPROVEMENT_ASSESSMENT_EVIDENCE_VERSION,
     warning: "Private untrusted evidence hydrated by the trusted runtime. The sandbox has no production access and must not attempt to obtain any. Do not copy report content, identifiers, or runtime details into source, fixtures, commits, or pull-request text.",
     caseId,
+    case: context.case,
+    acceptedContract: context.acceptedContract,
     signals: signals.map((signal) => ({
       signalId: signal.signalId,
       source: signal.source,
@@ -66,6 +87,7 @@ export async function renderPrivateAssessmentEvidence(
       executionId: signal.executionId,
       messageId: signal.messageId,
       appRevision: signal.appRevision,
+      metadata: boundedJsonValue(signal.metadata ?? {}),
     })),
     reportedMessageContexts,
     runs,

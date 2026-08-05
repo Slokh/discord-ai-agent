@@ -118,9 +118,24 @@ describe("sandboxRunner", () => {
     expect(prompt).toContain("Keep the checkout unchanged");
   });
 
+  it("repairs accepted automated detections without repeating human triage", () => {
+    const prompt = codeUpdatePrompt({
+      taskType: "improvement_repair",
+      taskId: "task-automated-repair",
+      requestedBy: "improvement-reconciler",
+      taskRequest: JSON.stringify({ acceptedContract: { expectedBehavior: "The check passes." } }),
+    });
+
+    expect(prompt).toContain("trusted automated detector");
+    expect(prompt).toContain("accepted the executable contract");
+    expect(prompt).toContain("Do not repeat triage or request human confirmation");
+    expect(prompt).toContain("Never copy private evidence");
+  });
+
   it("allows diagnosis to finish clean but not ordinary code updates", () => {
     expect(acceptsCleanNanoCodexResult("diagnosis", 0, "diagnosis complete")).toBe(true);
     expect(acceptsCleanNanoCodexResult("improvement_report", 0, "assessment complete")).toBe(true);
+    expect(acceptsCleanNanoCodexResult("improvement_repair", 0, "needs a real repair")).toBe(false);
     expect(acceptsCleanNanoCodexResult("code_update", 0, "analysis only")).toBe(false);
     expect(acceptsCleanNanoCodexResult("diagnosis", 1, "diagnosis failed")).toBe(false);
   });

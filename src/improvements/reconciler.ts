@@ -26,6 +26,7 @@ const TRIAGE_STATUSES: ImprovementCaseStatus[] = ["open", "needs_evidence", "act
 const CASE_PAGE_SIZE = 100;
 const ACTOR_ID = "improvement-reconciler";
 const MAX_ASSESSMENT_ATTEMPTS = 3;
+const MAX_AUTOMATED_REPAIR_ATTEMPTS = 3;
 
 type ImprovementReconciliationRepository = Pick<
   DiscordAiAgentRepository,
@@ -52,7 +53,7 @@ export type ImprovementReconciliationResult = {
   triage: Array<{
     caseId: string;
     status: "applied" | "unchanged" | "deferred" | "error";
-    reason?: "assessment_running" | "assessment_retry_queued" | "reporter_input" | "operator_judgment" | "unregistered_contract" | "concurrent_change";
+    reason?: "assessment_running" | "assessment_retry_queued" | "repair_running" | "repair_retry_queued" | "reporter_input" | "operator_judgment" | "unregistered_contract" | "concurrent_change";
     error?: string;
   }>;
   pullRequests: Awaited<ReturnType<typeof reconcileImprovementPullRequestWork>>;
@@ -70,7 +71,7 @@ export async function runImprovementReconciliationOnce(input: {
   config: AppConfig;
   runtime: RuntimeReader;
   deliveries: DeliveryReader;
-  enqueueAssessment?: (job: AgentTaskEnqueueInput) => Promise<{ taskId: string }>;
+  enqueueImprovementTask?: (job: AgentTaskEnqueueInput) => Promise<{ taskId: string }>;
   now?: Date;
 }): Promise<ImprovementReconciliationResult> {
   const triage = await reconcileTriage(input);
@@ -116,7 +117,6 @@ async function reconcileTriage(input: {
       }
       const activeSignals = record.signals.filter((signal) => signal.active);
       const hasReportSource = activeSignals.some((signal) => !AUTOMATED_SOURCES.has(signal.source));
-      if (record.case.status === "actionable" && !hasReportSource) continue;
       const runtime = await collectImprovementRuntimeObservations(activeSignals, {
         runtime: input.runtime,
         deliveries: input.deliveries,
@@ -124,6 +124,11 @@ async function reconcileTriage(input: {
       const dossier = buildImprovementTriageDossier(record, runtime);
       if (hasReportSource) {
         const result = await reconcileAutonomousAssessment(input, record, dossier.snapshotKey);
+        results.push({ caseId: candidate.caseId, ...result });
+        continue;
+      }
+      if (record.case.status === "actionable") {
+        const result = await reconcileAutomatedRepair(input, record, dossier.snapshotKey);
         results.push({ caseId: candidate.caseId, ...result });
         continue;
       }
@@ -141,6 +146,18 @@ async function reconcileTriage(input: {
         actorId: ACTOR_ID,
         actorKind: "automation",
       });
+      if (outcome.case.status === "actionable" && outcome.contract) {
+        const result = await reconcileAutomatedRepair(input, {
+          ...record,
+          case: outcome.case,
+          contracts: [
+            ...record.contracts.map((contract) => ({ ...contract, active: false })),
+            outcome.contract,
+          ],
+        }, dossier.snapshotKey);
+        results.push({ caseId: candidate.caseId, ...result });
+        continue;
+      }
       results.push({ caseId: candidate.caseId, status: outcome.applied ? "applied" : "unchanged" });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -169,12 +186,26 @@ export function isImprovementAssessmentTaskId(caseId: string, snapshotKey: strin
     .includes(taskId);
 }
 
+export function improvementRepairTaskId(
+  caseId: string,
+  snapshotKey: string,
+  contract: { contractId: string; version: number },
+  attempt = 1,
+) {
+  const digest = createHash("sha256")
+    .update(`${IMPROVEMENT_ASSESSMENT_EVIDENCE_VERSION}:${caseId}:${snapshotKey}:${contract.contractId}:${contract.version}`)
+    .digest("hex")
+    .slice(0, 24);
+  const base = `improvement-repair-${digest}`;
+  return attempt <= 1 ? base : `${base}-retry-${attempt - 1}`;
+}
+
 async function reconcileAutonomousAssessment(
-  input: Pick<Parameters<typeof runImprovementReconciliationOnce>[0], "repo" | "runtime" | "enqueueAssessment">,
+  input: Pick<Parameters<typeof runImprovementReconciliationOnce>[0], "repo" | "runtime" | "enqueueImprovementTask">,
   record: NonNullable<Awaited<ReturnType<ImprovementReconciliationRepository["getImprovementCase"]>>>,
   snapshotKey: string,
 ): Promise<Pick<ImprovementReconciliationResult["triage"][number], "status" | "reason">> {
-  if (!input.enqueueAssessment) {
+  if (!input.enqueueImprovementTask) {
     await input.repo.recordImprovementReconciliationDecision({
       caseId: record.case.caseId,
       eventName: "reconciliation.awaiting_operator",
@@ -213,7 +244,7 @@ async function reconcileAutonomousAssessment(
   const signals = record.signals.filter((signal) => signal.active);
   const request = await renderPrivateAssessmentEvidence(record.case.caseId, signals, input.runtime, input.repo);
   const first = signals[0];
-  await input.enqueueAssessment({
+  await input.enqueueImprovementTask({
     taskId,
     taskType: "improvement_report",
     improvementCaseId: record.case.caseId,
@@ -232,6 +263,108 @@ async function reconcileAutonomousAssessment(
     metadata: { taskId, snapshotKey, attempt, maxAttempts: MAX_ASSESSMENT_ATTEMPTS, evidenceSchemaVersion: IMPROVEMENT_ASSESSMENT_EVIDENCE_VERSION },
   });
   return { status: "deferred", reason: attempt === 1 ? "assessment_running" : "assessment_retry_queued" };
+}
+
+async function reconcileAutomatedRepair(
+  input: Pick<Parameters<typeof runImprovementReconciliationOnce>[0], "repo" | "runtime" | "enqueueImprovementTask">,
+  record: NonNullable<Awaited<ReturnType<ImprovementReconciliationRepository["getImprovementCase"]>>>,
+  snapshotKey: string,
+): Promise<Pick<ImprovementReconciliationResult["triage"][number], "status" | "reason">> {
+  const contract = record.contracts.find((candidate) => candidate.active && candidate.executable) ?? null;
+  if (!contract) {
+    await input.repo.recordImprovementReconciliationDecision({
+      caseId: record.case.caseId,
+      eventName: "reconciliation.awaiting_contract",
+      reason: "actionable_automated_case_has_no_active_executable_contract",
+    });
+    return { status: "deferred", reason: "unregistered_contract" };
+  }
+  if (!input.enqueueImprovementTask) {
+    await input.repo.recordImprovementReconciliationDecision({
+      caseId: record.case.caseId,
+      eventName: "reconciliation.awaiting_operator",
+      reason: "automated_repair_worker_unavailable",
+    });
+    return { status: "deferred", reason: "operator_judgment" };
+  }
+  let attempt = 1;
+  for (; attempt <= MAX_AUTOMATED_REPAIR_ATTEMPTS; attempt += 1) {
+    const taskId = improvementRepairTaskId(record.case.caseId, snapshotKey, contract, attempt);
+    const existing = await input.repo.getAgentTask(taskId);
+    if (!existing) break;
+    if (existing.status === "queued" || existing.status === "running") {
+      return { status: "deferred", reason: "repair_running" };
+    }
+    if (existing.status === "succeeded" || existing.status === "no_changes") {
+      await input.repo.recordImprovementReconciliationDecision({
+        caseId: record.case.caseId,
+        eventName: "reconciliation.awaiting_operator",
+        reason: "automated_repair_completion_did_not_advance_case",
+        metadata: { taskId, taskStatus: existing.status, attempt },
+      });
+      return { status: "deferred", reason: "operator_judgment" };
+    }
+  }
+  if (attempt > MAX_AUTOMATED_REPAIR_ATTEMPTS) {
+    await input.repo.recordImprovementReconciliationDecision({
+      caseId: record.case.caseId,
+      eventName: "reconciliation.awaiting_operator",
+      reason: "automated_repair_retries_exhausted",
+      metadata: { attempts: MAX_AUTOMATED_REPAIR_ATTEMPTS },
+    });
+    return { status: "deferred", reason: "operator_judgment" };
+  }
+  const taskId = improvementRepairTaskId(record.case.caseId, snapshotKey, contract, attempt);
+  const signals = record.signals.filter((signal) => signal.active);
+  const request = await renderPrivateAssessmentEvidence(
+    record.case.caseId,
+    signals,
+    input.runtime,
+    input.repo,
+    {
+      case: {
+        status: record.case.status,
+        classification: record.case.classification,
+        severity: record.case.severity,
+        owningDomain: record.case.owningDomain,
+      },
+      acceptedContract: {
+        contractId: contract.contractId,
+        version: contract.version,
+        expectedBehavior: contract.expectedBehavior,
+        checks: contract.checks,
+        sourceRevision: contract.sourceRevision,
+      },
+    },
+  );
+  const first = signals[0];
+  await input.enqueueImprovementTask({
+    taskId,
+    taskType: "improvement_repair",
+    improvementCaseId: record.case.caseId,
+    title: `Repair improvement case ${record.case.caseId}`,
+    request,
+    requestedBy: ACTOR_ID,
+    traceId: first?.executionId ?? taskId,
+    guildId: first?.guildId ?? undefined,
+    channelId: first?.channelId ?? undefined,
+    userId: first?.reporterId ?? undefined,
+  });
+  await input.repo.recordImprovementReconciliationDecision({
+    caseId: record.case.caseId,
+    eventName: "reconciliation.repair_queued",
+    reason: attempt === 1 ? "accepted_automated_contract_authorized_repair" : "retry_transient_automated_repair_failure",
+    metadata: {
+      taskId,
+      snapshotKey,
+      contractId: contract.contractId,
+      contractVersion: contract.version,
+      attempt,
+      maxAttempts: MAX_AUTOMATED_REPAIR_ATTEMPTS,
+      evidenceSchemaVersion: IMPROVEMENT_ASSESSMENT_EVIDENCE_VERSION,
+    },
+  });
+  return { status: "deferred", reason: attempt === 1 ? "repair_running" : "repair_retry_queued" };
 }
 
 async function recordStalledCases(
@@ -315,7 +448,7 @@ async function deriveImprovementCaseHealth(
     if (record.signals.some((signal) => signal.active && !AUTOMATED_SOURCES.has(signal.source))) {
       return deriveAssessmentHealth(input, record);
     }
-    return { ...base, state: "blocked" as const, blocker: "repair_work_not_active", nextAction: "start_or_retry_authorized_repair", retryTrigger: null, retryAt: null, progressKey: `actionable:${improvementCase.version}` };
+    return deriveAutomatedRepairHealth(input, record);
   }
   if (improvementCase.status === "in_progress") {
     const active = [...record.workAttempts].reverse().find((work) => work.status === "in_progress") ?? null;
@@ -347,6 +480,32 @@ async function deriveImprovementCaseHealth(
     retryAt: null,
     progressKey: `verification:${receipt.applicationKey}:${receipt.createdAt.toISOString()}`,
   };
+}
+
+async function deriveAutomatedRepairHealth(
+  input: Pick<Parameters<typeof runImprovementReconciliationOnce>[0], "repo">,
+  record: NonNullable<Awaited<ReturnType<ImprovementReconciliationRepository["getImprovementCase"]>>>,
+) {
+  const contract = record.contracts.find((candidate) => candidate.active && candidate.executable) ?? null;
+  if (!contract) {
+    return { caseId: record.case.caseId, state: "blocked" as const, blocker: "detector_contract_missing", nextAction: "operator_define_detector_contract", retryTrigger: null, retryAt: null, progressKey: `actionable:${record.case.version}:unregistered-contract` };
+  }
+  const snapshotKey = buildImprovementTriageDossier(record, []).snapshotKey;
+  for (let attempt = MAX_AUTOMATED_REPAIR_ATTEMPTS; attempt >= 1; attempt -= 1) {
+    const task = await input.repo.getAgentTask(improvementRepairTaskId(record.case.caseId, snapshotKey, contract, attempt));
+    if (!task) continue;
+    const progressKey = `repair:${task.taskId}:${task.status}:${task.updatedAt.toISOString()}`;
+    if (task.status === "queued" || task.status === "running") {
+      return { caseId: record.case.caseId, state: "progressing" as const, blocker: null, nextAction: "complete_automated_repair", retryTrigger: "improvement_reconciliation", retryAt: null, progressKey };
+    }
+    if (task.status === "failed" || task.status === "cancelled") {
+      return attempt === MAX_AUTOMATED_REPAIR_ATTEMPTS
+        ? { caseId: record.case.caseId, state: "blocked" as const, blocker: "automated_repair_retries_exhausted", nextAction: "operator_inspect_repair_failure", retryTrigger: null, retryAt: null, progressKey }
+        : { caseId: record.case.caseId, state: "waiting" as const, blocker: "repair_retry_pending", nextAction: "retry_automated_repair", retryTrigger: "improvement_reconciliation", retryAt: null, progressKey };
+    }
+    return { caseId: record.case.caseId, state: "blocked" as const, blocker: "automated_repair_completion_did_not_advance_case", nextAction: "operator_inspect_repair_completion", retryTrigger: null, retryAt: null, progressKey };
+  }
+  return { caseId: record.case.caseId, state: "pending" as const, blocker: null, nextAction: "queue_automated_repair", retryTrigger: "improvement_reconciliation", retryAt: null, progressKey: `actionable:${record.case.version}:repair:${contract.contractId}:${contract.version}` };
 }
 
 async function deriveAssessmentHealth(

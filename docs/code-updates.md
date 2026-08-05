@@ -6,7 +6,7 @@ Members can ask the Discord agent to change its own repository, investigate CI, 
 
 The model selects `runCodingAgent` only for an explicit current request to modify or debug repository, PR, CI, deployment, or prior task behavior. The feature is hidden when repository credentials or callback signing are incomplete.
 
-Code-update admission is available to all guild members. Safety comes from isolated execution, scoped credentials, branch protection, verification, release scanning, and human review—not from trying to classify privileged language in chat.
+Code-update admission is available to all guild members. Safety comes from isolated execution, scoped credentials, branch protection, required verification, and release scanning—not from trying to classify privileged language in chat.
 
 The sandbox supervisor never receives the Discord token or database URL. It receives the OpenRouter and scoped GitHub credentials needed to run the task, but child npm lifecycle scripts and NanoCodex workspace commands use an allowlisted environment without provider, publication, or callback credentials. NanoCodex receives its model credential through the private startup protocol, and only the verified runner retains GitHub publication authority.
 
@@ -21,6 +21,8 @@ The sandbox supervisor never receives the Discord token or database URL. It rece
 7. The task ends as succeeded, failed, cancelled, or no-change, with a PR link or concrete reason.
 
 Report signals enter the unified improvement worker rather than a reaction-specific execution path. Each signal snapshot gets one deterministic assessment task. The sandbox first performs evidence-only triage and code enforces a clean checkout. Expected behavior, non-reproduction, or an already-fixed source dismisses the report without GitHub work. A specific ambiguity moves the case to `needs_evidence` with the exact clarification required. Only `confirmed_unfixed` with a registered machine-executable contract starts the mutation-capable repair phase; it never replays the original Discord request or publishes private report content.
+
+Trusted runtime, deployment, CI, and eval detections skip semantic assessment only after their source-owned contract has been accepted. The reconciler then queues an idempotent `improvement_repair` task from the signal snapshot and active contract version. It uses the normal verified code-update pipeline, links work to the case when queued, auto-merges the diff-described PR after required checks, and leaves deployment proof—not task completion—as the resolution gate. Failed repairs retry three times before asking for operator judgment.
 
 ## Sandbox pipeline
 
@@ -83,6 +85,8 @@ Recovery produces an explicit terminal reason. It never silently publishes an un
 Members can add `🔄` or `🔃` to a terminal task update to queue a fresh retry. The reaction is durably deduplicated per member and target message, and the new task links back to the failed task. Tasks linked to an improvement case create a new source-independent work attempt while retaining the case projection; the case remains `in_progress` during the retry and still requires explicit deployed verification before resolution.
 
 Report-authorized `improvement_report` tasks are two-phase. The first phase is evidence-only and must leave the checkout clean. Unsupported reports finish without GitHub work; insufficient evidence names the exact reporter clarification needed. A confirmed defect must include registered machine-executable checks before the second phase may edit. A successfully verified repair opens a diff-described PR and enables auto-merge after required checks; private report evidence never enters the branch, commit, or PR metadata.
+
+Source-authorized `improvement_repair` tasks are single-phase because the trusted detector and active executable contract already establish the defect. They still require a real diff, focused coverage, full runner verification, diff-derived public PR metadata, required checks, and deployed contract proof. A missing contract, concrete ambiguity, unavailable worker, or exhausted retries is surfaced explicitly instead of silently waiting for human review.
 
 ## Operations and verification
 

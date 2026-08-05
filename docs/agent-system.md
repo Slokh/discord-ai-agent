@@ -109,6 +109,8 @@ Private improvement reporting is internal telemetry, so the model may record it 
 
 Paid generation contracts may declare identical-success reuse. Within one turn, the generic runtime executes the first exact call, retains its successful output, and returns that evidence for an identical repeat without charging the provider or attaching the file again. Distinct arguments still execute normally. This is a contract-owned cost and delivery invariant, not semantic prompt routing.
 
+Every installed capability contract also owns an internal latency budget, defaulted by tool class and overrideable by the focused contract. The budget is not model-facing. Each terminal runtime event records the applicable budget and whether a useful result exceeded it, so slow successful work remains a successful answer while still producing actionable production evidence. Reused results never count as new latency samples.
+
 ## Typed results
 
 `AgentResponse` uses human-readable `content` plus optional structured metadata:

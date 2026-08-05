@@ -219,7 +219,7 @@ export async function searchDiscordHistory(input: {
   };
 }
 
-async function observeRetrievalStep<T>(
+export async function observeRetrievalStep<T>(
   input: { observeSpan?: (span: RetrievalSpan) => Promise<void>; parentSpanId?: string | null },
   name: string,
   operation: () => Promise<T>,

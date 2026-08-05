@@ -65,4 +65,51 @@ describe.skipIf(!runDbTests)("improvement revision-quality proof", () => {
     await expect(repo.getImprovementCase(presentCaseId)).resolves.toMatchObject({ case: { status: "actionable" } });
     await expect(repo.getImprovementCase(absentCaseId)).resolves.toMatchObject({ case: { status: "resolved" } });
   });
+
+  it("requires same-capability traffic to disprove a slow-success cluster", async () => {
+    const latencyReference = "revision-quality:tool_latency:0123456789abcdef01234567";
+    const caseRecord = await repo.recordImprovementSignal({
+      source: "runtime_detection",
+      sourceKey: `source-${randomUUID()}`,
+      reporterKind: "automation",
+      summary: "A successful capability exceeded its latency budget.",
+      scope: "deployment",
+    });
+    await repo.addImprovementEvidence({
+      caseId: caseRecord.case.caseId,
+      kind: "runtime_gate",
+      disposition: "supports",
+      summary: "Production observation recorded this slow-success cluster.",
+    });
+    await repo.acceptImprovementContract({
+      caseId: caseRecord.case.caseId,
+      expectedBehavior: "The deployed capability remains within its latency budget.",
+      checks: [{ kind: "deployment_canary", reference: latencyReference }],
+      createdBy: "automation",
+    });
+    await repo.transitionImprovementCase({ caseId: caseRecord.case.caseId, to: "actionable", actorKind: "automation" });
+    await repo.transitionImprovementCase({ caseId: caseRecord.case.caseId, to: "in_progress", actorKind: "operator" });
+    await repo.transitionImprovementCase({ caseId: caseRecord.case.caseId, to: "verifying", actorKind: "system" });
+    await repo.markDeploymentVerified({ revision: "latency-revision", deploymentId: "latency-deployment" });
+
+    await repo.recordImprovementRevisionQualityResult({
+      revision: "latency-revision",
+      status: "passed",
+      runKey: "unrelated-traffic",
+      clusterAbsenceStatus: "passed",
+    });
+    await expect(repo.verifyImprovementCasesForDeployment({ revision: "latency-revision", deploymentId: "latency-deployment" }))
+      .resolves.toContainEqual({ caseId: caseRecord.case.caseId, status: "inconclusive", recorded: true });
+
+    await repo.recordImprovementRevisionQualityResult({
+      revision: "latency-revision",
+      status: "passed",
+      runKey: "same-capability-traffic",
+      clusterAbsenceStatus: "passed",
+      clusterAbsenceStatuses: { [latencyReference]: "passed" },
+    });
+    await expect(repo.verifyImprovementCasesForDeployment({ revision: "latency-revision", deploymentId: "latency-deployment" }))
+      .resolves.toContainEqual({ caseId: caseRecord.case.caseId, status: "passed", recorded: true });
+    await expect(repo.getImprovementCase(caseRecord.case.caseId)).resolves.toMatchObject({ case: { status: "resolved" } });
+  });
 });

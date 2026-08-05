@@ -1,4 +1,4 @@
-import { buildHistoryRetrievalQuery, searchDiscordHistory, formatSearchResults } from "../memory/search.js";
+import { buildHistoryRetrievalQuery, searchDiscordHistory, formatSearchResults, observeRetrievalStep, type RetrievalSpan } from "../memory/search.js";
 import { recordAgentEvent } from "../agent/runtimeTranscript.js";
 import { summarizeForAudit } from "../util/text.js";
 import type { ToolContext } from "./types.js";
@@ -20,6 +20,17 @@ export type HistoryAnswerOptions = {
   limit?: number;
   requestText?: string;
 };
+
+function retrievalObserver(ctx: ToolContext) {
+  return async (span: RetrievalSpan) => recordAgentEvent(ctx, {
+    eventName: `${span.name}.${span.status === "failed" ? "failed" : "completed"}`,
+    level: span.status === "failed" ? "error" : "info",
+    summary: span.name,
+    durationMs: span.durationMs,
+    metadata: { ...span.metadata, spanId: span.spanId, parentSpanId: span.parentSpanId },
+    span,
+  });
+}
 
 export async function answerFromHistory(ctx: ToolContext, question: string, options: HistoryAnswerOptions = {}): Promise<string> {
   const requestText = options.requestText?.trim() || question;
@@ -63,14 +74,7 @@ export async function answerFromHistory(ctx: ToolContext, question: string, opti
     openRouter: ctx.openRouter,
     config: ctx.config,
     parentSpanId: "agent.request",
-    observeSpan: async (span) => recordAgentEvent(ctx, {
-      eventName: `${span.name}.${span.status === "failed" ? "failed" : "completed"}`,
-      level: span.status === "failed" ? "error" : "info",
-      summary: span.name,
-      durationMs: span.durationMs,
-      metadata: { ...span.metadata, spanId: span.spanId, parentSpanId: span.parentSpanId },
-      span,
-    }),
+    observeSpan: retrievalObserver(ctx),
     search: {
       guildId: ctx.guildId,
       userVisibleChannelIds: ctx.visibleChannelIds,
@@ -142,23 +146,28 @@ export async function getRecentDiscordMessages(
   input: { channelIds?: string[]; authorIds?: string[]; limit?: number } = {}
 ): Promise<string> {
   const limit = boundedLimit(input.limit, 25, 1, 80);
-  const visibleIndexedChannels = await visibleIndexedChannelIdsForRequest(ctx);
+  const observation = { observeSpan: retrievalObserver(ctx), parentSpanId: "agent.request" };
+  const visibleIndexedChannels = await observeRetrievalStep(
+    observation,
+    "retrieval.recent_scope",
+    () => visibleIndexedChannelIdsForRequest(ctx),
+  );
   const requestedChannelIds = normalizeIds(input.channelIds).length > 0 ? normalizeIds(input.channelIds) : [ctx.channelId];
-  const messages = await ctx.repo.recentMessagesFromChannels({
+  const messages = await observeRetrievalStep(observation, "retrieval.recent_messages_sql", () => ctx.repo.recentMessagesFromChannels({
     guildId: ctx.guildId,
     visibleChannelIds: visibleIndexedChannels,
     channelIds: requestedChannelIds,
     authorIds: normalizeIds(input.authorIds),
     limit
-  });
-  await ctx.repo.auditTool({
+  }));
+  await observeRetrievalStep(observation, "retrieval.recent_audit", () => ctx.repo.auditTool({
     guildId: ctx.guildId,
     channelId: ctx.channelId,
     userId: ctx.userId,
     toolName: "getRecentDiscordMessages",
     argumentsSummary: summarizeForAudit({ channelIds: requestedChannelIds, authorIds: input.authorIds, limit }),
     resultSummary: summarizeForAudit({ resultCount: messages.length })
-  });
+  }));
   return formatMessageList(messages, "No recent indexed Discord messages matched.");
 }
 
@@ -232,21 +241,30 @@ export async function getDiscordStats(
   } = {}
 ): Promise<string> {
   const resolvedLimit = boundedLimit(input.limit, 10, 1, 100);
-  const visibleIndexedChannels = await visibleIndexedChannelIdsForRequest(ctx);
+  const observation = { observeSpan: retrievalObserver(ctx), parentSpanId: "agent.request" };
+  const [visibleIndexedChannels, resolvedAuthorIds, resolvedChannelIds] = await observeRetrievalStep(
+    observation,
+    "retrieval.stats_scope",
+    () => Promise.all([
+      visibleIndexedChannelIdsForRequest(ctx),
+      resolveAuthorQueries(ctx, input.authorQueries ?? []),
+      resolveChannelQueries(ctx, input.channelQueries ?? []),
+    ]),
+  );
   const authorIds = uniqueStrings([
     ...normalizeIds(input.authorIds),
-    ...(await resolveAuthorQueries(ctx, input.authorQueries ?? []))
+    ...resolvedAuthorIds
   ]);
   const channelIds = uniqueStrings([
     ...normalizeIds(input.channelIds),
-    ...(await resolveChannelQueries(ctx, input.channelQueries ?? []))
+    ...resolvedChannelIds
   ]);
   const dateFrom = coerceDateStart(input.dateFrom);
   const dateTo = coerceDateEnd(input.dateTo);
   const groupBy = discordStatsGroupBy(input.groupBy);
   const metric = discordStatsMetric(input.metric);
   const sort = discordStatsSort(input.sort);
-  const stats = await ctx.repo.discordStats({
+  const stats = await observeRetrievalStep(observation, "retrieval.stats_sql", () => ctx.repo.discordStats({
     guildId: ctx.guildId,
     visibleChannelIds: visibleIndexedChannels,
     authorIds,
@@ -260,15 +278,15 @@ export async function getDiscordStats(
     query: input.query,
     attachmentContentType: input.attachmentContentType,
     limit: resolvedLimit
-  });
-  await ctx.repo.auditTool({
+  }));
+  await observeRetrievalStep(observation, "retrieval.stats_audit", () => ctx.repo.auditTool({
     guildId: ctx.guildId,
     channelId: ctx.channelId,
     userId: ctx.userId,
     toolName: "getDiscordStats",
     argumentsSummary: summarizeForAudit({ ...input, authorIds, channelIds, limit: resolvedLimit }),
     resultSummary: summarizeForAudit(stats)
-  });
+  }));
   return formatDiscordStats(stats, {
     authorIds,
     channelIds,

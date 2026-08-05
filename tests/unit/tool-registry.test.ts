@@ -202,6 +202,15 @@ describe("toolRegistry", () => {
     expect(contracts.find((tool) => tool.name === "getSpotifyItem")?.toolClass).toBe("external");
   });
 
+  it("assigns internal latency budgets without exposing them to the model", () => {
+    expect(toolRegistry.every((tool) => Number.isFinite(tool.latencyBudgetMs) && tool.latencyBudgetMs > 0)).toBe(true);
+    expect(toolRegistry.find((tool) => tool.name === "getRecentDiscordMessages")?.latencyBudgetMs).toBe(15_000);
+    expect(toolRegistry.find((tool) => tool.name === "getDiscordStats")?.latencyBudgetMs).toBe(20_000);
+    expect(toolRegistry.find((tool) => tool.name === "inspectDiscordImages")?.latencyBudgetMs).toBe(60_000);
+    expect(toolRegistry.find((tool) => tool.name === "generateImage")?.latencyBudgetMs).toBe(120_000);
+    expect(JSON.stringify(localToolDefinitionsForModel())).not.toContain("latencyBudgetMs");
+  });
+
   it("exports OpenRouter-compatible local function and server tool definitions", () => {
     expect(toolDefinitionsForModel()).toEqual(
       expect.arrayContaining([

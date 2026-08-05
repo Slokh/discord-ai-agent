@@ -242,7 +242,17 @@ async function runRetainedNanoCodexTurn(input: {
           eventName: "agent.tool.complete",
           summary: `${route.name}: reused identical successful result`,
           durationMs: elapsed,
-          metadata: { toolName: route.name, callId: route.id, status: "reused", reusedCallId: reusable.callId, outputChars: reusedResult.content.length, fileCount: 0, tableCount: 0 },
+          metadata: {
+            toolName: route.name,
+            callId: route.id,
+            status: "reused",
+            reusedCallId: reusable.callId,
+            outputChars: reusedResult.content.length,
+            fileCount: 0,
+            tableCount: 0,
+            latencyBudgetMs: tool.latencyBudgetMs,
+            latencyBudgetExceeded: false,
+          },
         });
         return { success: true, output: reusedResult.content, metadata: { status: "reused", reusedCallId: reusable.callId } };
       }
@@ -288,6 +298,8 @@ async function runRetainedNanoCodexTurn(input: {
           fileCount: toolResult.files?.length ?? 0,
           tableCount: toolResult.tables?.length ?? 0,
           status: toolResult.status ?? "ok",
+          latencyBudgetMs: tool.latencyBudgetMs,
+          latencyBudgetExceeded: toolResult.status !== "error" && elapsed > tool.latencyBudgetMs,
           ...(toolResult.errorCode ? { errorCode: toolResult.errorCode } : {}),
           ...(toolResult.retryable === undefined ? {} : { retryable: toolResult.retryable }),
         },

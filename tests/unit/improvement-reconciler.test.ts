@@ -4,6 +4,7 @@ import type { AppConfig } from "../../src/config/env.js";
 import type { ImprovementCase, ImprovementSignal } from "../../src/db/types.js";
 import { IMPROVEMENT_ASSESSMENT_EVIDENCE_VERSION } from "../../src/improvements/assessmentEvidence.js";
 import { improvementAssessmentTaskId, runImprovementReconciliationOnce } from "../../src/improvements/reconciler.js";
+import { buildImprovementTriageDossier } from "../../src/improvements/triage.js";
 
 describe("improvement reconciler", () => {
   it("versions task identity so a corrected evidence pack reassesses the same signal snapshot", () => {
@@ -18,7 +19,6 @@ describe("improvement reconciler", () => {
     const now = new Date("2026-08-05T12:00:00.000Z");
     const automatedCase = improvementCase("imp-auto", "open", now);
     const manualCase = improvementCase("imp-manual", "open", now);
-    const stalledCase = improvementCase("imp-stalled", "verifying", new Date(now.getTime() - 2_000));
     const records = new Map([
       [automatedCase.caseId, record(automatedCase, signal(automatedCase.caseId, "eval_detection", "private-regression-suite"))],
       [manualCase.caseId, record(manualCase, signal(manualCase.caseId, "member_report"))],
@@ -27,20 +27,23 @@ describe("improvement reconciler", () => {
     const recordImprovementReconciliationDecision = vi.fn(async () => ({ recorded: true }));
     const enqueueAssessment = vi.fn(async ({ taskId }: { taskId?: string }) => ({ taskId: taskId! }));
     const verifyImprovementCasesForDeployment = vi.fn(async () => ([
-      { caseId: stalledCase.caseId, status: "passed" as const, recorded: true },
+      { caseId: automatedCase.caseId, status: "passed" as const, recorded: true },
     ]));
     const repo = {
       listImprovementCasesForReconciliation: vi.fn(async ({ statuses }: { statuses?: string[] }) =>
-        statuses?.includes("open") ? [automatedCase, manualCase] : [stalledCase]),
+        statuses?.includes("open") ? [automatedCase, manualCase] : []),
       getImprovementCase: vi.fn(async (caseId: string) => records.get(caseId)),
       getAgentTask: vi.fn(async () => undefined),
       applyImprovementTriage,
       recordImprovementReconciliationDecision,
+      getImprovementReporterClarificationState: vi.fn(async () => clarificationState()),
       ensureImprovementReporterConversationsForCase: vi.fn(async () => 0),
       listActiveImprovementPullRequestWork: vi.fn(async () => []),
       linkImprovementCasePullRequest: vi.fn(),
       latestDeploymentVerification: vi.fn(async () => ({ revision: "revision-b", deploymentId: "deployment-b", verifiedAt: now })),
       verifyImprovementCasesForDeployment,
+      listImprovementCaseIdsNeedingHealth: vi.fn(async () => []),
+      updateImprovementCaseHealth: vi.fn(),
     };
 
     const result = await runImprovementReconciliationOnce({
@@ -76,7 +79,8 @@ describe("improvement reconciler", () => {
       deploymentId: "deployment-b",
       actorId: "improvement-reconciler",
     });
-    expect(result.stalled).toEqual([{ caseId: stalledCase.caseId, status: "verifying", ageMs: 2_000, eventRecorded: true }]);
+    expect(result.health).toEqual([]);
+    expect(result.stalled).toEqual([]);
   });
 
   it("defers unknown detector codes instead of inventing a contract", async () => {
@@ -88,11 +92,14 @@ describe("improvement reconciler", () => {
       getImprovementCase: vi.fn(async () => record(detectedCase, signal(detectedCase.caseId, "ci_detection", "unknown-gate"))),
       applyImprovementTriage: vi.fn(),
       recordImprovementReconciliationDecision,
+      getImprovementReporterClarificationState: vi.fn(async () => clarificationState()),
       ensureImprovementReporterConversationsForCase: vi.fn(async () => 0),
       listActiveImprovementPullRequestWork: vi.fn(async () => []),
       linkImprovementCasePullRequest: vi.fn(),
       latestDeploymentVerification: vi.fn(async () => null),
       verifyImprovementCasesForDeployment: vi.fn(),
+      listImprovementCaseIdsNeedingHealth: vi.fn(async () => []),
+      updateImprovementCaseHealth: vi.fn(),
     };
 
     const result = await runImprovementReconciliationOnce({
@@ -127,11 +134,14 @@ describe("improvement reconciler", () => {
       getAgentTask: vi.fn(async () => undefined),
       applyImprovementTriage: vi.fn(),
       recordImprovementReconciliationDecision: vi.fn(async () => ({ recorded: true })),
+      getImprovementReporterClarificationState: vi.fn(async () => clarificationState()),
       ensureImprovementReporterConversationsForCase: vi.fn(async () => 0),
       listActiveImprovementPullRequestWork: vi.fn(async () => []),
       linkImprovementCasePullRequest: vi.fn(),
       latestDeploymentVerification: vi.fn(async () => null),
       verifyImprovementCasesForDeployment: vi.fn(),
+      listImprovementCaseIdsNeedingHealth: vi.fn(async () => []),
+      updateImprovementCaseHealth: vi.fn(),
     };
 
     const result = await runImprovementReconciliationOnce({
@@ -144,6 +154,260 @@ describe("improvement reconciler", () => {
 
     expect(result.triage).toHaveLength(101);
     expect(listImprovementCasesForReconciliation).toHaveBeenCalledWith(expect.objectContaining({ afterCaseId: "imp-099" }));
+  });
+
+  it("waits for the reporter without launching duplicate assessments and projects the exact blocker", async () => {
+    const now = new Date("2026-08-05T12:00:00.000Z");
+    const waiting = improvementCase("imp-waiting", "needs_evidence", new Date(now.getTime() - 2_000));
+    const waitingRecord = record(waiting, signal(waiting.caseId, "member_report"));
+    const enqueueAssessment = vi.fn();
+    const updateImprovementCaseHealth = vi.fn(async (input: any) => ({
+      health: { ...input, lastProgressAt: waiting.updatedAt, checkedAt: now },
+      changed: true,
+      progressed: false,
+    }));
+    const recordImprovementReconciliationDecision = vi.fn(async () => ({ recorded: true }));
+    const repo = {
+      listImprovementCasesForReconciliation: vi.fn(async ({ statuses }: { statuses: string[] }) => statuses.includes("needs_evidence") ? [waiting] : []),
+      getImprovementCase: vi.fn(async () => waitingRecord),
+      getAgentTask: vi.fn(),
+      applyImprovementTriage: vi.fn(),
+      recordImprovementReconciliationDecision,
+      getImprovementReporterClarificationState: vi.fn(async () => clarificationState({ pendingCount: 1, clarificationTaskId: "assessment-1", latestUpdatedAt: waiting.updatedAt })),
+      ensureImprovementReporterConversationsForCase: vi.fn(async () => 1),
+      listActiveImprovementPullRequestWork: vi.fn(async () => []),
+      linkImprovementCasePullRequest: vi.fn(),
+      latestDeploymentVerification: vi.fn(async () => null),
+      verifyImprovementCasesForDeployment: vi.fn(),
+      listImprovementCaseIdsNeedingHealth: vi.fn(async () => [waiting.caseId]),
+      updateImprovementCaseHealth,
+    };
+
+    const result = await runImprovementReconciliationOnce({
+      repo: repo as never,
+      config: { improvementStalledAfterMs: 1_000 } as unknown as AppConfig,
+      runtime: { getExecution: vi.fn(), listEvents: vi.fn() } as never,
+      deliveries: { getByExecutionId: vi.fn() } as never,
+      enqueueAssessment: enqueueAssessment as never,
+      now,
+    });
+
+    expect(result.triage).toEqual([{ caseId: waiting.caseId, status: "deferred", reason: "reporter_input" }]);
+    expect(enqueueAssessment).not.toHaveBeenCalled();
+    expect(updateImprovementCaseHealth).toHaveBeenCalledWith(expect.objectContaining({
+      state: "waiting",
+      blocker: "reporter_response_pending",
+      nextAction: "await_reporter_response",
+      retryTrigger: "discord_reply",
+    }));
+    expect(result.stalled).toEqual([expect.objectContaining({
+      caseId: waiting.caseId,
+      blocker: "reporter_response_pending",
+      nextAction: "await_reporter_response",
+    })]);
+  });
+
+  it("surfaces the registered proof producer while verification awaits traffic", async () => {
+    const now = new Date("2026-08-05T12:00:00.000Z");
+    const verifying = improvementCase("imp-verifying", "verifying", now);
+    const verifyingRecord = {
+      ...record(verifying, signal(verifying.caseId, "deployment_detection", "revision_quality_gate")),
+      verificationReceipts: [{
+        receiptId: "receipt-one",
+        caseId: verifying.caseId,
+        contractId: "contract-one",
+        contractVersion: 1,
+        revision: "revision-one",
+        deploymentId: "deployment-one",
+        executionId: null,
+        status: "inconclusive",
+        checks: [{
+          index: 0,
+          checkHash: "check-one",
+          check: { kind: "test", reference: "revision-quality-gate" },
+          adapterId: "revision_quality",
+          retryTrigger: "production_observation",
+          status: "inconclusive",
+          proofSource: "none",
+          summary: "Awaiting enough production observations.",
+          referenceType: null,
+          referenceId: null,
+        }],
+        applicationKey: "application-one",
+        evidenceId: null,
+        applied: true,
+        actorId: "improvement-reconciler",
+        createdAt: now,
+      }],
+    };
+    const updateImprovementCaseHealth = vi.fn(async (input: any) => ({ health: { ...input, lastProgressAt: now, checkedAt: now }, changed: true, progressed: true }));
+    const repo = {
+      listImprovementCasesForReconciliation: vi.fn(async () => []),
+      getImprovementCase: vi.fn(async () => verifyingRecord),
+      getAgentTask: vi.fn(),
+      applyImprovementTriage: vi.fn(),
+      recordImprovementReconciliationDecision: vi.fn(async () => ({ recorded: true })),
+      getImprovementReporterClarificationState: vi.fn(async () => clarificationState()),
+      ensureImprovementReporterConversationsForCase: vi.fn(async () => 0),
+      listActiveImprovementPullRequestWork: vi.fn(async () => []),
+      linkImprovementCasePullRequest: vi.fn(),
+      latestDeploymentVerification: vi.fn(async () => null),
+      verifyImprovementCasesForDeployment: vi.fn(),
+      listImprovementCaseIdsNeedingHealth: vi.fn(async () => [verifying.caseId]),
+      updateImprovementCaseHealth,
+    };
+
+    await runImprovementReconciliationOnce({
+      repo: repo as never,
+      config: { improvementStalledAfterMs: 1_000 } as unknown as AppConfig,
+      runtime: { getExecution: vi.fn(), listEvents: vi.fn() } as never,
+      deliveries: { getByExecutionId: vi.fn() } as never,
+      now,
+    });
+
+    expect(updateImprovementCaseHealth).toHaveBeenCalledWith(expect.objectContaining({
+      state: "waiting",
+      blocker: "verification_proof_pending",
+      nextAction: "await_registered_proof_producer",
+      retryTrigger: "production_observation",
+      progressKey: `verification:application-one:${now.toISOString()}`,
+    }));
+  });
+
+  it("retries a transient autonomous assessment failure with a deterministic bounded task id", async () => {
+    const now = new Date("2026-08-05T12:00:00.000Z");
+    const reported = improvementCase("imp-retry", "open", now);
+    const reportedRecord = record(reported, signal(reported.caseId, "member_report"));
+    const snapshotKey = buildSnapshotKey(reportedRecord);
+    const firstTaskId = improvementAssessmentTaskId(reported.caseId, snapshotKey);
+    const enqueueAssessment = vi.fn(async ({ taskId }: { taskId: string }) => ({ taskId }));
+    const repo = {
+      listImprovementCasesForReconciliation: vi.fn(async ({ statuses }: { statuses: string[] }) => statuses.includes("open") ? [reported] : []),
+      getImprovementCase: vi.fn(async () => reportedRecord),
+      getAgentTask: vi.fn(async (taskId: string) => taskId === firstTaskId ? { taskId, status: "failed", updatedAt: now } : undefined),
+      applyImprovementTriage: vi.fn(),
+      recordImprovementReconciliationDecision: vi.fn(async () => ({ recorded: true })),
+      getImprovementReporterClarificationState: vi.fn(async () => clarificationState()),
+      ensureImprovementReporterConversationsForCase: vi.fn(async () => 1),
+      listActiveImprovementPullRequestWork: vi.fn(async () => []),
+      linkImprovementCasePullRequest: vi.fn(),
+      latestDeploymentVerification: vi.fn(async () => null),
+      verifyImprovementCasesForDeployment: vi.fn(),
+      listImprovementCaseIdsNeedingHealth: vi.fn(async () => []),
+      updateImprovementCaseHealth: vi.fn(),
+      messageContext: vi.fn(async () => []),
+    };
+
+    const result = await runImprovementReconciliationOnce({
+      repo: repo as never,
+      config: { improvementStalledAfterMs: 1_000 } as unknown as AppConfig,
+      runtime: { getExecution: vi.fn(), getSession: vi.fn(), listMessages: vi.fn(async () => []), listEvents: vi.fn(async () => []) } as never,
+      deliveries: { getByExecutionId: vi.fn() } as never,
+      enqueueAssessment: enqueueAssessment as never,
+      now,
+    });
+
+    expect(result.triage).toEqual([{ caseId: reported.caseId, status: "deferred", reason: "assessment_retry_queued" }]);
+    expect(enqueueAssessment).toHaveBeenCalledWith(expect.objectContaining({
+      taskId: improvementAssessmentTaskId(reported.caseId, snapshotKey, 2),
+    }));
+    expect(repo.recordImprovementReconciliationDecision).toHaveBeenCalledWith(expect.objectContaining({
+      reason: "retry_transient_assessment_failure",
+      metadata: expect.objectContaining({ attempt: 2, maxAttempts: 3 }),
+    }));
+  });
+
+  it("retries report-authorized repair work after the case becomes actionable", async () => {
+    const now = new Date("2026-08-05T12:00:00.000Z");
+    const actionable = improvementCase("imp-actionable-retry", "actionable", now);
+    const actionableRecord = record(actionable, signal(actionable.caseId, "member_report"));
+    const snapshotKey = buildSnapshotKey(actionableRecord);
+    const firstTaskId = improvementAssessmentTaskId(actionable.caseId, snapshotKey);
+    const tasks = new Map<string, { taskId: string; status: "failed" | "queued"; updatedAt: Date }>([
+      [firstTaskId, { taskId: firstTaskId, status: "failed", updatedAt: now }],
+    ]);
+    const enqueueAssessment = vi.fn(async ({ taskId }: { taskId: string }) => {
+      tasks.set(taskId, { taskId, status: "queued", updatedAt: now });
+      return { taskId };
+    });
+    const repo = {
+      listImprovementCasesForReconciliation: vi.fn(async ({ statuses }: { statuses: string[] }) => statuses.includes("actionable") ? [actionable] : []),
+      getImprovementCase: vi.fn(async () => actionableRecord),
+      getAgentTask: vi.fn(async (taskId: string) => tasks.get(taskId)),
+      applyImprovementTriage: vi.fn(),
+      recordImprovementReconciliationDecision: vi.fn(async () => ({ recorded: true })),
+      getImprovementReporterClarificationState: vi.fn(async () => clarificationState()),
+      ensureImprovementReporterConversationsForCase: vi.fn(async () => 1),
+      listActiveImprovementPullRequestWork: vi.fn(async () => []),
+      linkImprovementCasePullRequest: vi.fn(),
+      latestDeploymentVerification: vi.fn(async () => null),
+      verifyImprovementCasesForDeployment: vi.fn(),
+      listImprovementCaseIdsNeedingHealth: vi.fn(async () => [actionable.caseId]),
+      updateImprovementCaseHealth: vi.fn(async (input: any) => ({ health: { ...input, lastProgressAt: now, checkedAt: now }, changed: true, progressed: true })),
+      messageContext: vi.fn(async () => []),
+    };
+
+    const result = await runImprovementReconciliationOnce({
+      repo: repo as never,
+      config: { improvementStalledAfterMs: 1_000 } as unknown as AppConfig,
+      runtime: { getExecution: vi.fn(), getSession: vi.fn(), listMessages: vi.fn(async () => []), listEvents: vi.fn(async () => []) } as never,
+      deliveries: { getByExecutionId: vi.fn() } as never,
+      enqueueAssessment: enqueueAssessment as never,
+      now,
+    });
+
+    expect(result.triage).toEqual([{ caseId: actionable.caseId, status: "deferred", reason: "assessment_retry_queued" }]);
+    expect(enqueueAssessment).toHaveBeenCalledWith(expect.objectContaining({
+      taskId: improvementAssessmentTaskId(actionable.caseId, snapshotKey, 2),
+      improvementCaseId: actionable.caseId,
+    }));
+    expect(repo.updateImprovementCaseHealth).toHaveBeenCalledWith(expect.objectContaining({
+      state: "progressing",
+      nextAction: "complete_authorized_repair",
+    }));
+  });
+
+  it("escalates only after all bounded assessment attempts fail", async () => {
+    const now = new Date("2026-08-05T12:00:00.000Z");
+    const reported = improvementCase("imp-exhausted", "open", now);
+    const reportedRecord = record(reported, signal(reported.caseId, "member_report"));
+    const enqueueAssessment = vi.fn();
+    const repo = {
+      listImprovementCasesForReconciliation: vi.fn(async ({ statuses }: { statuses: string[] }) => statuses.includes("open") ? [reported] : []),
+      getImprovementCase: vi.fn(async () => reportedRecord),
+      getAgentTask: vi.fn(async (taskId: string) => ({ taskId, status: "failed", updatedAt: now })),
+      applyImprovementTriage: vi.fn(),
+      recordImprovementReconciliationDecision: vi.fn(async () => ({ recorded: true })),
+      getImprovementReporterClarificationState: vi.fn(async () => clarificationState()),
+      ensureImprovementReporterConversationsForCase: vi.fn(async () => 1),
+      listActiveImprovementPullRequestWork: vi.fn(async () => []),
+      linkImprovementCasePullRequest: vi.fn(),
+      latestDeploymentVerification: vi.fn(async () => null),
+      verifyImprovementCasesForDeployment: vi.fn(),
+      listImprovementCaseIdsNeedingHealth: vi.fn(async () => [reported.caseId]),
+      updateImprovementCaseHealth: vi.fn(async (input: any) => ({ health: { ...input, lastProgressAt: now, checkedAt: now }, changed: true, progressed: true })),
+    };
+
+    const result = await runImprovementReconciliationOnce({
+      repo: repo as never,
+      config: { improvementStalledAfterMs: 1_000 } as unknown as AppConfig,
+      runtime: { getExecution: vi.fn(), listEvents: vi.fn() } as never,
+      deliveries: { getByExecutionId: vi.fn() } as never,
+      enqueueAssessment: enqueueAssessment as never,
+      now,
+    });
+
+    expect(result.triage).toEqual([{ caseId: reported.caseId, status: "deferred", reason: "operator_judgment" }]);
+    expect(enqueueAssessment).not.toHaveBeenCalled();
+    expect(repo.recordImprovementReconciliationDecision).toHaveBeenCalledWith(expect.objectContaining({
+      eventName: "reconciliation.awaiting_operator",
+      reason: "autonomous_assessment_retries_exhausted",
+    }));
+    expect(repo.updateImprovementCaseHealth).toHaveBeenCalledWith(expect.objectContaining({
+      state: "blocked",
+      blocker: "autonomous_assessment_retries_exhausted",
+      retryTrigger: null,
+    }));
   });
 });
 
@@ -204,4 +468,25 @@ function signal(caseId: string, source: ImprovementSignal["source"], detectionCo
     createdAt: now,
     updatedAt: now,
   };
+}
+
+function clarificationState(overrides: Partial<{
+  pendingCount: number;
+  abandonedCount: number;
+  nextDeliveryAt: Date | null;
+  latestUpdatedAt: Date | null;
+  clarificationTaskId: string | null;
+}> = {}) {
+  return {
+    pendingCount: 0,
+    abandonedCount: 0,
+    nextDeliveryAt: null,
+    latestUpdatedAt: null,
+    clarificationTaskId: null,
+    ...overrides,
+  };
+}
+
+function buildSnapshotKey(caseRecord: ReturnType<typeof record>) {
+  return buildImprovementTriageDossier(caseRecord, []).snapshotKey;
 }

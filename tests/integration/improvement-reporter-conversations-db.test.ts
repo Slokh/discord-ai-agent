@@ -65,6 +65,11 @@ describe.skipIf(!runDbTests)("improvement reporter conversation database behavio
       taskId: "assessment-a",
       question: "Should the total include tax?",
     })).resolves.toBe(1);
+    await expect(repo.getImprovementReporterClarificationState(reported.case.caseId)).resolves.toMatchObject({
+      pendingCount: 1,
+      abandonedCount: 0,
+      clarificationTaskId: "assessment-a",
+    });
     const [pending] = await repo.listRenderableImprovementReporterConversations(10);
     expect(pending).toMatchObject({
       caseId: reported.case.caseId,
@@ -90,6 +95,11 @@ describe.skipIf(!runDbTests)("improvement reporter conversation database behavio
       answer: "Yes, the total should include tax.",
     });
     expect(answered).toMatchObject({ caseId: reported.case.caseId, conversationId: pending!.conversationId });
+    await expect(repo.getImprovementReporterClarificationState(reported.case.caseId)).resolves.toMatchObject({
+      pendingCount: 0,
+      abandonedCount: 0,
+      clarificationTaskId: null,
+    });
     await expect(repo.answerImprovementReporterClarification({
       authorId: answeringMemberId,
       guildId,

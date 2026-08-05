@@ -651,6 +651,7 @@ function improvementReconciliationLog(result: ImprovementReconciliationResult) {
     pullRequests: countStatuses(result.pullRequests),
     verification: countStatuses(result.verification.cases),
     verificationRevision: result.verification.deployment?.revision ?? null,
+    health: countStatuses(result.health.map(({ state }) => ({ status: state }))),
     stalled: result.stalled.length,
   };
 }

@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import type { AppConfig } from "../config/env.js";
 import type { DeliveryObligationsRepository } from "../db/deliveryObligationsRepository.js";
 import type { DiscordAiAgentRepository } from "../db/repositories.js";
-import type { ImprovementCaseStatus, ImprovementSignalSource } from "../db/types.js";
+import type { ImprovementCaseHealth, ImprovementCaseStatus, ImprovementSignalSource } from "../db/types.js";
 import type { AgentTaskEnqueueInput } from "../jobs/agentTaskEnqueue.js";
 import {
   buildImprovementTriageDossier,
@@ -22,10 +22,10 @@ const AUTOMATED_SOURCES = new Set<ImprovementSignalSource>([
   "ci_detection",
   "eval_detection",
 ]);
-const TRIAGE_STATUSES: ImprovementCaseStatus[] = ["open", "needs_evidence"];
-const STALL_STATUSES: ImprovementCaseStatus[] = ["in_progress", "verifying"];
+const TRIAGE_STATUSES: ImprovementCaseStatus[] = ["open", "needs_evidence", "actionable"];
 const CASE_PAGE_SIZE = 100;
 const ACTOR_ID = "improvement-reconciler";
+const MAX_ASSESSMENT_ATTEMPTS = 3;
 
 type ImprovementReconciliationRepository = Pick<
   DiscordAiAgentRepository,
@@ -34,12 +34,15 @@ type ImprovementReconciliationRepository = Pick<
   | "getAgentTask"
   | "applyImprovementTriage"
   | "recordImprovementReconciliationDecision"
+  | "getImprovementReporterClarificationState"
   | "messageContext"
   | "ensureImprovementReporterConversationsForCase"
   | "listActiveImprovementPullRequestWork"
   | "linkImprovementCasePullRequest"
   | "latestDeploymentVerification"
   | "verifyImprovementCasesForDeployment"
+  | "listImprovementCaseIdsNeedingHealth"
+  | "updateImprovementCaseHealth"
 >;
 
 type RuntimeReader = ImprovementAssessmentRuntimeReader;
@@ -49,7 +52,7 @@ export type ImprovementReconciliationResult = {
   triage: Array<{
     caseId: string;
     status: "applied" | "unchanged" | "deferred" | "error";
-    reason?: "assessment_running" | "operator_judgment" | "unregistered_contract" | "concurrent_change";
+    reason?: "assessment_running" | "assessment_retry_queued" | "reporter_input" | "operator_judgment" | "unregistered_contract" | "concurrent_change";
     error?: string;
   }>;
   pullRequests: Awaited<ReturnType<typeof reconcileImprovementPullRequestWork>>;
@@ -57,7 +60,8 @@ export type ImprovementReconciliationResult = {
     deployment: { revision: string; deploymentId: string } | null;
     cases: Awaited<ReturnType<ImprovementReconciliationRepository["verifyImprovementCasesForDeployment"]>>;
   };
-  stalled: Array<{ caseId: string; status: "in_progress" | "verifying"; ageMs: number; eventRecorded: boolean }>;
+  health: ImprovementCaseHealth[];
+  stalled: Array<{ caseId: string; status: ImprovementCaseStatus; ageMs: number; blocker: string | null; nextAction: string; eventRecorded: boolean }>;
 };
 
 /** Advances deterministic cases and autonomously assesses report-backed cases before requesting human input. */
@@ -79,7 +83,9 @@ export async function runImprovementReconciliationOnce(input: {
         actorId: ACTOR_ID,
       })
     : [];
-  const stalled = await recordStalledCases(input, input.now ?? new Date());
+  const now = input.now ?? new Date();
+  const health = await refreshImprovementLifecycleHealth(input);
+  const stalled = await recordStalledCases(input, health, now);
   return {
     triage,
     pullRequests,
@@ -87,6 +93,7 @@ export async function runImprovementReconciliationOnce(input: {
       deployment: deployment ? { revision: deployment.revision, deploymentId: deployment.deploymentId } : null,
       cases: verificationCases,
     },
+    health,
     stalled,
   };
 }
@@ -102,13 +109,19 @@ async function reconcileTriage(input: {
       const record = await input.repo.getImprovementCase(candidate.caseId);
       if (!record || !TRIAGE_STATUSES.includes(record.case.status)) continue;
       await input.repo.ensureImprovementReporterConversationsForCase(record.case.caseId);
+      const clarification = await input.repo.getImprovementReporterClarificationState(record.case.caseId);
+      if (record.case.status === "needs_evidence" && clarification.pendingCount > 0) {
+        results.push({ caseId: candidate.caseId, status: "deferred", reason: "reporter_input" });
+        continue;
+      }
       const activeSignals = record.signals.filter((signal) => signal.active);
+      const hasReportSource = activeSignals.some((signal) => !AUTOMATED_SOURCES.has(signal.source));
+      if (record.case.status === "actionable" && !hasReportSource) continue;
       const runtime = await collectImprovementRuntimeObservations(activeSignals, {
         runtime: input.runtime,
         deliveries: input.deliveries,
       });
       const dossier = buildImprovementTriageDossier(record, runtime);
-      const hasReportSource = activeSignals.some((signal) => !AUTOMATED_SOURCES.has(signal.source));
       if (hasReportSource) {
         const result = await reconcileAutonomousAssessment(input, record, dossier.snapshotKey);
         results.push({ caseId: candidate.caseId, ...result });
@@ -142,12 +155,18 @@ async function reconcileTriage(input: {
   return results;
 }
 
-export function improvementAssessmentTaskId(caseId: string, snapshotKey: string) {
+export function improvementAssessmentTaskId(caseId: string, snapshotKey: string, attempt = 1) {
   const digest = createHash("sha256")
     .update(`${IMPROVEMENT_ASSESSMENT_EVIDENCE_VERSION}:${caseId}:${snapshotKey}`)
     .digest("hex")
     .slice(0, 24);
-  return `improvement-${digest}`;
+  const base = `improvement-${digest}`;
+  return attempt <= 1 ? base : `${base}-retry-${attempt - 1}`;
+}
+
+export function isImprovementAssessmentTaskId(caseId: string, snapshotKey: string, taskId: string) {
+  return Array.from({ length: MAX_ASSESSMENT_ATTEMPTS }, (_, index) => improvementAssessmentTaskId(caseId, snapshotKey, index + 1))
+    .includes(taskId);
 }
 
 async function reconcileAutonomousAssessment(
@@ -155,20 +174,6 @@ async function reconcileAutonomousAssessment(
   record: NonNullable<Awaited<ReturnType<ImprovementReconciliationRepository["getImprovementCase"]>>>,
   snapshotKey: string,
 ): Promise<Pick<ImprovementReconciliationResult["triage"][number], "status" | "reason">> {
-  const taskId = improvementAssessmentTaskId(record.case.caseId, snapshotKey);
-  const existing = await input.repo.getAgentTask(taskId);
-  if (existing) {
-    if (existing.status === "queued" || existing.status === "running") return { status: "deferred", reason: "assessment_running" };
-    if (existing.status !== "no_changes") {
-      await input.repo.recordImprovementReconciliationDecision({
-        caseId: record.case.caseId,
-        eventName: "reconciliation.awaiting_operator",
-        reason: "autonomous_assessment_did_not_resolve_case",
-        metadata: { taskId, taskStatus: existing.status },
-      });
-    }
-    return { status: "deferred", reason: "operator_judgment" };
-  }
   if (!input.enqueueAssessment) {
     await input.repo.recordImprovementReconciliationDecision({
       caseId: record.case.caseId,
@@ -177,6 +182,34 @@ async function reconcileAutonomousAssessment(
     });
     return { status: "deferred", reason: "operator_judgment" };
   }
+  let attempt = 1;
+  for (; attempt <= MAX_ASSESSMENT_ATTEMPTS; attempt += 1) {
+    const taskId = improvementAssessmentTaskId(record.case.caseId, snapshotKey, attempt);
+    const existing = await input.repo.getAgentTask(taskId);
+    if (!existing) break;
+    if (existing.status === "queued" || existing.status === "running") {
+      return { status: "deferred", reason: "assessment_running" };
+    }
+    if (existing.status === "succeeded" || existing.status === "no_changes") {
+      await input.repo.recordImprovementReconciliationDecision({
+        caseId: record.case.caseId,
+        eventName: "reconciliation.awaiting_operator",
+        reason: "autonomous_assessment_completion_did_not_advance_case",
+        metadata: { taskId, taskStatus: existing.status, attempt },
+      });
+      return { status: "deferred", reason: "operator_judgment" };
+    }
+  }
+  if (attempt > MAX_ASSESSMENT_ATTEMPTS) {
+    await input.repo.recordImprovementReconciliationDecision({
+      caseId: record.case.caseId,
+      eventName: "reconciliation.awaiting_operator",
+      reason: "autonomous_assessment_retries_exhausted",
+      metadata: { attempts: MAX_ASSESSMENT_ATTEMPTS },
+    });
+    return { status: "deferred", reason: "operator_judgment" };
+  }
+  const taskId = improvementAssessmentTaskId(record.case.caseId, snapshotKey, attempt);
   const signals = record.signals.filter((signal) => signal.active);
   const request = await renderPrivateAssessmentEvidence(record.case.caseId, signals, input.runtime, input.repo);
   const first = signals[0];
@@ -195,31 +228,163 @@ async function reconcileAutonomousAssessment(
   await input.repo.recordImprovementReconciliationDecision({
     caseId: record.case.caseId,
     eventName: "reconciliation.assessment_queued",
-    reason: "report_authorized_autonomous_assessment",
-    metadata: { taskId, snapshotKey, evidenceSchemaVersion: IMPROVEMENT_ASSESSMENT_EVIDENCE_VERSION },
+    reason: attempt === 1 ? "report_authorized_autonomous_assessment" : "retry_transient_assessment_failure",
+    metadata: { taskId, snapshotKey, attempt, maxAttempts: MAX_ASSESSMENT_ATTEMPTS, evidenceSchemaVersion: IMPROVEMENT_ASSESSMENT_EVIDENCE_VERSION },
   });
-  return { status: "deferred", reason: "assessment_running" };
+  return { status: "deferred", reason: attempt === 1 ? "assessment_running" : "assessment_retry_queued" };
 }
 
 async function recordStalledCases(
   input: Pick<Parameters<typeof runImprovementReconciliationOnce>[0], "repo" | "config">,
+  health: ImprovementCaseHealth[],
   now: Date,
 ) {
   const results: ImprovementReconciliationResult["stalled"] = [];
-  for await (const candidate of reconciliationCases(input.repo, STALL_STATUSES)) {
-    const ageMs = Math.max(0, now.getTime() - candidate.updatedAt.getTime());
+  for (const candidateHealth of health) {
+    if (candidateHealth.state === "complete") continue;
+    const record = await input.repo.getImprovementCase(candidateHealth.caseId);
+    if (!record) continue;
+    const ageMs = Math.max(0, now.getTime() - candidateHealth.lastProgressAt.getTime());
     if (ageMs < input.config.improvementStalledAfterMs) continue;
-    const status = candidate.status as "in_progress" | "verifying";
-    const reason = status === "in_progress" ? "work_attempt_has_not_completed" : "deployment_proof_has_not_resolved_case";
+    const status = record.case.status;
+    const reason = candidateHealth.blocker ?? `no_progress_while_${candidateHealth.nextAction}`;
     const decision = await input.repo.recordImprovementReconciliationDecision({
-      caseId: candidate.caseId,
+      caseId: candidateHealth.caseId,
       eventName: "reconciliation.stalled",
       reason,
-      metadata: { status, ageMs },
+      metadata: { status, ageMs, blocker: candidateHealth.blocker, nextAction: candidateHealth.nextAction, retryTrigger: candidateHealth.retryTrigger },
     });
-    results.push({ caseId: candidate.caseId, status, ageMs, eventRecorded: decision.recorded });
+    results.push({ caseId: candidateHealth.caseId, status, ageMs, blocker: candidateHealth.blocker, nextAction: candidateHealth.nextAction, eventRecorded: decision.recorded });
   }
   return results;
+}
+
+async function refreshImprovementLifecycleHealth(
+  input: Pick<Parameters<typeof runImprovementReconciliationOnce>[0], "repo">,
+) {
+  const health: ImprovementCaseHealth[] = [];
+  let afterCaseId: string | null = null;
+  while (true) {
+    const caseIds = await input.repo.listImprovementCaseIdsNeedingHealth({ afterCaseId, limit: CASE_PAGE_SIZE });
+    for (const caseId of caseIds) {
+      const record = await input.repo.getImprovementCase(caseId);
+      if (!record) continue;
+      const update = await deriveImprovementCaseHealth(input, record);
+      health.push((await input.repo.updateImprovementCaseHealth(update)).health);
+    }
+    if (caseIds.length < CASE_PAGE_SIZE) break;
+    afterCaseId = caseIds.at(-1)!;
+  }
+  return health;
+}
+
+async function deriveImprovementCaseHealth(
+  input: Pick<Parameters<typeof runImprovementReconciliationOnce>[0], "repo">,
+  record: NonNullable<Awaited<ReturnType<ImprovementReconciliationRepository["getImprovementCase"]>>>,
+) {
+  const { case: improvementCase } = record;
+  const base = { caseId: improvementCase.caseId };
+  if (improvementCase.status === "resolved" || improvementCase.status === "dismissed") {
+    return { ...base, state: "complete" as const, blocker: null, nextAction: "none", retryTrigger: null, retryAt: null, progressKey: `${improvementCase.status}:${improvementCase.version}` };
+  }
+  if (improvementCase.status === "open" || improvementCase.status === "needs_evidence") {
+    const clarification = await input.repo.getImprovementReporterClarificationState(improvementCase.caseId);
+    if (clarification.pendingCount > 0) {
+      const abandoned = clarification.abandonedCount >= clarification.pendingCount;
+      return {
+        ...base,
+        state: abandoned ? "blocked" as const : "waiting" as const,
+        blocker: abandoned ? "reporter_delivery_exhausted" : "reporter_response_pending",
+        nextAction: abandoned ? "operator_restore_reporter_delivery" : "await_reporter_response",
+        retryTrigger: abandoned ? null : "discord_reply",
+        retryAt: clarification.nextDeliveryAt,
+        progressKey: `clarification:${clarification.clarificationTaskId ?? "unknown"}:${clarification.latestUpdatedAt?.toISOString() ?? "unknown"}`,
+      };
+    }
+    const activeSignals = record.signals.filter((signal) => signal.active);
+    if (activeSignals.some((signal) => !AUTOMATED_SOURCES.has(signal.source))) {
+      return deriveAssessmentHealth(input, record);
+    }
+    const dossier = buildImprovementTriageDossier(record, []);
+    if (dossier.verdict === "confirmed" && dossier.proposedContract) {
+      return { ...base, state: "pending" as const, blocker: null, nextAction: "apply_registered_contract", retryTrigger: "improvement_reconciliation", retryAt: null, progressKey: `${improvementCase.status}:${improvementCase.version}` };
+    }
+    return { ...base, state: "blocked" as const, blocker: "detector_contract_missing", nextAction: "operator_define_detector_contract", retryTrigger: null, retryAt: null, progressKey: `${improvementCase.status}:${improvementCase.version}:unregistered-contract` };
+  }
+  if (improvementCase.status === "actionable") {
+    if (record.signals.some((signal) => signal.active && !AUTOMATED_SOURCES.has(signal.source))) {
+      return deriveAssessmentHealth(input, record);
+    }
+    return { ...base, state: "blocked" as const, blocker: "repair_work_not_active", nextAction: "start_or_retry_authorized_repair", retryTrigger: null, retryAt: null, progressKey: `actionable:${improvementCase.version}` };
+  }
+  if (improvementCase.status === "in_progress") {
+    const active = [...record.workAttempts].reverse().find((work) => work.status === "in_progress") ?? null;
+    if (!active) return { ...base, state: "blocked" as const, blocker: "active_work_projection_missing", nextAction: "operator_repair_work_link", retryTrigger: null, retryAt: null, progressKey: `in_progress:${improvementCase.version}:missing` };
+    if (active.taskId) {
+      const task = await input.repo.getAgentTask(active.taskId);
+      return {
+        ...base,
+        state: task?.status === "queued" || task?.status === "running" ? "progressing" as const : "waiting" as const,
+        blocker: task ? null : "linked_task_missing",
+        nextAction: task ? "complete_linked_repair" : "reconcile_linked_task",
+        retryTrigger: "improvement_reconciliation",
+        retryAt: null,
+        progressKey: `work:${active.workId}:${active.updatedAt.toISOString()}:${task?.status ?? "missing"}:${task?.updatedAt.toISOString() ?? "missing"}`,
+      };
+    }
+    return { ...base, state: "waiting" as const, blocker: "pull_request_merge_pending", nextAction: "sync_pull_request", retryTrigger: "improvement_reconciliation", retryAt: null, progressKey: `work:${active.workId}:${active.updatedAt.toISOString()}` };
+  }
+  const receipt = record.verificationReceipts[0] ?? null;
+  if (!receipt) return { ...base, state: "waiting" as const, blocker: "verified_deployment_pending", nextAction: "verify_latest_deployment", retryTrigger: "deployment_promotion", retryAt: null, progressKey: `verifying:${improvementCase.version}:no-receipt` };
+  const pendingTriggers = [...new Set(receipt.checks.flatMap((check) => check.status === "inconclusive" && check.retryTrigger ? [check.retryTrigger] : []))];
+  const retryTrigger = pendingTriggers.join(",") || null;
+  return {
+    ...base,
+    state: retryTrigger ? "waiting" as const : "blocked" as const,
+    blocker: retryTrigger ? "verification_proof_pending" : "verification_has_no_retry_owner",
+    nextAction: retryTrigger ? "await_registered_proof_producer" : "operator_define_proof_owner",
+    retryTrigger,
+    retryAt: null,
+    progressKey: `verification:${receipt.applicationKey}:${receipt.createdAt.toISOString()}`,
+  };
+}
+
+async function deriveAssessmentHealth(
+  input: Pick<Parameters<typeof runImprovementReconciliationOnce>[0], "repo">,
+  record: NonNullable<Awaited<ReturnType<ImprovementReconciliationRepository["getImprovementCase"]>>>,
+) {
+  const dossier = buildImprovementTriageDossier(record, []);
+  for (let attempt = MAX_ASSESSMENT_ATTEMPTS; attempt >= 1; attempt -= 1) {
+    const task = await input.repo.getAgentTask(improvementAssessmentTaskId(record.case.caseId, dossier.snapshotKey, attempt));
+    if (!task) continue;
+    const progressKey = `assessment:${task.taskId}:${task.status}:${task.updatedAt.toISOString()}`;
+    if (task.status === "queued" || task.status === "running") {
+      return {
+        caseId: record.case.caseId,
+        state: "progressing" as const,
+        blocker: null,
+        nextAction: record.case.status === "actionable" ? "complete_authorized_repair" : "complete_autonomous_assessment",
+        retryTrigger: "improvement_reconciliation",
+        retryAt: null,
+        progressKey,
+      };
+    }
+    if (task.status === "failed" || task.status === "cancelled") {
+      return attempt === MAX_ASSESSMENT_ATTEMPTS
+        ? { caseId: record.case.caseId, state: "blocked" as const, blocker: "autonomous_assessment_retries_exhausted", nextAction: "operator_inspect_assessment_failure", retryTrigger: null, retryAt: null, progressKey }
+        : { caseId: record.case.caseId, state: "waiting" as const, blocker: "assessment_retry_pending", nextAction: "retry_autonomous_assessment", retryTrigger: "improvement_reconciliation", retryAt: null, progressKey };
+    }
+    return {
+      caseId: record.case.caseId,
+      state: "blocked" as const,
+      blocker: "assessment_completion_did_not_advance_case",
+      nextAction: "operator_inspect_assessment_completion",
+      retryTrigger: null,
+      retryAt: null,
+      progressKey,
+    };
+  }
+  return { caseId: record.case.caseId, state: "pending" as const, blocker: null, nextAction: record.case.status === "actionable" ? "retry_authorized_repair" : "queue_autonomous_assessment", retryTrigger: "improvement_reconciliation", retryAt: null, progressKey: `${record.case.status}:${record.case.version}:assessment` };
 }
 
 async function* reconciliationCases(

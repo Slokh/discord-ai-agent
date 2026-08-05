@@ -84,10 +84,20 @@ describe("improvement assessment evidence", () => {
       ])),
     };
 
-    const rendered = await renderPrivateAssessmentEvidence("case-a", [signal(executionId)], runtime as never, archive);
+    const rendered = await renderPrivateAssessmentEvidence("case-a", [signal(executionId)], runtime as never, archive, {
+      case: { status: "actionable", classification: "defect", severity: "high", owningDomain: "runtime" },
+      acceptedContract: {
+        contractId: "contract-a",
+        version: 2,
+        expectedBehavior: "The runtime check passes.",
+        checks: [{ kind: "runtime_event", name: "runtime.check.passed", expectation: "required" }],
+        sourceRevision: "revision-a",
+      },
+    });
     const evidence = JSON.parse(rendered);
 
     expect(evidence.schemaVersion).toBe(IMPROVEMENT_ASSESSMENT_EVIDENCE_VERSION);
+    expect(evidence.acceptedContract).toEqual(expect.objectContaining({ contractId: "contract-a", version: 2 }));
     expect(evidence.runs[0].messages).toEqual(expect.arrayContaining([
       expect.objectContaining({
         role: "user",

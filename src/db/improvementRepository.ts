@@ -425,7 +425,7 @@ export async function recordImprovementCaseEvent(pool: DbPool, input: Parameters
 /** Records an edge-triggered automation decision without changing case lifecycle state. */
 export async function recordImprovementReconciliationDecision(pool: DbPool, input: {
   caseId: string;
-  eventName: "reconciliation.assessment_queued" | "reconciliation.assessment_superseded" | "reconciliation.awaiting_reporter" | "reconciliation.awaiting_operator" | "reconciliation.awaiting_contract" | "reconciliation.stalled";
+  eventName: "reconciliation.assessment_queued" | "reconciliation.repair_queued" | "reconciliation.assessment_superseded" | "reconciliation.awaiting_reporter" | "reconciliation.awaiting_operator" | "reconciliation.awaiting_contract" | "reconciliation.stalled";
   reason: string;
   actorId?: string;
   metadata?: Record<string, unknown>;
@@ -602,6 +602,7 @@ export async function applyImprovementTriage(
 
 function reconciliationSummary(eventName: string, reason: string) {
   if (eventName === "reconciliation.assessment_queued") return `Queued autonomous report assessment: ${reason}.`;
+  if (eventName === "reconciliation.repair_queued") return `Queued repair from an accepted automated contract: ${reason}.`;
   if (eventName === "reconciliation.assessment_superseded") return `Ignored an assessment for an older report snapshot: ${reason}.`;
   if (eventName === "reconciliation.awaiting_reporter") return `Asked the reporter for the evidence needed to continue: ${reason}.`;
   if (eventName === "reconciliation.awaiting_operator") return `Automatic reconciliation left this case for operator judgment: ${reason}.`;

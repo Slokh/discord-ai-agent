@@ -493,7 +493,7 @@ export async function runCodeUpdate(env: SandboxEnv, timings: TaskTimings, total
     }
 
     let autoMergeEnabled = false;
-    if (env.taskType === "improvement_report" && prNumber) {
+    if ((env.taskType === "improvement_report" || env.taskType === "improvement_repair") && prNumber) {
       const pullRequest = await octokit.pulls.get({ owner, repo, pull_number: prNumber });
       await octokit.graphql(
         `mutation EnableAutoMerge($pullRequestId: ID!) {

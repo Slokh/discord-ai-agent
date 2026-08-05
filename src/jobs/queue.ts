@@ -272,7 +272,7 @@ export async function startJobs(input: {
         config: input.config,
         runtime: input.agentRuntimeRepo!,
         deliveries: input.deliveryObligations!,
-        enqueueAssessment: (job) => enqueueAgentTaskJob({
+        enqueueImprovementTask: (job) => enqueueAgentTaskJob({
           boss,
           queueName: AGENT_TASK_JOB,
           config: input.config,

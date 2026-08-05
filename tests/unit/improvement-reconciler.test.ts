@@ -1,9 +1,19 @@
+import { createHash } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 import type { AppConfig } from "../../src/config/env.js";
 import type { ImprovementCase, ImprovementSignal } from "../../src/db/types.js";
-import { runImprovementReconciliationOnce } from "../../src/improvements/reconciler.js";
+import { IMPROVEMENT_ASSESSMENT_EVIDENCE_VERSION } from "../../src/improvements/assessmentEvidence.js";
+import { improvementAssessmentTaskId, runImprovementReconciliationOnce } from "../../src/improvements/reconciler.js";
 
 describe("improvement reconciler", () => {
+  it("versions task identity so a corrected evidence pack reassesses the same signal snapshot", () => {
+    const caseId = "imp-versioned";
+    const snapshotKey = "same-signal-snapshot";
+    const previousTaskId = `improvement-${createHash("sha256").update(`${caseId}:${snapshotKey}`).digest("hex").slice(0, 24)}`;
+
+    expect(improvementAssessmentTaskId(caseId, snapshotKey)).not.toBe(previousTaskId);
+  });
+
   it("advances deterministic cases and queues autonomous assessment for member reports", async () => {
     const now = new Date("2026-08-05T12:00:00.000Z");
     const automatedCase = improvementCase("imp-auto", "open", now);
@@ -58,6 +68,7 @@ describe("improvement reconciler", () => {
     expect(recordImprovementReconciliationDecision).toHaveBeenCalledWith(expect.objectContaining({
       caseId: manualCase.caseId,
       eventName: "reconciliation.assessment_queued",
+      metadata: expect.objectContaining({ evidenceSchemaVersion: IMPROVEMENT_ASSESSMENT_EVIDENCE_VERSION }),
     }));
     expect(verifyImprovementCasesForDeployment).toHaveBeenCalledWith({
       revision: "revision-b",

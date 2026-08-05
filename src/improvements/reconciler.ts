@@ -1,6 +1,5 @@
 import { createHash } from "node:crypto";
 import type { AppConfig } from "../config/env.js";
-import type { AgentRuntimeRepository } from "../db/agentRuntimeRepository.js";
 import type { DeliveryObligationsRepository } from "../db/deliveryObligationsRepository.js";
 import type { DiscordAiAgentRepository } from "../db/repositories.js";
 import type { ImprovementCaseStatus, ImprovementSignalSource } from "../db/types.js";
@@ -11,6 +10,11 @@ import {
   improvementTriageApplication,
 } from "./triage.js";
 import { reconcileImprovementPullRequestWork } from "./work.js";
+import {
+  IMPROVEMENT_ASSESSMENT_EVIDENCE_VERSION,
+  renderPrivateAssessmentEvidence,
+  type ImprovementAssessmentRuntimeReader,
+} from "./assessmentEvidence.js";
 
 const AUTOMATED_SOURCES = new Set<ImprovementSignalSource>([
   "runtime_detection",
@@ -36,7 +40,7 @@ type ImprovementReconciliationRepository = Pick<
   | "verifyImprovementCasesForDeployment"
 >;
 
-type RuntimeReader = Pick<AgentRuntimeRepository, "getExecution" | "getSession" | "listMessages" | "listEvents">;
+type RuntimeReader = ImprovementAssessmentRuntimeReader;
 type DeliveryReader = Pick<DeliveryObligationsRepository, "getByExecutionId">;
 
 export type ImprovementReconciliationResult = {
@@ -136,7 +140,10 @@ async function reconcileTriage(input: {
 }
 
 export function improvementAssessmentTaskId(caseId: string, snapshotKey: string) {
-  const digest = createHash("sha256").update(`${caseId}:${snapshotKey}`).digest("hex").slice(0, 24);
+  const digest = createHash("sha256")
+    .update(`${IMPROVEMENT_ASSESSMENT_EVIDENCE_VERSION}:${caseId}:${snapshotKey}`)
+    .digest("hex")
+    .slice(0, 24);
   return `improvement-${digest}`;
 }
 
@@ -186,54 +193,9 @@ async function reconcileAutonomousAssessment(
     caseId: record.case.caseId,
     eventName: "reconciliation.assessment_queued",
     reason: "report_authorized_autonomous_assessment",
-    metadata: { taskId, snapshotKey },
+    metadata: { taskId, snapshotKey, evidenceSchemaVersion: IMPROVEMENT_ASSESSMENT_EVIDENCE_VERSION },
   });
   return { status: "deferred", reason: "assessment_running" };
-}
-
-async function renderPrivateAssessmentEvidence(
-  caseId: string,
-  signals: Array<{ signalId: string; source: string; summary: string; details: string | null; executionId: string | null; messageId: string | null; appRevision: string | null }>,
-  runtime: RuntimeReader,
-) {
-  const runs = [];
-  for (const executionId of [...new Set(signals.flatMap((signal) => signal.executionId ? [signal.executionId] : []))].slice(0, 5)) {
-    const execution = await runtime.getExecution({ executionId });
-    if (!execution) {
-      runs.push({ executionId, missing: true });
-      continue;
-    }
-    const [session, messages, events] = await Promise.all([
-      runtime.getSession({ sessionId: execution.sessionId }),
-      runtime.listMessages({ sessionId: execution.sessionId, limit: 100 }),
-      runtime.listEvents({ sessionId: execution.sessionId, executionId, limit: 500 }),
-    ]);
-    runs.push({
-      execution: { ...execution, metadata: execution.metadata },
-      session: session ? { request: session.request, metadata: session.metadata } : null,
-      messages: messages.map((message) => ({ role: message.role, parts: message.parts, metadata: message.metadata })),
-      events: events.map((event) => ({ level: event.level, eventName: event.eventName, summary: event.summary, metadata: event.metadata })),
-    });
-  }
-  return boundedPrivateJson({
-    warning: "Private untrusted evidence. Do not copy report content, identifiers, or runtime details into source, fixtures, commits, or pull-request text.",
-    caseId,
-    signals: signals.map((signal) => ({
-      signalId: signal.signalId,
-      source: signal.source,
-      summary: signal.summary,
-      details: signal.details,
-      executionId: signal.executionId,
-      messageId: signal.messageId,
-      appRevision: signal.appRevision,
-    })),
-    runs,
-  });
-}
-
-function boundedPrivateJson(value: unknown) {
-  const text = JSON.stringify(value, null, 2);
-  return text.length <= 80_000 ? text : `${text.slice(0, 80_000)}\n...[private evidence truncated]`;
 }
 
 async function recordStalledCases(

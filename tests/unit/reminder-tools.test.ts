@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cancelReminder, createReminder, listMyReminders } from "../../src/tools/reminderTools.js";
+import { createReminder, listMyReminders, manageReminder } from "../../src/tools/reminderTools.js";
 import { toolRegistry } from "../../src/tools/registry.js";
 import type { ToolContext } from "../../src/tools/types.js";
 
@@ -41,6 +41,29 @@ describe("reminder tools", () => {
     })).resolves.toEqual(expect.objectContaining({ status: "ok" }));
   });
 
+  it("creates a validated wall-clock recurrence", async () => {
+    const repo = reminderRepo();
+    const ctx = context(repo);
+
+    const result = await createReminder(ctx, {
+      reminder: "check the queue",
+      scheduledFor: "2026-08-07T09:00:00-04:00",
+      timezone: "America/New_York",
+      recurrence: { frequency: "weekly", localTime: "09:00", weekdays: ["monday", "friday"] },
+    });
+
+    expect(result).toEqual(expect.objectContaining({ status: "ok", content: expect.stringContaining("weekly on Monday, Friday at 09:00") }));
+    expect(repo.createReminder).toHaveBeenCalledWith(expect.objectContaining({
+      recurrence: {
+        frequency: "weekly",
+        interval: 1,
+        localTime: "09:00",
+        anchorDate: "2026-08-07",
+        weekdays: [1, 5],
+      },
+    }));
+  });
+
   it("rejects ambiguous or past instants without writing", async () => {
     const repo = reminderRepo();
     const ctx = context(repo);
@@ -54,12 +77,12 @@ describe("reminder tools", () => {
     expect(repo.createReminder).not.toHaveBeenCalled();
   });
 
-  it("lists and cancels only through immutable requester and guild scope", async () => {
+  it("lists and manages reminders only through immutable requester and guild scope", async () => {
     const repo = reminderRepo();
     const ctx = context(repo);
 
     const listed = await listMyReminders(ctx);
-    const cancelled = await cancelReminder(ctx, { reminderId: "r_existing" });
+    const cancelled = await manageReminder(ctx, { action: "cancel", reminderId: "r_existing" });
 
     expect(repo.listScheduledRemindersForRequester).toHaveBeenCalledWith({ guildId: "guild", requesterId: "user", limit: 25 });
     expect(repo.cancelReminderForRequester).toHaveBeenCalledWith({ reminderId: "r_existing", guildId: "guild", requesterId: "user" });
@@ -67,8 +90,25 @@ describe("reminder tools", () => {
     expect(cancelled.content).toContain("Cancelled reminder");
   });
 
+  it("pauses and resumes recurring reminders at the next future occurrence", async () => {
+    const repo = reminderRepo({ recurring: true, status: "paused", scheduledFor: new Date("2026-08-05T11:00:00Z") });
+    const jobs = { enqueueReminderDelivery: vi.fn(async () => "job") };
+    const ctx = context(repo, jobs);
+
+    await manageReminder(ctx, { action: "pause", reminderId: "r_existing" });
+    const resumed = await manageReminder(ctx, { action: "resume", reminderId: "r_existing" });
+
+    expect(repo.pauseReminderForRequester).toHaveBeenCalledWith({ reminderId: "r_existing", guildId: "guild", requesterId: "user" });
+    expect(repo.resumeReminderForRequester).toHaveBeenCalledWith(expect.objectContaining({
+      reminderId: "r_existing",
+      scheduledFor: new Date("2026-08-06T13:00:00Z"),
+    }));
+    expect(jobs.enqueueReminderDelivery).toHaveBeenCalledWith("r_existing", new Date("2026-08-06T13:00:00Z"));
+    expect(resumed.content).toContain("Resumed reminder");
+  });
+
   it("does not expose model-supplied requester or channel identity", () => {
-    for (const name of ["createReminder", "listMyReminders", "cancelReminder"] as const) {
+    for (const name of ["createReminder", "listMyReminders", "manageReminder"] as const) {
       const contract = toolRegistry.find((tool) => tool.name === name);
       expect(contract?.parameters.properties).not.toHaveProperty("user_id");
       expect(contract?.parameters.properties).not.toHaveProperty("channel_id");
@@ -76,7 +116,13 @@ describe("reminder tools", () => {
   });
 });
 
-function reminderRepo() {
+function reminderRepo(input: { recurring?: boolean; status?: string; scheduledFor?: Date } = {}) {
+  const recurrence = input.recurring ? {
+    frequency: "daily" as const,
+    interval: 1,
+    localTime: "09:00",
+    anchorDate: "2026-08-04",
+  } : null;
   const reminder = {
     reminderId: "r_existing",
     requestKey: "key",
@@ -86,12 +132,15 @@ function reminderRepo() {
     sourceMessageId: "message",
     reminderText: "call Mom",
     timezone: "America/New_York",
-    scheduledFor: new Date("2026-08-06T13:00:00.000Z"),
-    status: "scheduled",
+    scheduledFor: input.scheduledFor ?? new Date("2026-08-06T13:00:00.000Z"),
+    recurrence,
+    occurrenceSequence: 0,
+    status: input.status ?? "scheduled",
     deliveryAttempts: 0,
     claimedAt: null,
     deliveredAt: null,
     cancelledAt: null,
+    pausedAt: input.status === "paused" ? new Date() : null,
     deliveryChannelId: null,
     deliveryMessageId: null,
     lastErrorCode: null,
@@ -99,9 +148,12 @@ function reminderRepo() {
     updatedAt: new Date(),
   };
   return {
-    createReminder: vi.fn(async () => reminder),
+    createReminder: vi.fn(async (created: Record<string, unknown>) => ({ ...reminder, ...created, reminderId: reminder.reminderId })),
     listScheduledRemindersForRequester: vi.fn(async () => [reminder]),
     cancelReminderForRequester: vi.fn(async () => reminder),
+    pauseReminderForRequester: vi.fn(async () => ({ ...reminder, status: "paused", pausedAt: new Date() })),
+    getReminderForRequester: vi.fn(async () => reminder),
+    resumeReminderForRequester: vi.fn(async (resumed: { scheduledFor: Date }) => ({ ...reminder, ...resumed, status: "scheduled", pausedAt: null })),
     getUserPreference: vi.fn(async () => undefined),
     auditTool: vi.fn(async () => undefined),
   };

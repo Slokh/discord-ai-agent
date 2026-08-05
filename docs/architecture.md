@@ -30,11 +30,12 @@ Code-change tool call
   -> Discord task message reaches a terminal state
 
 Reminder tool call
-  -> durable requester-owned reminder row
+  -> durable requester-owned reminder or recurring-series row
   -> delayed pg-boss wakeup or reconciliation
   -> atomic delivery claim and current permission check
   -> nonce-deduplicated Discord notification
   -> delivered message identity committed to Postgres
+  -> recurring series atomically advances and enqueues its next wakeup
 ```
 
 `src/index.ts` selects process roles and starts adapters. `src/runtime/applicationServices.ts` is the shared composition root for repositories, model access, randomness, payments, and delivery state; production and the local prompt runner consume the same services. `src/config/env.ts` is the canonical configuration schema. `src/jobs/queue.ts` registers recurring and queued work.

@@ -82,9 +82,9 @@ Randomness and wagers add two rules: exposure is reserved before entropy is cons
 
 ## Reminders
 
-A member may create a one-shot reminder in ordinary language, list their upcoming reminders, or cancel one by its returned ID. The model resolves natural language using the requester's validated timezone context and code accepts only an exact future instant. Postgres owns the reminder; a delayed queue job is only a wakeup, and periodic reconciliation restores missed wakeups after downtime.
+A member may create a one-shot or recurring reminder in ordinary language, list upcoming reminders, cancel either kind, and pause or resume a recurring series by its returned ID. The model resolves natural language using the requester's validated timezone context. Code accepts only an exact future first instant and, for recurrence, a matching daily, weekly, or monthly local wall-clock rule. Postgres owns one row for the whole series; a delayed queue job is only a wakeup, and periodic reconciliation restores missed wakeups after downtime.
 
-Delivery returns to the originating channel, mentions only the requester, and revalidates that the requester can still view the channel. A removed member, deleted channel, or lost visibility fails closed rather than moving private reminder text to another channel or DM. Recurring reminders are intentionally outside the first lifecycle.
+Delivery returns to the originating channel, mentions only the requester, and revalidates that the requester can still view the channel. A removed member, deleted channel, or lost visibility fails closed rather than moving private reminder text to another channel or DM. Each delivered occurrence advances a durable sequence before enqueueing the next wakeup. Downtime collapses missed intervals into one overdue delivery followed by the next future occurrence, rather than flooding the channel. Recurrence stays in the requester's IANA timezone: a repeated fall-back wall time fires once at the earlier instant, while a nonexistent spring-forward wall time moves to the first valid minute after the gap. Monthly rules skip months without their requested day.
 
 ## Improvement loop
 

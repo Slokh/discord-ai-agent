@@ -1,7 +1,9 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createReminderDeliveryRunner } from "../../src/reminders/reminderDelivery.js";
 
 describe("reminder delivery", () => {
+  afterEach(() => vi.useRealTimers());
+
   it("revalidates visibility, mentions only the requester, and marks delivery", async () => {
     const repo = deliveryRepo();
     const send = vi.fn(async (payload) => ({ id: "delivered-message", channelId: "channel", payload }));
@@ -16,7 +18,22 @@ describe("reminder delivery", () => {
       nonce: expect.stringMatching(/^[a-f0-9]{20}$/),
       enforceNonce: true,
     }));
-    expect(repo.markReminderDelivered).toHaveBeenCalledWith({ reminderId: "r_1", channelId: "channel", messageId: "delivered-message" });
+    expect(repo.markReminderDelivered).toHaveBeenCalledWith({ reminderId: "r_1", channelId: "channel", messageId: "delivered-message", nextScheduledFor: undefined });
+  });
+
+  it("advances a recurring reminder and returns its next durable wakeup", async () => {
+    vi.useFakeTimers({ now: new Date("2026-08-05T12:00:00Z") });
+    const repo = deliveryRepo({ recurring: true });
+    const send = vi.fn(async (payload) => ({ id: "delivered-message", channelId: "channel", payload }));
+    const runner = createReminderDeliveryRunner({ client: discordClient({ canView: true, send }) as never, config: { maxReplyChars: 1800 } as never, repo: repo as never });
+
+    const wakeup = await runner.deliver("r_1");
+
+    expect(repo.markReminderDelivered).toHaveBeenCalledWith(expect.objectContaining({
+      reminderId: "r_1",
+      nextScheduledFor: new Date("2026-08-06T09:00:00Z"),
+    }));
+    expect(wakeup).toEqual({ reminderId: "r_1", scheduledFor: new Date("2026-08-06T09:00:00Z"), occurrenceSequence: 1 });
   });
 
   it("fails terminally instead of leaking into another channel when visibility is lost", async () => {
@@ -33,33 +50,39 @@ describe("reminder delivery", () => {
   });
 });
 
-function deliveryRepo() {
+function deliveryRepo(input: { recurring?: boolean } = {}) {
+  const reminder = {
+    reminderId: "r_1",
+    requestKey: "key",
+    guildId: "guild",
+    channelId: "channel",
+    requesterId: "user",
+    sourceMessageId: "source",
+    reminderText: "check the oven",
+    timezone: "UTC",
+    scheduledFor: new Date("2026-08-05T09:00:00Z"),
+    recurrence: input.recurring ? { frequency: "daily" as const, interval: 1, localTime: "09:00", anchorDate: "2026-08-05" } : null,
+    occurrenceSequence: 0,
+    status: "delivering",
+    deliveryAttempts: 1,
+    claimedAt: new Date(),
+    deliveredAt: null,
+    cancelledAt: null,
+    pausedAt: null,
+    deliveryChannelId: null,
+    deliveryMessageId: null,
+    lastErrorCode: null,
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  };
   return {
-    claimReminderForDelivery: vi.fn(async () => ({
-      reminderId: "r_1",
-      requestKey: "key",
-      guildId: "guild",
-      channelId: "channel",
-      requesterId: "user",
-      sourceMessageId: "source",
-      reminderText: "check the oven",
-      timezone: "UTC",
-      scheduledFor: new Date("2026-08-05T12:00:00Z"),
-      status: "delivering",
-      deliveryAttempts: 1,
-      claimedAt: new Date(),
-      deliveredAt: null,
-      cancelledAt: null,
-      deliveryChannelId: null,
-      deliveryMessageId: null,
-      lastErrorCode: null,
-      createdAt: new Date(),
-      updatedAt: new Date(),
-    })),
-    markReminderDelivered: vi.fn(async () => true),
+    claimReminderForDelivery: vi.fn(async () => reminder),
+    markReminderDelivered: vi.fn(async (delivered: { nextScheduledFor?: Date }) => delivered.nextScheduledFor
+      ? { ...reminder, status: "scheduled", scheduledFor: delivered.nextScheduledFor, occurrenceSequence: 1 }
+      : { ...reminder, status: "delivered" }),
     markReminderFailed: vi.fn(async () => true),
     releaseReminderDelivery: vi.fn(async () => true),
-    listDueReminderIds: vi.fn(async () => []),
+    listDueReminderWakeups: vi.fn(async () => []),
   };
 }
 

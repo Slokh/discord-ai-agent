@@ -74,6 +74,8 @@ The worker runs `improvement.reconcile` immediately at startup, whenever a membe
 
 Each pass also refreshes active GitHub pull-request work, retries verifying cases against the latest durable deployment, and refreshes the case's durable automation health. The health projection distinguishes progressing, waiting, blocked, and complete; names the next action and registered retry trigger; and advances its progress clock only when the underlying task, work attempt, clarification, or verification receipt changes. `reconciliation.stalled` therefore means no material progress for the configured interval, not merely an old case timestamp. Waiting for a reporter, automated repair retry, PR merge, deployment promotion, reconciliation pass, or traffic-backed production observation remains explicit and inspectable. Deterministic assessment and repair task IDs, case-version locks, snapshot keys, triage application keys, work source keys, and verification receipt keys make concurrent or repeated passes harmless. Reconciliation never merges cases, opens GitHub issues, replays an old mutation, copies private evidence into public GitHub state, or resolves a case without the normal deployed receipt.
 
+`improve health --hours <n>` is the aggregate effectiveness view over that same ledger. Its bounded cohort reports signal-source mix, triage/work/verification/resolution throughput, phase median and p95 latency, automated-repair outcomes and retries, operator actions and exact review blockers, post-resolution recurrence by opaque root-cluster key, and observed task cost/latency coverage. Its current snapshot groups lifecycle state, automation state, blockers, retry triggers, and stalled cases. The report never reads or emits titles, summaries, prompts, replies, identities, message IDs, evidence bodies, or artifact content. Missing cost events reduce the explicit coverage rate instead of becoming zero-cost work. The scheduled production-observation workflow retains this JSON beside revision quality and emits a warning only when blocked, stalled, retry-exhausted, or recurring cases cross the built-in nonzero attention threshold.
+
 ## Deployment verification
 
 `improve verify <case-id> --revision <sha>` is read-only by default. It loads the active contract, exact durable deployment ID, and source-owned typed proofs, then emits one result per check without copying prompt, answer, event-summary, or tool-output content. `--apply` rebuilds the authoritative proof immediately before writing an immutable receipt. There is no operator-supplied execution override.
@@ -99,6 +101,7 @@ Use the configured database explicitly:
 
 ```bash
 npm run improve -- --target local inbox
+npm run improve -- --target local health --hours 720
 npm run improve -- --target local show <case-id>
 npm run improve -- --target local triage <case-id>
 npm run improve -- --target local triage <case-id> --apply
@@ -117,7 +120,7 @@ npm run improve -- --target local verify <case-id> --revision <sha> --apply
 
 Production commands require `--target production --confirm-production`, `NODE_ENV=production`, and a non-local configured database host. The CLI refuses a target/database mismatch.
 
-`inbox` includes each case's automation health, and `show` returns it beside the complete case record. Inspect `blocker`, `nextAction`, `retryTrigger`, and `lastProgressAt` before intervening. A `waiting` case already has a durable wakeup owner; operator work is required only when the state is `blocked` or the named retry owner is itself unhealthy.
+`inbox` includes each case's automation health, and `show` returns it beside the complete case record. `health` answers whether the loop is effective without exposing case content; its default cohort is 30 days and `--hours` is bounded to one hour through one year. Inspect `blocker`, `nextAction`, `retryTrigger`, and `lastProgressAt` before intervening. A `waiting` case already has a durable wakeup owner; operator work is required only when the state is `blocked` or the named retry owner is itself unhealthy.
 
 `link-pr` accepts only a pull request in the configured repository and derives its state and revisions from the live GitHub API. Open pull requests move the case to `in_progress`; a closed unmerged pull request returns it to `actionable`; a merged pull request moves it to `verifying`. Exact retries update the same deterministic work attempt. `sync-prs`, the scheduled reconciler, and release promotion refresh active PR attempts so a merged and deployed PR can proceed directly through verification. Reconciliation failures are reported without blocking an otherwise valid release.
 

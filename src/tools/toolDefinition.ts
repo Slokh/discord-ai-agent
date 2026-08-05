@@ -3,7 +3,7 @@ import type { AppConfig } from "../config/env.js";
 
 /** The complete model-facing surface, grouped by the capability that owns it. */
 export const TOOL_NAMES_BY_CAPABILITY = {
-  foundation: ["loadSkillContext"],
+  foundation: ["loadSkillContext", "setMyTimezone"],
   discordContext: [
     "composeDiscordResponse", "findDiscordUsers", "findDiscordChannels", "searchDiscordHistory",
     "getRecentAgentMemory", "getAgentMemoryStats", "getRecentDiscordMessages", "getDiscordMessageContext",

@@ -182,6 +182,9 @@ describe.skipIf(!runDbTests)("forward migration upgrades", () => {
         await expect(client.query("SELECT to_regclass($1) AS relation", [retired]))
           .resolves.toEqual(expect.objectContaining({ rows: [{ relation: null }] }));
       }
+      await client.query(await readFile(path.resolve("migrations/040_user_preferences.sql"), "utf8"));
+      await expect(client.query("SELECT user_id, preference_key, preference_value FROM user_preferences LIMIT 0"))
+        .resolves.toEqual(expect.objectContaining({ rows: [] }));
     } finally {
       await client.query("RESET search_path").catch(() => undefined);
       await client.query(`DROP SCHEMA IF EXISTS ${schema} CASCADE`).catch(() => undefined);

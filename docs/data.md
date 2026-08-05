@@ -30,6 +30,7 @@ Focused repositories under `src/db/` own persistence:
 | Audits and costs | `auditRepository.ts` |
 | Payments and randomness | focused payment repositories and `rngRepository.ts` |
 | Server overlays and model settings | `serverOverlayRepository.ts`, `agentSettingsRepository.ts` |
+| Typed per-user preferences | `userPreferenceRepository.ts`; capability-owned validators interpret each key |
 
 `src/db/repositories.ts` delegates to these modules for existing callers. New durable behavior belongs in the focused owner.
 
@@ -64,6 +65,8 @@ Memory may preserve a subject, preference, or prior result. It cannot:
 - authorize a new mutation;
 - establish a current price, balance, availability, or transaction state;
 - replace a persisted game or wager record.
+
+Explicit user preferences that must apply across conversation scopes live in the generic `user_preferences` store rather than conversational memory. Each preference key has a capability-owned validator and model/tool contract; arbitrary prompt-derived values never become settings. Timezone is the first key: the current requester may set a validated IANA timezone or remove the override, with UTC as the unstored default.
 
 Undo operations update both visible Discord output when possible and durable conversation state. They do not rewrite the canonical audit history.
 
@@ -127,7 +130,7 @@ DB integration tests mirror that ownership boundary. Each test file creates, mig
 
 Worker maintenance bounds canonical runtime events, runtime sessions, artifacts, transient budget reservations, and audit logs using the configured retention windows. A value of zero disables the corresponding automatic cleanup. Conversation compaction separately limits raw continuity rows.
 
-Privacy deletion covers the archive, embeddings, attachments, emoji-derived state, reporter-owned improvement signals and linked private evidence, conversation threads and snapshots derived from the requester, agent-runtime sessions/artifacts, and code-update tasks. Empty cases are removed; shared cases retain only evidence not derived from the deleted reporter. Entire affected conversation threads are removed because summaries and assistant/tool turns may derive from the deleted message even when they have another author. Operational payment/randomness evidence may retain redacted structure when required to explain a transaction, but it must not retain deleted private message bodies unnecessarily.
+Privacy deletion covers the archive, embeddings, attachments, emoji-derived state, typed user preferences, reporter-owned improvement signals and linked private evidence, conversation threads and snapshots derived from the requester, agent-runtime sessions/artifacts, and code-update tasks. Empty cases are removed; shared cases retain only evidence not derived from the deleted reporter. Entire affected conversation threads are removed because summaries and assistant/tool turns may derive from the deleted message even when they have another author. Operational payment/randomness evidence may retain redacted structure when required to explain a transaction, but it must not retain deleted private message bodies unnecessarily.
 
 ## Verification
 

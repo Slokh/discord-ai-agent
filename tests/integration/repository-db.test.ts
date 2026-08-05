@@ -482,10 +482,12 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
 
   it("records privacy deletion for a user with no prior indexed messages", async () => {
     const userId = `user-${randomUUID()}`;
+    await repo.setUserPreference({ userId, key: "timezone", value: "America/New_York" });
     await expect(repo.requestUserDeletion(userId)).resolves.toBeUndefined();
 
     const result = await pool.query("SELECT user_id FROM privacy_deletions WHERE user_id = $1", [userId]);
     expect(result.rows[0]?.user_id).toBe(userId);
+    await expect(repo.getUserPreference(userId, "timezone")).resolves.toBeUndefined();
   });
 
   it("creates and updates Discord delivery obligations", async () => {
@@ -2942,6 +2944,33 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
     await expect(repo.clearGuildChatModelOverride(guildId)).resolves.toBe(true);
     await expect(repo.clearGuildChatModelOverride(guildId)).resolves.toBe(false);
     await expect(repo.getGuildAgentSettings(guildId)).resolves.toBeUndefined();
+  });
+
+  it("stores independent typed values in the generic per-user preference lifecycle", async () => {
+    const userId = `user-${randomUUID()}`;
+
+    await expect(repo.getUserPreference(userId, "timezone")).resolves.toBeUndefined();
+    await expect(repo.setUserPreference({
+      userId,
+      key: "timezone",
+      value: "America/New_York",
+    })).resolves.toEqual(expect.objectContaining({
+      userId,
+      key: "timezone",
+      value: "America/New_York",
+    }));
+    await repo.setUserPreference({ userId, key: "timezone", value: "Europe/London" });
+    await repo.setUserPreference({ userId, key: "future_example", value: { enabled: true } });
+    await expect(repo.getUserPreference(userId, "timezone")).resolves.toEqual(expect.objectContaining({
+      value: "Europe/London",
+    }));
+    await expect(repo.getUserPreference(userId, "future_example")).resolves.toEqual(expect.objectContaining({
+      value: { enabled: true },
+    }));
+    await expect(repo.clearUserPreference(userId, "timezone")).resolves.toBe(true);
+    await expect(repo.getUserPreference(userId, "future_example")).resolves.toBeDefined();
+    await expect(repo.clearUserPreferences(userId)).resolves.toBe(1);
+    await expect(repo.getUserPreference(userId, "future_example")).resolves.toBeUndefined();
   });
 
 });

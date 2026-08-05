@@ -3,6 +3,7 @@ import type { AgentPromptContribution, PreparedAgentCapability } from "../agent/
 import { installedToolContracts } from "./toolContracts.js";
 export { installedToolContracts } from "./toolContracts.js";
 import { coreToolHandlers } from "../tools/handlers/core.js";
+import { userSettingsToolHandlers } from "../tools/handlers/user-settings.js";
 import { discordRetrievalToolHandlers } from "../tools/handlers/discord-retrieval.js";
 import { opsToolHandlers } from "../tools/handlers/ops.js";
 import { improvementToolHandlers } from "../tools/handlers/improvements.js";
@@ -21,7 +22,7 @@ import {
 import type { LocalToolHandler } from "../tools/handlers/types.js";
 import { prepareAgentModelCapability } from "./agentModel.js";
 import { prepareDiscordEmojiCapability } from "./discordEmoji.js";
-import { freshDataPromptContribution } from "./freshData.js";
+import { prepareUserTimezoneCapability } from "./userTimezone.js";
 import { imageContextPromptContribution } from "./imageContext.js";
 import { prepareRandomGameCapability } from "./randomGames.js";
 
@@ -50,9 +51,12 @@ export function defineCapability(declaration: CapabilityDeclaration): Capability
 const declarations: readonly CapabilityDeclaration[] = ([
   {
     id: "foundation",
-    summary: "Stable agent instructions and repository skill loading.",
+    summary: "Stable agent instructions, requester preferences, and repository skill loading.",
     toolNames: TOOL_NAMES_BY_CAPABILITY.foundation,
-    prepareTurn: () => ({ promptContributions: [freshDataPromptContribution()] }),
+    prepareTurn: async (ctx) => {
+      const capability = await prepareUserTimezoneCapability(ctx);
+      return { promptContributions: [capability.promptContribution] };
+    },
   },
   {
     id: "discordContext",
@@ -135,6 +139,7 @@ const declarations: readonly CapabilityDeclaration[] = ([
 
 const handlerFamilies = [
   coreToolHandlers,
+  userSettingsToolHandlers,
   discordRetrievalToolHandlers,
   opsToolHandlers,
   improvementToolHandlers,

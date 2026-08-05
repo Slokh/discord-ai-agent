@@ -5,6 +5,7 @@ import type { DiscordAttachmentContext, DiscordReplyContext, DiscordReplyContext
 import { previewText } from "../util/logger.js";
 import { persistDiscordMessage, reactionSummariesFromMessage } from "./messagePersistence.js";
 import { classifyDiscordWriteError } from "./api.js";
+import { discordEmbedContextsFromMessage } from "./embedContext.js";
 
 export const REPLY_CHAIN_CONTEXT_MESSAGE_LIMIT = 24;
 type UsableMessageSnapshot = MessageSnapshot & { id: string; channelId: string };
@@ -94,6 +95,7 @@ export async function resolveDiscordReplyContext(input: {
       referencedAuthorId: context.authorId,
       referencedContentPreview: previewText(context.content),
       attachmentCount: context.attachmentSummaries.length,
+      embedCount: context.embeds?.length ?? 0,
       reactionKindCount: chain.reduce((count, message) => count + (message.reactionSummaries?.length ?? 0), 0)
     },
     "Resolved Discord reply chain context"
@@ -113,6 +115,7 @@ function discordReplyContextMessageFromMessage(message: Message | UsableMessageS
     content: message.content ?? "",
     attachmentSummaries: attachments.map(discordAttachmentSummary),
     attachments,
+    embeds: discordEmbedContextsFromMessage(message),
     reactionSummaries: discordReplyReactionSummaries(message),
     createdAt: message.createdAt?.toISOString?.() ?? null,
     url: message.url ?? null,

@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { runQueuedAgentRuntimeExecution } from "../../src/discord/agentDelivery.js";
+import { fetchDiscordMessage } from "../../src/discord/requestContext.js";
 
 describe("queued Discord agent delivery", () => {
   it("does not rerun an execution whose Discord reply was already delivered", async () => {
@@ -27,5 +28,16 @@ describe("queued Discord agent delivery", () => {
     );
 
     expect(getByExecutionId).toHaveBeenCalledWith("execution-1");
+  });
+
+  it("can force-refresh a queued source message so delayed Discord previews are visible", async () => {
+    const message = { id: "message-1" };
+    const fetch = vi.fn(async () => message);
+    const client = {
+      channels: { fetch: vi.fn(async () => ({ messages: { fetch } })) },
+    };
+
+    await expect(fetchDiscordMessage(client as never, "channel-1", "message-1", true)).resolves.toBe(message);
+    expect(fetch).toHaveBeenCalledWith({ message: "message-1", force: true });
   });
 });

@@ -45,7 +45,7 @@
     "embeddings:backfill": "tsx scripts/backfillEmbeddings.ts",
     "embeddings:worker": "tsx scripts/embeddingWorker.ts",
     "embeddings:reprioritize": "tsx scripts/reprioritizeEmbeddingQueue.ts",
-    "polls:backfill": "tsx scripts/backfillNativePollText.ts",
+    "discord-text:backfill": "tsx scripts/backfillDiscordDerivedText.ts",
     "doctor": "tsx scripts/doctor.ts",
     "prompt": "tsx scripts/prompt.ts",
     "eval": "tsx scripts/eval.ts",

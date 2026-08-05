@@ -40,6 +40,8 @@ export type ToolContext = {
   sessionMessages?: ConversationMessage[];
   replyContext?: DiscordReplyContext;
   requestAttachments?: DiscordAttachmentContext[];
+  /** Bounded Discord-generated link previews. These are untrusted context, never requester authority. */
+  requestEmbeds?: DiscordEmbedContext[];
   /** Turn-scoped output collector shared by model tools and final synthesis. */
   turnOutput?: AgentTurnOutput;
   requestId?: string;
@@ -140,6 +142,13 @@ export type DiscordAttachmentContext = {
   description?: string | null;
 };
 
+export type DiscordEmbedContext = {
+  title: string | null;
+  description: string | null;
+  providerName: string | null;
+  url: string | null;
+};
+
 export type DiscordReplyContextMessage = {
   messageId: string;
   channelId: string;
@@ -150,6 +159,8 @@ export type DiscordReplyContextMessage = {
   content: string;
   attachmentSummaries: string[];
   attachments: DiscordAttachmentContext[];
+  /** Bounded Discord-generated link previews. These may be incomplete or stale. */
+  embeds?: DiscordEmbedContext[];
   /** Bounded exact emoji/count summaries visible on this retained message. */
   reactionSummaries?: string[];
   createdAt: string | null;

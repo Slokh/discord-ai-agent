@@ -12,6 +12,7 @@ import type { ToolContext } from "../tools/types.js";
 import { durationMs, logger } from "../util/logger.js";
 import { addDiscordMessageReaction, createDiscordGuildEmoji, deleteDiscordMessageById, fetchDiscordAttachment, fetchDiscordGuildEmojis, fetchDiscordGuildMembers, fetchDiscordUserAvatar, sendDiscordPollMessage } from "./api.js";
 import { discordChannelThreadKey } from "./mentionParsing.js";
+import { discordEmbedContextsFromMessage } from "./embedContext.js";
 import { DiscordResponseSink } from "./responseSink.js";
 import {
   createDiscordDeliveryIntent,
@@ -62,7 +63,7 @@ export async function runQueuedAgentRuntimeExecution(
     requestLogger.warn({ err: error, turnEnvelopeArtifactId: job.turnEnvelopeArtifactId }, "Failed to load queued agent turn envelope");
     return null;
   });
-  const message = await fetchDiscordMessage(input.client, job.channelId, job.messageId);
+  const message = await fetchDiscordMessage(input.client, job.channelId, job.messageId, true);
   if (!message.inGuild()) throw new Error("Queued agent runtime execution source message is no longer a guild message.");
   const responseChannelId = job.responseChannelId ?? turnEnvelope?.delivery.statusChannelId ?? undefined;
   const responseMessageId = job.responseMessageId ?? turnEnvelope?.delivery.statusMessageId ?? undefined;
@@ -103,6 +104,7 @@ export async function runQueuedAgentRuntimeExecution(
     text: job.text,
     rawContent: job.rawContent,
     botRoleIds: job.botRoleIds,
+    requestEmbeds: discordEmbedContextsFromMessage(message),
     messageStartedAt: parseDateMs(job.enqueuedAt) ?? Date.now(),
     turnEnvelope,
     requestKind: turnEnvelope?.requestKind ?? "message",
@@ -192,6 +194,7 @@ export async function executeDiscordAgentRequest(
   const mentionedChannelIds = turnEnvelope.mentionedChannelIds;
   const replyContext = turnEnvelope.replyContext ?? undefined;
   const requestAttachments = turnEnvelope.requestAttachments;
+  const requestEmbeds = turnEnvelope.requestEmbeds ?? [];
   const priorSessionMessages = preparedTurn.priorSessionMessages;
 
   try {
@@ -245,6 +248,7 @@ export async function executeDiscordAgentRequest(
       sessionMessages: priorSessionMessages,
       replyContext,
       requestAttachments,
+      requestEmbeds,
       requestId: request.requestId,
       requestMessageId: turnEnvelope.requestId,
       mutationAuthorizedByCurrentInput: (turnEnvelope.requestKind ?? "message") === "message",
@@ -422,7 +426,8 @@ export async function executeDiscordAgentRequest(
           requestKind: turnEnvelope.requestKind ?? "message",
           sourceMessageId: message.id,
           rawContent: request.rawContent,
-          attachments: requestAttachments
+          attachments: requestAttachments,
+          embeds: requestEmbeds
         }
       },
       assistant: {
@@ -588,7 +593,8 @@ export async function executeDiscordAgentRequest(
         metadata: {
           discordUrl: message.url,
           rawContent: request.rawContent,
-          attachments: requestAttachments
+          attachments: requestAttachments,
+          embeds: requestEmbeds
         }
       },
       assistant: {

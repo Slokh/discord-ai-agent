@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { discordPromptText } from "../../src/discord/messageIngress.js";
+import { discordPromptText, queueIncomingMessageEmbedding } from "../../src/discord/messageIngress.js";
 import { resolveDiscordReplyContext } from "../../src/discord/replyContext.js";
 
 describe("Discord forwarded message context", () => {
@@ -11,6 +11,12 @@ describe("Discord forwarded message context", () => {
       author: { id: "bot-a", username: "ai", globalName: "AI", bot: true },
       member: null,
       content: "The forwarded answer and its details.",
+      embeds: [{
+        title: "Linked context",
+        description: "A Discord preview",
+        provider: { name: "Example" },
+        url: "https://example.test/story#discussion",
+      }],
       attachments: new Map(),
       reactions: {
         cache: new Map([[
@@ -45,6 +51,12 @@ describe("Discord forwarded message context", () => {
       authorId: "bot-a",
       content: "The forwarded answer and its details.",
       forwarded: true,
+      embeds: [{
+        title: "Linked context",
+        description: "A Discord preview",
+        providerName: "Example",
+        url: "https://example.test/story",
+      }],
       reactionSummaries: ["<:party:101> ×2"],
     }));
     expect(context?.chain).toHaveLength(1);
@@ -84,5 +96,29 @@ describe("Discord forwarded message context", () => {
       .toBe("explain this");
     expect(discordPromptText({ content: "", reference: null, messageSnapshots: new Map() } as any, "bot-a", [], 1))
       .toContain("attached content");
+    expect(discordPromptText({ content: "", reference: null, messageSnapshots: new Map() } as any, "bot-a", [], 0, 1))
+      .toContain("linked preview context");
+  });
+
+  it("queues an embed-only member message for indexing", async () => {
+    const enqueueMessageEmbedding = vi.fn(async () => "job-1");
+    queueIncomingMessageEmbedding(
+      { jobs: { enqueueMessageEmbedding } as any },
+      {
+        id: "message-1",
+        channelId: "channel-1",
+        content: "",
+        embeds: [{ title: "Linked page", url: "https://example.test/page" }],
+        author: { id: "user-1", bot: false },
+        createdTimestamp: Date.now(),
+      } as any,
+      "bot-a",
+      "message_create",
+    );
+
+    await vi.waitFor(() => expect(enqueueMessageEmbedding).toHaveBeenCalledWith(
+      "message-1",
+      expect.objectContaining({ priority: expect.any(Number) }),
+    ));
   });
 });

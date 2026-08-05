@@ -1,6 +1,6 @@
 import type { AgentRuntimeRepository, AgentRuntimeSessionRecord } from "../db/agentRuntimeRepository.js";
 import type { ConversationMessage } from "../db/repositories.js";
-import type { DiscordAttachmentContext, DiscordMentionedUserIdentity, DiscordReplyContext } from "../tools/types.js";
+import type { DiscordAttachmentContext, DiscordEmbedContext, DiscordMentionedUserIdentity, DiscordReplyContext } from "../tools/types.js";
 import type { DiscordInteractionSubmission } from "../discord/components/interactionNormalization.js";
 
 export type AgentRuntimeConversationMessageSnapshot = {
@@ -39,6 +39,7 @@ export type AgentRuntimeTurnEnvelope = {
   mentionedChannelIds: string[];
   replyContext: DiscordReplyContext | null;
   requestAttachments: DiscordAttachmentContext[];
+  requestEmbeds?: DiscordEmbedContext[];
   sessionMessages: AgentRuntimeConversationMessageSnapshot[];
   delivery: {
     statusChannelId: string | null;
@@ -69,6 +70,7 @@ export function buildAgentRuntimeTurnEnvelope(input: {
   mentionedChannelIds: string[];
   replyContext?: DiscordReplyContext | null;
   requestAttachments: DiscordAttachmentContext[];
+  requestEmbeds?: DiscordEmbedContext[];
   sessionMessages: ConversationMessage[];
   statusChannelId?: string | null;
   statusMessageId?: string | null;
@@ -103,6 +105,7 @@ export function buildAgentRuntimeTurnEnvelope(input: {
     mentionedChannelIds: input.mentionedChannelIds,
     replyContext: input.replyContext ?? null,
     requestAttachments: input.requestAttachments,
+    requestEmbeds: input.requestEmbeds ?? [],
     sessionMessages: input.sessionMessages.map(snapshotConversationMessage),
     delivery: {
       statusChannelId: input.statusChannelId ?? null,
@@ -152,6 +155,7 @@ export async function storeAgentRuntimeTurnEnvelope(input: {
       visibleChannelCount: input.envelope.visibleChannelIds.length,
       sessionMessageCount: input.envelope.sessionMessages.length,
       attachmentCount: input.envelope.requestAttachments.length,
+      embedCount: input.envelope.requestEmbeds?.length ?? 0,
       hasReplyContext: Boolean(input.envelope.replyContext)
     }
   });
@@ -183,7 +187,7 @@ export async function loadAgentRuntimeTurnEnvelope(input: {
   if (parsed.schemaVersion !== 2 || parsed.source !== "discord") {
     throw new Error(`Unsupported agent runtime turn envelope artifact: ${input.artifactId}`);
   }
-  return parsed;
+  return { ...parsed, requestEmbeds: parsed.requestEmbeds ?? [] };
 }
 
 export function replaceAgentRuntimeTurnEnvelopeSessionMessages(
@@ -261,7 +265,8 @@ export function agentRuntimeInputLinesFromEnvelope(envelope: AgentRuntimeTurnEnv
       mentionedUserIds: envelope.mentionedUserIds,
       mentionedChannelIds: envelope.mentionedChannelIds,
       replyContextMessageId: envelope.replyContext?.messageId ?? null,
-      attachmentCount: envelope.requestAttachments.length
+      attachmentCount: envelope.requestAttachments.length,
+      embedCount: envelope.requestEmbeds?.length ?? 0
     }
   };
   return [JSON.stringify(line)];

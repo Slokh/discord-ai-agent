@@ -16,6 +16,7 @@ import * as improvementReporterConversations from "./improvementReporterConversa
 import * as improvementWork from "./improvementWorkRepository.js";
 import * as improvementVerifications from "./improvementVerificationRepository.js";
 import * as retrieval from "./retrievalRepository.js";
+import * as reminders from "./reminderRepository.js";
 import * as serverOverlays from "./serverOverlayRepository.js";
 import * as userPreferences from "./userPreferenceRepository.js";
 import type { PersistedMessage } from "./types.js";
@@ -24,6 +25,7 @@ export type * from "./types.js";
 export type { DiscordEmojiCultureProfile, DiscordEmojiUsageExample } from "./discordEmojiUsageRepository.js";
 export type { GuildAgentSettings } from "./agentSettingsRepository.js";
 export type { UserPreference } from "./userPreferenceRepository.js";
+export type { ScheduledReminder, ReminderStatus } from "./reminderRepository.js";
 
 type PoolFunction = (pool: DbPool, ...args: any[]) => any;
 type BoundRepository<T extends Record<string, unknown>> = {
@@ -59,6 +61,7 @@ export function createAppDatabase(pool: DbPool) {
     ...bindRepository(pool, improvementWork),
     ...bindRepository(pool, improvementVerifications),
     ...bindRepository(pool, retrieval),
+    ...bindRepository(pool, reminders),
     ...bindRepository(pool, serverOverlays),
     ...bindRepository(pool, userPreferences),
 
@@ -75,6 +78,7 @@ export function createAppDatabase(pool: DbPool) {
     async requestUserDeletion(userId: string) {
       await improvements.clearImprovementDataForUser(pool, userId);
       await userPreferences.clearUserPreferences(pool, userId);
+      await reminders.clearRemindersForUser(pool, userId);
       await discordArchive.requestUserDeletion(pool, userId);
       await discordEmojiUsage.clearDiscordEmojiUsageForAuthor(pool, userId);
     },

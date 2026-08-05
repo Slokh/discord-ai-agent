@@ -846,7 +846,7 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
 
     const result = await runDataRetentionOnce({
       db: pool,
-      config: { runtimeEventsDays: 30, auditDays: 30, runtimeSessionsDays: 45 },
+      config: { runtimeEventsDays: 30, auditDays: 30, runtimeSessionsDays: 45, terminalRemindersDays: 30 },
       now: new Date("2026-03-01T00:00:00Z"),
       limit: 10
     });

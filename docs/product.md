@@ -11,6 +11,7 @@ Discord AI Agent is a shared assistant for a private Discord community. A member
 - Useful partial results when a complete result is impossible.
 - Reviewable code-update PRs when a member asks the bot to change itself.
 - Enough retained evidence to explain a wrong, slow, missing, or surprising result.
+- Durable conversational reminders that survive restarts and can be listed or cancelled without commands.
 
 The primary deployment is a technically operated friend group, club, or small community. The system favors clear behavior, low operational burden, and strong protection of the few boundaries that carry real consequences.
 
@@ -78,6 +79,12 @@ Randomness and wagers add two rules: exposure is reserved before entropy is cons
 - Long-running code updates edit a dedicated task status message and finish with a PR or a concrete terminal reason.
 - Deployment announcements explain member-visible and internal changes concretely in plain English. Technical names are included only when useful and are explained rather than presented as unexplained jargon; available details are not hidden behind generic maintenance or reliability language.
 - Internal tool names, implementation jargon, canned report templates, and chain-of-thought claims do not belong in ordinary answers.
+
+## Reminders
+
+A member may create a one-shot reminder in ordinary language, list their upcoming reminders, or cancel one by its returned ID. The model resolves natural language using the requester's validated timezone context and code accepts only an exact future instant. Postgres owns the reminder; a delayed queue job is only a wakeup, and periodic reconciliation restores missed wakeups after downtime.
+
+Delivery returns to the originating channel, mentions only the requester, and revalidates that the requester can still view the channel. A removed member, deleted channel, or lost visibility fails closed rather than moving private reminder text to another channel or DM. Recurring reminders are intentionally outside the first lifecycle.
 
 ## Improvement loop
 

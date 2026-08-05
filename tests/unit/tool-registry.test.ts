@@ -17,7 +17,7 @@ describe("toolRegistry", () => {
   });
 
   it("keeps the complete local model tool contract below its prompt-cost budget", () => {
-    expect(Buffer.byteLength(JSON.stringify(localToolDefinitionsForModel()), "utf8")).toBeLessThan(80_000);
+    expect(Buffer.byteLength(JSON.stringify(localToolDefinitionsForModel()), "utf8")).toBeLessThan(82_000);
   });
 
   it("keeps operational reads behind the strict operator policy", () => {

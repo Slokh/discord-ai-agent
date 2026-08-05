@@ -4,6 +4,7 @@ import { installedToolContracts } from "./toolContracts.js";
 export { installedToolContracts } from "./toolContracts.js";
 import { coreToolHandlers } from "../tools/handlers/core.js";
 import { userSettingsToolHandlers } from "../tools/handlers/user-settings.js";
+import { reminderToolHandlers } from "../tools/handlers/reminders.js";
 import { discordRetrievalToolHandlers } from "../tools/handlers/discord-retrieval.js";
 import { opsToolHandlers } from "../tools/handlers/ops.js";
 import { improvementToolHandlers } from "../tools/handlers/improvements.js";
@@ -57,6 +58,11 @@ const declarations: readonly CapabilityDeclaration[] = ([
       const capability = await prepareUserTimezoneCapability(ctx);
       return { promptContributions: [capability.promptContribution] };
     },
+  },
+  {
+    id: "reminders",
+    summary: "Durable requester-owned one-shot reminder creation, listing, cancellation, and delivery.",
+    toolNames: TOOL_NAMES_BY_CAPABILITY.reminders,
   },
   {
     id: "discordContext",
@@ -140,6 +146,7 @@ const declarations: readonly CapabilityDeclaration[] = ([
 const handlerFamilies = [
   coreToolHandlers,
   userSettingsToolHandlers,
+  reminderToolHandlers,
   discordRetrievalToolHandlers,
   opsToolHandlers,
   improvementToolHandlers,

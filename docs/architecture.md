@@ -9,7 +9,7 @@ The application is TypeScript on Node.js 22 with Postgres, pgvector, Discord, Op
 | Role | Owns |
 | --- | --- |
 | `bot` | Discord gateway events, ingress, reactions, delivery, component interactions, deployment announcements, and task notifications |
-| `worker` | Agent executions, crawl and embedding jobs, code-update jobs, reconciliation, compaction, and retention |
+| `worker` | Agent executions, crawl and embedding jobs, reminder delivery, code-update jobs, reconciliation, compaction, and retention |
 | `api` | Internal signed sandbox callbacks and health probe |
 
 `all` starts all roles for a fully configured single-process environment. Production normally splits them. Chat requires the bot plus a worker with agent-runtime work enabled. Code updates also require task work and the API callback surface.
@@ -28,6 +28,13 @@ Code-change tool call
   -> verify and release scan
   -> GitHub branch and PR
   -> Discord task message reaches a terminal state
+
+Reminder tool call
+  -> durable requester-owned reminder row
+  -> delayed pg-boss wakeup or reconciliation
+  -> atomic delivery claim and current permission check
+  -> nonce-deduplicated Discord notification
+  -> delivered message identity committed to Postgres
 ```
 
 `src/index.ts` selects process roles and starts adapters. `src/runtime/applicationServices.ts` is the shared composition root for repositories, model access, randomness, payments, and delivery state; production and the local prompt runner consume the same services. `src/config/env.ts` is the canonical configuration schema. `src/jobs/queue.ts` registers recurring and queued work.
@@ -102,6 +109,7 @@ See [Code updates](code-updates.md) for publication and sandbox details.
 | Server prompt overlays | `serverOverlayRepository.ts` |
 | Per-guild agent model selection | `agentSettingsRepository.ts` |
 | Typed per-user preferences | `userPreferenceRepository.ts` plus capability-owned key validators |
+| Scheduled reminder state, claims, and delivery identity | `reminderRepository.ts` and `src/reminders/` |
 | Unified improvement lifecycle | `improvementRepository.ts`, `improvementWorkRepository.ts`, `improvementVerificationRepository.ts`, and `src/improvements/` |
 
 `src/db/repositories.ts` composes the focused repository functions with one pool. It contains only cross-repository lifecycle coordination; SQL stays in the focused owner.
@@ -119,6 +127,7 @@ See [Code updates](code-updates.md) for publication and sandbox details.
 | Discord data and retrieval | `src/discord/crawler.ts`, `src/db/*Repository.ts`, `src/memory/`, retrieval tools | crawler/search/tool tests and DB integration tests |
 | Sandbox callback receiver | `src/execution/callbackServer.ts`, `src/execution/callbacks.ts` | sandbox callback tests |
 | Queue ownership | `src/jobs/queue.ts`, `agentTaskEnqueue.ts` | queue unit tests and `tests/integration/jobs-db.test.ts` |
+| Reminder lifecycle | `src/tools/contracts/reminders.ts`, `src/tools/reminderTools.ts`, `src/db/reminderRepository.ts`, `src/reminders/reminderDelivery.ts`, `src/jobs/reminderJobs.ts` | reminder tool/delivery tests and reminder/jobs DB integration tests |
 | Code-update execution | `src/execution/backend.ts`, `runnerPipeline.ts`, `repoWorkspace.ts` | sandbox runner, backend, callback, and task tests |
 | Payments and games | `src/payments/`, `src/tools/walletTools.ts`, `randomTools.ts`, `randomWagerTools.ts`, `standardWager*` | focused wallet/RNG tests and DB integration tests |
 | Configuration and startup | `src/config/env.ts`, `src/index.ts`, `.env.example` | config, startup, preflight, and Helm tests |

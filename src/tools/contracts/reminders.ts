@@ -1,0 +1,56 @@
+import { defineTool, type ToolRegistryEntry } from "../toolDefinition.js";
+
+export const reminderToolContracts = [
+  defineTool({
+    name: "createReminder",
+    examples: ["@ai remind me tomorrow at 9 to call Mom", "@ai in 20 minutes remind me to check the oven"],
+    description: "Create a one-shot reminder for the current requester. Resolve natural language from prompt time context, then pass an exact future RFC 3339 instant with a zone. Do not invent missing dates or times. Delivery returns to this channel only while the requester can view it.",
+    mutates: true,
+    group: "core",
+    category: "memory",
+    toolClass: "memory",
+    outputContract: ["reminder ID", "requester-local delivery time", "durable scheduling result"],
+    permissionRequirements: ["explicit_current_turn_request", "immutable_current_requester", "current_channel_delivery", "tool_audit_log"],
+    argumentExamples: [{ reminder: "call Mom", scheduled_for: "2026-08-06T09:00:00-04:00", timezone: "America/New_York" }],
+    parameters: {
+      type: "object",
+      properties: {
+        reminder: { type: "string", minLength: 1, maxLength: 1500, description: "Reminder text." },
+        scheduled_for: { type: "string", minLength: 20, maxLength: 40, description: "Future RFC 3339 instant with Z or numeric offset." },
+        timezone: { type: "string", minLength: 1, maxLength: 100, description: "IANA display timezone; omit for the requester's setting or UTC." },
+      },
+      required: ["reminder", "scheduled_for"],
+      additionalProperties: false,
+    },
+  }),
+  defineTool({
+    name: "listMyReminders",
+    examples: ["@ai what reminders do I have?", "@ai list my upcoming reminders"],
+    description: "List the current requester's upcoming reminders in this server.",
+    mutates: false,
+    group: "core",
+    category: "memory",
+    toolClass: "memory",
+    outputContract: ["upcoming reminder IDs", "reminder text", "requester-local delivery times", "result count"],
+    permissionRequirements: ["immutable_current_requester", "current_guild_scope", "tool_audit_log"],
+    parameters: { type: "object", properties: {}, additionalProperties: false },
+  }),
+  defineTool({
+    name: "cancelReminder",
+    examples: ["@ai cancel reminder r_123", "@ai never mind, cancel that reminder"],
+    description: "Cancel the current requester's scheduled reminder by an ID returned from create or list. If context is ambiguous, list first or ask which one.",
+    mutates: true,
+    group: "core",
+    category: "memory",
+    toolClass: "memory",
+    outputContract: ["reminder ID", "cancelled state", "ownership-safe not-found result"],
+    permissionRequirements: ["explicit_current_turn_request", "immutable_current_requester", "current_guild_scope", "tool_audit_log"],
+    argumentExamples: [{ reminder_id: "r_123" }],
+    parameters: {
+      type: "object",
+      properties: { reminder_id: { type: "string", minLength: 3, maxLength: 80, description: "Reminder ID to cancel." } },
+      required: ["reminder_id"],
+      additionalProperties: false,
+    },
+  }),
+] satisfies ToolRegistryEntry[];

@@ -18,6 +18,8 @@ export type DiscordResponseResult = {
 };
 
 export type DiscordResponseFooter = {
+  /** End-to-end request duration, rendered independently of any operator UI or trace link. */
+  durationMs?: number;
   /** Extra subtext lines (e.g. RNG fairness proofs), each rendered as its own `-#` line. */
   extraLines?: string[];
 };
@@ -346,7 +348,20 @@ export function formatDiscordResponseFooter(footer?: DiscordResponseFooter | nul
     const trimmed = suppressDiscordFooterEmbeds(extraLine.trim());
     if (trimmed) lines.push(`-# ${trimmed}`);
   }
+  if (typeof footer?.durationMs === "number" && Number.isFinite(footer.durationMs)) {
+    lines.push(`-# ${formatFooterDuration(footer.durationMs)}`);
+  }
   return lines.length > 0 ? lines.join("\n") : null;
+}
+
+function formatFooterDuration(durationMs: number) {
+  const boundedMs = Math.max(0, durationMs);
+  const tenths = Math.round(boundedMs / 100);
+  if (tenths < 600) return `${(tenths / 10).toFixed(1)}s`;
+
+  const totalSeconds = Math.round(boundedMs / 1_000);
+  const minutes = Math.floor(totalSeconds / 60);
+  return `${minutes}m${totalSeconds % 60}s`;
 }
 
 function suppressDiscordFooterEmbeds(value: string) {

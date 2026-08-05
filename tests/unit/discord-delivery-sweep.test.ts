@@ -51,6 +51,17 @@ describe("decideDiscordDeliverySweep", () => {
     expect(serializeDiscordDeliveryIntent(intent)).not.toContain("private original");
   });
 
+  it("retains the elapsed-time footer for durable delivery recovery", () => {
+    const intent = createDiscordDeliveryIntent({
+      deliveryKey: "request-1",
+      requesterUserId: "user-1",
+      content: "done",
+      footer: { durationMs: 91_600 },
+    });
+
+    expect(parseDiscordDeliveryIntent(serializeDiscordDeliveryIntent(intent)).footer).toEqual({ durationMs: 91_600 });
+  });
+
   it("rejects corrupted binary delivery artifacts", async () => {
     const intent = createDiscordDeliveryIntent({
       deliveryKey: "request-1",

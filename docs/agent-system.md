@@ -156,7 +156,7 @@ Discord-visible output flows through `src/discord/responseSink.ts`:
 
 - ingress adds a loading reaction without sending a placeholder answer;
 - long-running task progress uses a dedicated editable status message;
-- final text, components, files, and footers are persisted as a versioned delivery intent before network writes;
+- final text, components, files, and footers—including the compact end-to-end request duration—are persisted as a versioned delivery intent before network writes;
 - retries reuse stable nonces and message identity;
 - restart sweeps replay incomplete delivery obligations;
 - missing-message and permission failures are classified and handled without duplicating successful output;

@@ -1,6 +1,7 @@
 import type { DbPool } from "./pool.js";
 import { VECTOR_SEARCH_STATEMENT_TIMEOUT_MS, VECTOR_SEARCH_MAX_CANDIDATES, FILTERED_VECTOR_SEARCH_MAX_CANDIDATES, EMBEDDING_INDEX_DIMENSIONS, VECTOR_SEARCH_HNSW_EF_SEARCH, orTsQuery, rowToSearchResult, rowToDiscordUserLookupResult, rowToDiscordUserReferenceTerms, rowToDiscordChannelLookupResult, normalizeFilterIds, normalizeAboutUserTerms, normalizeLookupQuery, vectorLiteral } from "./shared.js";
 import type { SearchResult, DiscordUserLookupResult, DiscordUserReferenceTerms, DiscordChannelLookupResult } from "./shared.js";
+import { discordUsernames, excludedRetrievalAuthorIds, resolveRetrievalChannels } from "./retrievalScope.js";
 
 export async function getVisibleIndexedChannelIds(pool: DbPool, guildId: string, visibleChannelIds: string[]) {
     if (visibleChannelIds.length === 0) return [];
@@ -270,6 +271,47 @@ export async function recentMessagesFromChannels(pool: DbPool, input: {
     if (input.visibleChannelIds.length === 0) return [];
     const authorIds = normalizeFilterIds(input.authorIds);
     const aboutUserTerms = normalizeAboutUserTerms(input.aboutUserTerms);
+    const [channels, excludedAuthorIds] = await Promise.all([
+      resolveRetrievalChannels(pool, {
+        guildId: input.guildId,
+        visibleChannelIds: input.visibleChannelIds,
+        requestedChannelIds
+      }),
+      excludedRetrievalAuthorIds(pool, Boolean(input.includeBots))
+    ]);
+    if (channels.length === 0) return [];
+
+    const params: unknown[] = [input.guildId, channels.map((channel) => channel.id), input.limit];
+    const addParam = (value: unknown) => {
+      params.push(value);
+      return `$${params.length}`;
+    };
+    const conditions = [
+      "m.guild_id = $1",
+      "m.channel_id = ANY($2::text[])",
+      "m.deleted_at IS NULL",
+      "m.normalized_content <> ''"
+    ];
+    if (excludedAuthorIds.length > 0) {
+      conditions.push(`NOT (m.author_id = ANY(${addParam(excludedAuthorIds)}::text[]))`);
+    }
+    if (authorIds.length > 0) {
+      conditions.push(`m.author_id = ANY(${addParam(authorIds)}::text[])`);
+    }
+    if (aboutUserTerms.length > 0) {
+      const placeholder = addParam(aboutUserTerms);
+      conditions.push(`EXISTS (
+        SELECT 1
+        FROM unnest(${placeholder}::text[]) AS about(term)
+        WHERE position(about.term in lower(m.normalized_content)) > 0
+      )`);
+    }
+    if (input.dateFrom) conditions.push(`m.created_at >= ${addParam(input.dateFrom)}::timestamptz`);
+    if (input.dateTo) conditions.push(`m.created_at <= ${addParam(input.dateTo)}::timestamptz`);
+    if (input.hourOfDayUtc != null) {
+      conditions.push(`extract(hour FROM m.created_at AT TIME ZONE 'UTC')::int = ${addParam(input.hourOfDayUtc)}::int`);
+    }
+
     const result = await pool.query(
       `
         SELECT
@@ -277,57 +319,24 @@ export async function recentMessagesFromChannels(pool: DbPool, input: {
           m.guild_id,
           m.channel_id,
           m.author_id,
-          u.username AS author_username,
           m.content,
           m.normalized_content,
           m.created_at,
           1::float AS score
         FROM messages m
-        JOIN discord_users u ON u.id = m.author_id
-        JOIN channels c ON c.id = m.channel_id
-        LEFT JOIN channels parent ON parent.id = c.parent_id
-        WHERE m.guild_id = $1
-          AND m.channel_id = ANY($2::text[])
-          AND m.deleted_at IS NULL
-          AND m.normalized_content <> ''
-          AND ($7::boolean OR coalesce(u.is_bot, false) = false)
-          AND c.is_excluded = false
-          AND coalesce(parent.is_excluded, false) = false
-          AND (cardinality($4::text[]) = 0 OR m.author_id = ANY($4::text[]))
-          AND (
-            cardinality($9::text[]) = 0
-            OR EXISTS (
-              SELECT 1
-              FROM unnest($9::text[]) AS about(term)
-              WHERE position(about.term in lower(m.normalized_content)) > 0
-            )
-          )
-          AND (
-            cardinality($8::text[]) = 0
-            OR m.channel_id = ANY($8::text[])
-            OR (c.parent_id = ANY($8::text[]) AND c.type IN (10, 11))
-          )
-          AND ($5::timestamptz IS NULL OR m.created_at >= $5)
-          AND ($6::timestamptz IS NULL OR m.created_at <= $6)
-          AND ($10::int IS NULL OR extract(hour FROM m.created_at AT TIME ZONE 'UTC')::int = $10)
-          AND NOT EXISTS (SELECT 1 FROM privacy_deletions p WHERE p.user_id = m.author_id)
+        WHERE ${conditions.join("\n          AND ")}
         ORDER BY m.created_at DESC
         LIMIT $3
       `,
-      [
-        input.guildId,
-        input.visibleChannelIds,
-        input.limit,
-        authorIds,
-        input.dateFrom ?? null,
-        input.dateTo ?? null,
-        Boolean(input.includeBots),
-        requestedChannelIds,
-        aboutUserTerms,
-        input.hourOfDayUtc ?? null
-      ]
+      params
     );
-    return result.rows.map(rowToSearchResult).reverse();
+    const usernames = await discordUsernames(pool, result.rows.map((row) => String(row.author_id)));
+    return result.rows
+      .map((row) => rowToSearchResult({
+        ...row,
+        author_username: usernames.get(String(row.author_id)) ?? null
+      }))
+      .reverse();
   }
 
 export async function sampleMessagesFromChannels(pool: DbPool, input: {

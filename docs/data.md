@@ -51,6 +51,8 @@ Native Discord polls put their visible question and answers outside the ordinary
 
 History search can combine lexical and semantic candidates. Queries apply requester-visible channels plus explicit channel, thread, author, and date filters. A semantic-provider failure may degrade to lexical/recent candidates with an explicit limitation; it never widens scope.
 
+High-volume recent-message and additive or active-day overall-stat queries resolve the small permission, channel, bot, and privacy dimensions before scanning messages. Recent retrieval then uses the live-message time index with only concrete channel and author predicates; those overall stats use one grouping-set scan and roll thread groups into their effective parent channels afterward. Keep optional-filter `OR` branches and repeated joins to small dimension tables out of these hot message scans, because they prevent bounded index plans and amplify work across the archive.
+
 Retrieval output is bounded and includes enough provenance for the model to distinguish evidence from summary: matched snippets, authors/channels, timestamps, links where available, applied filters, result counts, and degradation notes.
 
 Attachments are resolved from permission-filtered archive metadata, then refreshed through the Discord API before download because CDN URLs expire. Downloads, archive expansion, extracted text, media transcription, and batch size are bounded. Attachment content is untrusted model evidence and is not copied into audit summaries.

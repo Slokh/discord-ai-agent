@@ -1,7 +1,12 @@
 import { describe, expect, it } from "vitest";
+import type { ImprovementContractCheck } from "../../src/db/types.js";
 import { improvementFingerprint, normalizeImprovementTitle } from "../../src/improvements/coalescing.js";
 import { assertActionableContract, assertImprovementTransition, improvementChecksExecutable } from "../../src/improvements/policy.js";
-import { improvementContractAssertions, improvementContractReplaySkipReason } from "../../src/observability/improvementContractReplay.js";
+import {
+  improvementContractAssertions,
+  improvementContractReplayResults,
+  improvementContractReplaySkipReason,
+} from "../../src/observability/improvementContractReplay.js";
 
 describe("improvement domain", () => {
   it("coalesces only stable normalized fingerprint inputs", () => {
@@ -42,5 +47,46 @@ describe("improvement domain", () => {
     });
     expect(improvementContractReplaySkipReason({ hasAssertion: true, hasReplayScope: true })).toBeNull();
     expect(improvementContractReplaySkipReason({ hasAssertion: false, hasReplayScope: true })).toMatch(/no private-replay assertion/);
+  });
+
+  it("derives content-free pass and failure conclusions for every private replay check kind", () => {
+    const checks: ImprovementContractCheck[] = [
+      { kind: "tool", name: "searchDiscordHistory", expectation: "required" },
+      { kind: "tool", name: "getDiscordStats", expectation: "forbidden" },
+      { kind: "answer_text", value: "source", expectation: "required" },
+      { kind: "answer_text", value: "secret", expectation: "forbidden" },
+      { kind: "runtime_event", name: "agent.execution.succeeded", expectation: "required" },
+      { kind: "runtime_event", name: "agent.execution.failed", expectation: "forbidden" },
+      { kind: "test", reference: "release-verify" },
+    ];
+
+    expect(improvementContractReplayResults(checks, {
+      answer: "The SOURCE is linked.",
+      observedTools: ["searchDiscordHistory"],
+      eventNames: ["agent.execution.succeeded"],
+      available: true,
+    }).map((result) => result.status)).toEqual(Array(6).fill("passed"));
+
+    expect(improvementContractReplayResults(checks, {
+      answer: "The secret is unavailable.",
+      observedTools: ["getDiscordStats"],
+      eventNames: ["agent.execution.failed"],
+      available: true,
+    }).map((result) => result.status)).toEqual(Array(6).fill("failed"));
+  });
+
+  it("marks every private replay check inconclusive when replay evidence is unavailable", () => {
+    const checks: ImprovementContractCheck[] = [
+      { kind: "tool", name: "searchDiscordHistory", expectation: "required" },
+      { kind: "answer_text", value: "source", expectation: "required" },
+      { kind: "runtime_event", name: "agent.execution.succeeded", expectation: "required" },
+      { kind: "database_invariant", reference: "release-db-verify" },
+    ];
+    expect(improvementContractReplayResults(checks, {
+      answer: "",
+      observedTools: [],
+      eventNames: [],
+      available: false,
+    }).map((result) => result.status)).toEqual(Array(3).fill("inconclusive"));
   });
 });

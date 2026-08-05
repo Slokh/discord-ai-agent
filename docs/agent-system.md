@@ -101,6 +101,8 @@ For each selected tool:
 
 The generic boundary may unwrap a JSON-encoded object or array only when the schema explicitly requires that top-level type. It does not translate domain protocols, coerce scalar intent, invent fields, or repair prose with regex.
 
+If a non-mutating focused implementation unexpectedly throws after those gates, the generic dispatcher converts it into a sanitized typed failure so the model can state the limitation and finish the reply. It never exposes the exception or retries the same failed capability in that turn. Request cancellation and mutating-tool exceptions still propagate: cancellation must stop work, while a potentially committed mutation remains under its domain-specific idempotency and reconciliation lifecycle rather than being generalized into a safe retry.
+
 Mutating tools require explicit current-user intent and must be idempotent or durably deduplicated where repetition would be harmful. A successful mutation is retained immediately. If the model, audit write, balance refresh, or final synthesis later fails, the runtime delivers the committed result with a partial limitation instead of inviting a duplicate retry.
 
 Private improvement reporting is internal telemetry rather than a user-requested product mutation, so the model may record it without asking permission. Trusted operator workflows own evidence, contracts, merges, work authorization, deployment verification, and resolution.

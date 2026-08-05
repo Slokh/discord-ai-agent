@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { executeNanoCodexAgentRuntime, nanoCodexSnapshotContinuityKey } from "../../src/agent/nanocodexAgentRuntime.js";
 import { loadConfig } from "../../src/config/env.js";
+import { OpenRouterHttpError } from "../../src/models/openrouter.js";
 import { localToolDefinitionsForModel } from "../../src/tools/registry.js";
 
 describe("NanoCodex agent runtime executor", () => {
@@ -87,6 +88,57 @@ describe("NanoCodex agent runtime executor", () => {
     }));
     expect(runtime.recordEvent).not.toHaveBeenCalledWith(expect.objectContaining({
       metadata: expect.objectContaining({ arguments: expect.anything() }),
+    }));
+  });
+
+  it("continues final synthesis when a non-mutating tool implementation throws", async () => {
+    const runtime = agentRuntime();
+    const ctx = toolContext(runtime);
+    ctx.repo = { auditTool: vi.fn(async () => undefined) } as never;
+    ctx.openRouter = {
+      chat: vi.fn(async () => {
+        throw new OpenRouterHttpError({ status: 400, message: "private provider detail" });
+      }),
+    } as never;
+    const runRuntime = vi.fn(async (input: any) => {
+      const toolResult = await input.executeTool({
+        callId: "call-1",
+        name: "inspectDiscordImages",
+        arguments: {
+          question: "What is shown?",
+          imageUrls: ["https://example.com/image.png"],
+          useContextImages: false,
+        },
+      });
+      expect(toolResult).toMatchObject({
+        success: false,
+        output: expect.stringContaining("failed before returning usable evidence"),
+        metadata: { status: "error" },
+      });
+      expect(toolResult.output).not.toContain("private provider detail");
+      return result("I couldn’t inspect that image because the visual lookup failed.");
+    });
+
+    await expect(executeNanoCodexAgentRuntime({
+      toolContext: ctx,
+      text: "inspect this image",
+      timeoutMs: 1_000,
+      runRuntime: runRuntime as never,
+    })).resolves.toMatchObject({
+      content: "I couldn’t inspect that image because the visual lookup failed.",
+    });
+
+    expect(runtime.recordEvent).toHaveBeenCalledWith(expect.objectContaining({
+      eventName: "agent.tool.complete",
+      metadata: expect.objectContaining({
+        toolName: "inspectDiscordImages",
+        status: "error",
+        errorCode: "tool_execution_failed",
+        retryable: false,
+      }),
+    }));
+    expect(runtime.recordEvent).not.toHaveBeenCalledWith(expect.objectContaining({
+      eventName: "agent.nanocodex.runtime_failed",
     }));
   });
 

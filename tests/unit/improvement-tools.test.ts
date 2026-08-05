@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { createAgentUpdateFromRequest } from "../../src/tools/agentTaskTools.js";
+import { createAgentUpdateFromRequest, retryAgentTask } from "../../src/tools/agentTaskTools.js";
 import { improvementToolHandlers } from "../../src/tools/handlers/improvements.js";
 import { listMyImprovementSignals } from "../../src/tools/improvementTools.js";
 import type { ToolContext } from "../../src/tools/types.js";
@@ -167,5 +167,28 @@ describe("improvement tools", () => {
       improvementCaseId: "case-1",
     })).rejects.toThrow(/queue is unavailable/);
     expect(transitionImprovementCase).not.toHaveBeenCalled();
+  });
+
+  it("validates linked retry work before attempting to enqueue it", async () => {
+    const getImprovementCase = vi.fn(async () => ({
+      case: { caseId: "case-1", guildId: "guild-1", status: "actionable" },
+      signals: [{ reporterId: "user-1" }],
+    }));
+    const ctx = codeUpdateContext({
+      getAgentTask: vi.fn(async () => ({
+        taskId: "task-1",
+        guildId: "guild-1",
+        channelId: "channel-1",
+        status: "failed",
+        taskType: "code_update",
+        title: "Repair the invariant",
+        request: "Fix the failing invariant.",
+        improvementCaseId: "case-1",
+      })),
+      getImprovementCase,
+    });
+
+    await expect(retryAgentTask(ctx, { taskId: "task-1" })).rejects.toThrow(/queue is unavailable/);
+    expect(getImprovementCase).toHaveBeenCalledWith("case-1");
   });
 });

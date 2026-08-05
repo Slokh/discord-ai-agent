@@ -88,6 +88,28 @@ describe("improvement contract verification", () => {
     });
   });
 
+  it("uses proof for the exact root-cause cluster when several quality proofs exist", () => {
+    const reference = "revision-quality:runtime_event:0123456789abcdef01234567";
+    const proof = (referenceId: string, status: "passed" | "failed"): ImprovementVerificationProof => ({
+      status,
+      source: "revision_quality",
+      referenceType: "revision_quality",
+      referenceId,
+      summary: `${referenceId} ${status}`,
+      executionId: null,
+      checkResults: [],
+      createdAt: new Date("2026-08-05T06:00:00Z"),
+    });
+    const dossier = build([{ kind: "deployment_canary", reference }], {
+      proofs: [proof("revision-quality-gate", "passed"), proof(reference, "failed")],
+    });
+
+    expect(dossier).toMatchObject({
+      status: "failed",
+      checks: [{ status: "failed", referenceId: reference }],
+    });
+  });
+
   it("leaves an unregistered adapter visibly inconclusive", () => {
     expect(build([{ kind: "deployment_canary", reference: "unregistered-canary" }]))
       .toMatchObject({
@@ -95,6 +117,8 @@ describe("improvement contract verification", () => {
         checks: [{ adapterId: null, retryTrigger: null, proofSource: "unavailable" }],
         pendingProofs: [],
       });
+    expect(build([{ kind: "deployment_canary", reference: "revision-quality:not-a-real-cluster" }]))
+      .toMatchObject({ status: "inconclusive", checks: [{ adapterId: null }] });
   });
 
   it("keeps the application key stable across unrelated case version increments", () => {

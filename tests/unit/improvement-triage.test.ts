@@ -158,6 +158,23 @@ describe("improvement triage", () => {
     expect(dossier.proposedContract?.checks).toEqual([check]);
     expect(dossier.nextAction).toBe("apply");
   });
+
+  it("keeps a revision-quality root cluster as the exact production contract", () => {
+    const reference = "revision-quality:runtime_event:0123456789abcdef01234567";
+    const dossier = buildImprovementTriageDossier(record(signal({
+      source: "runtime_detection",
+      executionId: "execution-a",
+      metadata: { detectionCode: reference },
+    })), []);
+
+    expect(dossier).toMatchObject({
+      verdict: "confirmed",
+      proposedContract: {
+        checks: [{ kind: "deployment_canary", reference }],
+      },
+      nextAction: "apply",
+    });
+  });
 });
 
 function record(input: ImprovementSignal) {

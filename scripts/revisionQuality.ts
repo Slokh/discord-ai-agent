@@ -5,8 +5,9 @@ import { recordAutomatedImprovementDetection } from "../src/improvements/detecti
 import {
   assessRevisionQuality,
   collectRevisionQuality,
+  collectRevisionQualityObservation,
   findBaselineRevision,
-  revisionQualityDetectionInput,
+  revisionQualityDetectionInputs,
 } from "../src/observability/revisionQuality.js";
 
 const config = loadConfig();
@@ -15,7 +16,8 @@ const hours = boundedNumber(argument("--hours") ?? "48", 1, 168);
 const pool = createPool(config);
 
 try {
-  const quality = await collectRevisionQuality(pool, revision, hours);
+  const observation = await collectRevisionQualityObservation(pool, revision, hours);
+  const quality = observation.quality;
   const baselineRevision = process.argv.includes("--compare")
     ? await findBaselineRevision(pool, revision, hours)
     : null;
@@ -23,29 +25,39 @@ try {
     ? await collectRevisionQuality(pool, baselineRevision, hours)
     : null;
   const assessment = assessRevisionQuality(quality, baseline);
-  const detectionInput = revisionQualityDetectionInput(quality, assessment);
+  const detectionInputs = revisionQualityDetectionInputs(quality, assessment, observation.failureClusters);
   let detection: Record<string, unknown> | null = null;
   let verification: Record<string, unknown> | null = null;
   const repo = createAppDatabase(pool);
-  if (process.argv.includes("--record-detection") && detectionInput) {
-    try {
-      const recorded = await recordAutomatedImprovementDetection(repo, detectionInput);
-      detection = {
-        status: "recorded",
-        caseId: recorded.case.caseId,
-        signalId: recorded.signal.signalId,
-        caseCreated: recorded.caseCreated,
-        signalCreated: recorded.signalCreated,
-      };
-    } catch {
-      detection = { status: "failed" };
-      process.stderr.write("Failed to record the revision quality improvement detection.\n");
+  if (process.argv.includes("--record-detection")) {
+    const counts = { clusters: new Set(detectionInputs.map((input) => input.stableCode)).size, total: detectionInputs.length, recorded: 0, casesCreated: 0, failed: 0 };
+    for (const detectionInput of detectionInputs) {
+      try {
+        const recorded = await recordAutomatedImprovementDetection(repo, detectionInput);
+        if (recorded.signalCreated) counts.recorded += 1;
+        if (recorded.caseCreated) counts.casesCreated += 1;
+      } catch {
+        counts.failed += 1;
+      }
     }
+    detection = { status: counts.failed === 0 ? "recorded" : counts.recorded > 0 ? "partial" : "failed", ...counts };
+    if (counts.failed > 0) process.stderr.write("Failed to record one or more revision quality root-cause detections.\n");
   }
   if (process.argv.includes("--record-detection")) {
     try {
       const proofStatus = assessment.status === "pass" ? "passed" : assessment.status === "fail" ? "failed" : "inconclusive";
-      const proof = await repo.recordImprovementRevisionQualityResult({ revision, status: proofStatus, runKey: quality.generatedAt });
+      const proof = await repo.recordImprovementRevisionQualityResult({
+        revision,
+        status: proofStatus,
+        runKey: quality.generatedAt,
+        presentFailureReferences: [...new Set([
+          ...quality.failureClusters.map((cluster) => cluster.reference),
+          ...detectionInputs.map((input) => input.stableCode),
+        ])],
+        clusterAbsenceStatus: assessment.sample.answersRemaining === 0 && assessment.sample.toolCallsRemaining === 0
+          ? "passed"
+          : "inconclusive",
+      });
       const receipts = proof.deploymentId
         ? await repo.verifyImprovementCasesForDeployment({ revision, deploymentId: proof.deploymentId, actorId: "revision-quality" })
         : [];

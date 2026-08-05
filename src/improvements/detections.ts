@@ -17,6 +17,7 @@ export type AutomatedImprovementDetectionInput = {
   sourceId: string;
   summary: string;
   stableCode: string;
+  executionId?: string | null;
   appRevision?: string | null;
   scope?: ImprovementCase["scope"];
   classification: ImprovementClassification;
@@ -57,6 +58,7 @@ export function automatedImprovementSignalInput(
     sourceKey: `${input.source}:${sourceId}`,
     reporterKind: "automation",
     reporterId: `automation:${input.source}`,
+    executionId: input.executionId ?? null,
     appRevision: input.appRevision ?? null,
     scope,
     privacy: "private",

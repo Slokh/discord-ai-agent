@@ -11,6 +11,7 @@ describe("automated improvement detections", () => {
       sourceId: "revision-quality:revision-a",
       summary: "Production quality gate failed for revision revision-a.",
       stableCode: "revision-quality-gate",
+      executionId: "execution-a",
       appRevision: "revision-a",
       classification: "external_incident",
       severity: "high",
@@ -36,6 +37,7 @@ describe("automated improvement detections", () => {
       scope: "deployment",
       privacy: "private",
       appRevision: "revision-a",
+      executionId: "execution-a",
       metadata: {
         detectionCode: "revision-quality-gate",
         violations: ["one error signal exceeds zero"],
@@ -56,6 +58,24 @@ describe("automated improvement detections", () => {
     };
     expect(() => automatedImprovementSignalInput({ ...base, source: "operator_report" as never })).toThrow(/automated detection source/);
     expect(() => automatedImprovementSignalInput({ ...base, source: "runtime_detection", sourceId: "contains private prose" })).toThrow(/sourceId/);
+  });
+
+  it("coalesces the same root cluster across revisions and separates different clusters", () => {
+    const detection = (revision: string, stableCode: string) => automatedImprovementSignalInput({
+      source: "runtime_detection",
+      sourceId: `revision-quality:${revision}:${stableCode.split(":").at(-1)}:occurrence`,
+      summary: "A production root failure was observed.",
+      stableCode,
+      appRevision: revision,
+      classification: "external_incident",
+      severity: "high",
+      owningDomain: "models",
+    });
+    const cluster = "revision-quality:runtime_event:0123456789abcdef01234567";
+
+    expect(detection("revision-a", cluster).fingerprint).toBe(detection("revision-b", cluster).fingerprint);
+    expect(detection("revision-a", cluster).fingerprint)
+      .not.toBe(detection("revision-a", "revision-quality:runtime_event:fedcba9876543210fedcba98").fingerprint);
   });
 
   it("records through the canonical improvement repository operation", async () => {

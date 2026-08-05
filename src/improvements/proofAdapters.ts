@@ -41,6 +41,12 @@ export const PRIVATE_REPLAY_MUTATING_TOOL_NAMES = Object.freeze(
   [...MUTATING_TOOL_NAMES],
 );
 
+const REVISION_QUALITY_CLUSTER_REFERENCE = /^revision-quality:(runtime_event|tool|delivery|answer_status|quality_metric):[a-f0-9]{24}$/;
+
+export function isRevisionQualityClusterReference(reference: string) {
+  return REVISION_QUALITY_CLUSTER_REFERENCE.test(reference);
+}
+
 /** Resolves one contract check to the only trusted producer allowed to prove it. */
 export function improvementProofAdapterForCheck(check: ImprovementContractCheck): ImprovementProofAdapter | null {
   if (check.kind === "tool") {
@@ -55,7 +61,7 @@ export function improvementProofAdapterForCheck(check: ImprovementContractCheck)
   if (check.kind === "database_invariant") return check.reference === "release-db-verify" ? adapters.release_db_verify : null;
   if (check.kind === "eval") return check.reference === "private-regression-suite" ? adapters.private_regression_gate : null;
   if (check.kind === "deployment_canary") {
-    if (check.reference === "revision-quality-gate") return adapters.revision_quality;
+    if (check.reference === "revision-quality-gate" || isRevisionQualityClusterReference(check.reference)) return adapters.revision_quality;
     return postDeployCanaries.has(check.reference) ? adapters.deployment_canary : null;
   }
   return null;

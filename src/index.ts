@@ -8,6 +8,7 @@ import { embedStoredMessage, embedStoredMessages } from "./memory/embedding.js";
 import { DiscordCrawler } from "./discord/crawler.js";
 import { createDiscordAiAgentBot } from "./discord/client.js";
 import { startAgentTaskNotifier } from "./discord/taskNotifications.js";
+import { startImprovementReporterNotifier } from "./discord/improvementReporterUpdates.js";
 import { startJobs } from "./jobs/queue.js";
 import { logger } from "./util/logger.js";
 import { createAgentRuntimeRunner } from "./discord/agentRuntimeRunner.js";
@@ -97,6 +98,7 @@ async function main() {
             GatewayIntentBits.GuildMembers,
             GatewayIntentBits.GuildMessages,
             GatewayIntentBits.GuildMessageReactions,
+            GatewayIntentBits.DirectMessages,
             GatewayIntentBits.MessageContent
           ],
           partials: [Partials.Message, Partials.Channel, Partials.Reaction]
@@ -167,6 +169,7 @@ async function main() {
       ? createDiscordAiAgentBot({ config, repo, budgetRepo, rngRepo, walletService, agentRuntime: agentRuntimeRepo, deliveryObligations: deliveryObligationsRepo, openRouter, crawler, jobs, client })
       : null;
   const taskNotifier = startsBot && client ? startAgentTaskNotifier({ client, repo, config }) : null;
+  const improvementReporterNotifier = startsBot && client ? startImprovementReporterNotifier({ client, repo, config }) : null;
 
   let shuttingDown = false;
   const shutdown = async () => {
@@ -174,6 +177,7 @@ async function main() {
     shuttingDown = true;
     logger.info("Shutting down Discord AI Agent");
     taskNotifier?.stop();
+    improvementReporterNotifier?.stop();
     await runtime?.drain(30_000).catch((error) => logger.warn({ err: error }, "Timed out draining Discord bot handlers"));
     sandboxReconciler?.stop();
     paymentReconciler?.stop();

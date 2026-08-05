@@ -42,7 +42,7 @@ describe("autonomous improvement assessment", () => {
     expect(repo.recordImprovementReconciliationDecision).not.toHaveBeenCalled();
   });
 
-  it("links repaired work and asks for human review only with an exact clarification", async () => {
+  it("links repaired work and asks the reporter for an exact clarification", async () => {
     const record = improvementRecord();
     const taskId = improvementAssessmentTaskId(record.case.caseId, buildImprovementTriageDossier(record, []).snapshotKey);
     const repo = assessmentRepo(record);
@@ -77,10 +77,62 @@ describe("autonomous improvement assessment", () => {
       } },
     });
     expect(repo.applyImprovementTriage).toHaveBeenCalledWith(expect.objectContaining({ targetStatus: "needs_evidence" }));
+    expect(repo.requestImprovementReporterClarification).toHaveBeenCalledWith({
+      caseId: record.case.caseId,
+      taskId,
+      question: "Clarify whether the expected total includes tax.",
+    });
+    expect(repo.recordImprovementReconciliationDecision).toHaveBeenCalledWith(expect.objectContaining({
+      eventName: "reconciliation.awaiting_reporter",
+      reason: "assessment_requires_clarification",
+      metadata: expect.objectContaining({ reporterCount: 1 }),
+    }));
+  });
+
+  it("falls back to an operator when no reporter can receive the clarification", async () => {
+    const record = improvementRecord();
+    const taskId = improvementAssessmentTaskId(record.case.caseId, buildImprovementTriageDossier(record, []).snapshotKey);
+    const repo = assessmentRepo(record);
+    repo.requestImprovementReporterClarification.mockResolvedValueOnce(0);
+    await applyImprovementAssessmentCompletion({
+      repo: repo as never,
+      taskId,
+      caseId: record.case.caseId,
+      taskStatus: "no_changes",
+      metadata: { improvementAssessment: {
+        disposition: "insufficient_evidence",
+        summary: "Clarify whether the expected total includes tax.",
+        regression: null,
+      } },
+    });
     expect(repo.recordImprovementReconciliationDecision).toHaveBeenCalledWith(expect.objectContaining({
       eventName: "reconciliation.awaiting_operator",
-      reason: "assessment_requires_clarification",
-      metadata: expect.objectContaining({ question: "Clarify whether the expected total includes tax." }),
+      reason: "assessment_requires_clarification_without_reachable_reporter",
+    }));
+  });
+
+  it("ignores a superseded assessment without escalating it to an operator", async () => {
+    const record = improvementRecord();
+    const repo = assessmentRepo(record);
+    const outcome = await applyImprovementAssessmentCompletion({
+      repo: repo as never,
+      taskId: "improvement-stale-snapshot",
+      caseId: record.case.caseId,
+      taskStatus: "no_changes",
+      metadata: { improvementAssessment: {
+        disposition: "insufficient_evidence",
+        summary: "Which result did you expect?",
+        regression: null,
+      } },
+    });
+    expect(outcome.applied).toBe(false);
+    expect(repo.recordImprovementReconciliationDecision).toHaveBeenCalledWith(expect.objectContaining({
+      eventName: "reconciliation.assessment_superseded",
+      reason: "assessment_signal_snapshot_changed",
+      metadata: { taskId: "improvement-stale-snapshot" },
+    }));
+    expect(repo.recordImprovementReconciliationDecision).not.toHaveBeenCalledWith(expect.objectContaining({
+      eventName: "reconciliation.awaiting_operator",
     }));
   });
 });
@@ -91,6 +143,7 @@ function assessmentRepo(record: ReturnType<typeof improvementRecord>) {
     applyImprovementTriage: vi.fn(async () => ({ applied: true })),
     linkImprovementCaseTask: vi.fn(async () => undefined),
     recordImprovementReconciliationDecision: vi.fn(async () => ({ recorded: true })),
+    requestImprovementReporterClarification: vi.fn(async () => 1),
   };
 }
 

@@ -10,6 +10,7 @@ import * as discordEmojiUsage from "./discordEmojiUsageRepository.js";
 import * as discordRetryReactions from "./discordRetryReactionRepository.js";
 import * as embeddings from "./embeddingRepository.js";
 import * as improvements from "./improvementRepository.js";
+import * as improvementReporterUpdates from "./improvementReporterUpdateRepository.js";
 import * as improvementWork from "./improvementWorkRepository.js";
 import * as improvementVerifications from "./improvementVerificationRepository.js";
 import * as retrieval from "./retrievalRepository.js";
@@ -50,6 +51,7 @@ export function createAppDatabase(pool: DbPool) {
     ...bindRepository(pool, discordRetryReactions),
     ...bindRepository(pool, embeddings),
     ...bindRepository(pool, improvements),
+    ...bindRepository(pool, improvementReporterUpdates),
     ...bindRepository(pool, improvementWork),
     ...bindRepository(pool, improvementVerifications),
     ...bindRepository(pool, retrieval),

@@ -272,7 +272,9 @@ describe("prompt context cost controls", () => {
     const contribution = freshDataPromptContribution(new Date("2026-07-15T12:00:00.000Z"));
     const guidance = contribution.content;
 
-    expect(guidance).toContain("Current UTC date: 2026-07-15");
+    expect(guidance).toContain("Current requester timezone: UTC (default)");
+    expect(guidance).toContain("Current requester-local date/time: 2026-07-15 12:00 UTC");
+    expect(guidance).toContain("Current UTC date/time: 2026-07-15 12:00 UTC");
     expect(guidance).toContain("this fall");
     expect(guidance).toContain("never answer from model memory");
     expect(guidance).toContain("external-data capability");
@@ -283,7 +285,7 @@ describe("prompt context cost controls", () => {
     expect(guidance).toContain("related event");
     expect(guidance).toContain("ask the shortest necessary follow-up");
     expect(chatMessages("find current fares", "", [], undefined, undefined, undefined, undefined, [contribution])
-      .map((message) => String(message.content)).join("\n")).toContain("Current UTC date:");
+      .map((message) => String(message.content)).join("\n")).toContain("Current requester timezone:");
   });
 
   it("injects live current-message mention identities without importing old nicknames", () => {

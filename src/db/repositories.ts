@@ -12,11 +12,13 @@ import * as embeddings from "./embeddingRepository.js";
 import * as improvements from "./improvementRepository.js";
 import * as retrieval from "./retrievalRepository.js";
 import * as serverOverlays from "./serverOverlayRepository.js";
+import * as userPreferences from "./userPreferenceRepository.js";
 import type { PersistedMessage } from "./types.js";
 
 export type * from "./types.js";
 export type { DiscordEmojiCultureProfile, DiscordEmojiUsageExample } from "./discordEmojiUsageRepository.js";
 export type { GuildAgentSettings } from "./agentSettingsRepository.js";
+export type { UserPreference } from "./userPreferenceRepository.js";
 
 type PoolFunction = (pool: DbPool, ...args: any[]) => any;
 type BoundRepository<T extends Record<string, unknown>> = {
@@ -48,6 +50,7 @@ export function createAppDatabase(pool: DbPool) {
     ...bindRepository(pool, improvements),
     ...bindRepository(pool, retrieval),
     ...bindRepository(pool, serverOverlays),
+    ...bindRepository(pool, userPreferences),
 
     async upsertMessage(input: PersistedMessage) {
       const stored = await discordArchive.upsertMessage(pool, input);
@@ -61,6 +64,7 @@ export function createAppDatabase(pool: DbPool) {
     },
     async requestUserDeletion(userId: string) {
       await improvements.clearImprovementDataForUser(pool, userId);
+      await userPreferences.clearUserPreferences(pool, userId);
       await discordArchive.requestUserDeletion(pool, userId);
       await discordEmojiUsage.clearDiscordEmojiUsageForAuthor(pool, userId);
     },

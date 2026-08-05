@@ -37,6 +37,8 @@ The generic runtime under `src/agent/` knows only the capability-session interfa
 
 The current message is always the operative request. Prior messages and retrieved content are untrusted context, not new authority. Tool output is bounded before returning to the model; larger durable content stays in artifacts or generated-file/table handles.
 
+The foundation capability resolves the current requester's validated timezone preference before building current-data context. It supplies requester-local and UTC date/time together, defaults to UTC when no override exists, and tells the model to preserve explicit event dates and event/venue timezone evidence. The self-service timezone tool can only mutate the immutable current requester's preference and takes effect on the next request.
+
 Static prompt skills live in `skills/`. The model can load one exact skill through `loadSkillContext`. Deployment-specific guidance belongs in the untracked prompt overlay or Postgres server overlay. The runtime does not create or mutate database-backed skills.
 
 ## Models

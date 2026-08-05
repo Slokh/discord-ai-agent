@@ -5,6 +5,7 @@ export async function cleanupRepositoryTestRows(pool: DbPool) {
   await pool.query("DELETE FROM improvement_cases WHERE case_id LIKE 'imp-%'");
   await pool.query("DELETE FROM deployment_verifications WHERE revision LIKE 'test-%'");
   await pool.query("DELETE FROM guild_agent_settings WHERE guild_id LIKE 'guild-%'");
+  await pool.query("DELETE FROM user_preferences WHERE user_id LIKE 'user-%'");
   await pool.query("DELETE FROM discord_component_actions WHERE guild_id LIKE 'guild-%' OR channel_id LIKE 'channel-%'");
   await pool.query("DELETE FROM deployment_announcements WHERE guild_id LIKE 'guild-%'");
   await pool.query(`DELETE FROM tool_audit_logs WHERE user_id LIKE 'user-%' OR guild_id LIKE 'guild-%' OR channel_id LIKE 'channel-%' OR trace_id LIKE 'trace-%'`);

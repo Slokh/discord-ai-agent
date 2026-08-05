@@ -1,4 +1,5 @@
 import { coreToolContracts } from "../tools/contracts/core.js";
+import { userSettingsToolContracts } from "../tools/contracts/user-settings.js";
 import { presentationToolContracts } from "../tools/contracts/presentation.js";
 import { discordResolverHistoryToolContracts } from "../tools/contracts/discord-resolvers-history.js";
 import { discordContextFileToolContracts } from "../tools/contracts/discord-context-files.js";
@@ -20,6 +21,7 @@ import { TOOL_NAMES, type ToolName, type ToolRegistryEntry } from "../tools/tool
 
 const definitions = [
   ...coreToolContracts,
+  ...userSettingsToolContracts,
   ...presentationToolContracts,
   ...discordResolverHistoryToolContracts,
   ...discordContextFileToolContracts,

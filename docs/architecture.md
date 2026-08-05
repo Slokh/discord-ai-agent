@@ -101,6 +101,7 @@ See [Code updates](code-updates.md) for publication and sandbox details.
 | Random sessions and draws | `rngRepository.ts` |
 | Server prompt overlays | `serverOverlayRepository.ts` |
 | Per-guild agent model selection | `agentSettingsRepository.ts` |
+| Typed per-user preferences | `userPreferenceRepository.ts` plus capability-owned key validators |
 | Unified improvement lifecycle | `improvementRepository.ts` and `src/improvements/` |
 
 `src/db/repositories.ts` composes the focused repository functions with one pool. It contains only cross-repository lifecycle coordination; SQL stays in the focused owner.

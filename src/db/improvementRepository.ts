@@ -405,6 +405,7 @@ export async function mergeImprovementCases(pool: DbPool, input: { sourceCaseId:
     const work = await client.query("SELECT 1 FROM improvement_work_attempts WHERE case_id = ANY($1::text[]) LIMIT 1", [[input.sourceCaseId, input.targetCaseId]]);
     if (work.rowCount) throw new Error("Improvement cases with linked work cannot be merged.");
     await client.query("UPDATE improvement_signals SET case_id = $2, updated_at = now() WHERE case_id = $1", [input.sourceCaseId, input.targetCaseId]);
+    await client.query("UPDATE improvement_reporter_conversations SET case_id = $2, updated_at = now() WHERE case_id = $1", [input.sourceCaseId, input.targetCaseId]);
     await client.query("UPDATE improvement_evidence SET case_id = $2 WHERE case_id = $1", [input.sourceCaseId, input.targetCaseId]);
     await client.query("UPDATE improvement_work_attempts SET case_id = $2, updated_at = now() WHERE case_id = $1", [input.sourceCaseId, input.targetCaseId]);
     await client.query("UPDATE improvement_contracts SET active = false WHERE case_id = $1", [input.sourceCaseId]);
@@ -424,7 +425,7 @@ export async function recordImprovementCaseEvent(pool: DbPool, input: Parameters
 /** Records an edge-triggered automation decision without changing case lifecycle state. */
 export async function recordImprovementReconciliationDecision(pool: DbPool, input: {
   caseId: string;
-  eventName: "reconciliation.assessment_queued" | "reconciliation.awaiting_operator" | "reconciliation.awaiting_contract" | "reconciliation.stalled";
+  eventName: "reconciliation.assessment_queued" | "reconciliation.assessment_superseded" | "reconciliation.awaiting_reporter" | "reconciliation.awaiting_operator" | "reconciliation.awaiting_contract" | "reconciliation.stalled";
   reason: string;
   actorId?: string;
   metadata?: Record<string, unknown>;
@@ -601,6 +602,8 @@ export async function applyImprovementTriage(
 
 function reconciliationSummary(eventName: string, reason: string) {
   if (eventName === "reconciliation.assessment_queued") return `Queued autonomous report assessment: ${reason}.`;
+  if (eventName === "reconciliation.assessment_superseded") return `Ignored an assessment for an older report snapshot: ${reason}.`;
+  if (eventName === "reconciliation.awaiting_reporter") return `Asked the reporter for the evidence needed to continue: ${reason}.`;
   if (eventName === "reconciliation.awaiting_operator") return `Automatic reconciliation left this case for operator judgment: ${reason}.`;
   if (eventName === "reconciliation.awaiting_contract") return `Automatic reconciliation could not map the detector to a registered proof contract: ${reason}.`;
   return `Improvement case reconciliation is stalled: ${reason}.`;
@@ -617,7 +620,25 @@ export async function clearImprovementDataForUser(pool: DbPool, userId: string) 
         )`,
     [userId],
   );
+  await pool.query(
+    `UPDATE improvement_reporter_conversations conversation SET
+       clarification_answer = NULL,
+       answer_signal_id = NULL,
+       answered_at = NULL,
+       updated_at = now()
+     WHERE conversation.answer_signal_id IN (
+       SELECT signal_id FROM improvement_signals WHERE reporter_id = $1
+     )`,
+    [userId],
+  );
   const result = await pool.query("DELETE FROM improvement_signals WHERE reporter_id = $1 RETURNING case_id", [userId]);
+  await pool.query(
+    `DELETE FROM improvement_reporter_conversations conversation
+     WHERE NOT EXISTS (
+       SELECT 1 FROM improvement_reporter_conversation_signals mapping
+       WHERE mapping.conversation_id = conversation.conversation_id
+     )`,
+  );
   const caseIds = [...new Set(result.rows.map((row) => String(row.case_id)))];
   for (const caseId of caseIds) {
     await pool.query(

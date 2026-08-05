@@ -8,7 +8,11 @@ import { buildImprovementTriageDossier, improvementTriageApplication } from "./t
 
 type AssessmentRepository = Pick<
   DiscordAiAgentRepository,
-  "getImprovementCase" | "applyImprovementTriage" | "linkImprovementCaseTask" | "recordImprovementReconciliationDecision"
+  | "getImprovementCase"
+  | "applyImprovementTriage"
+  | "linkImprovementCaseTask"
+  | "recordImprovementReconciliationDecision"
+  | "requestImprovementReporterClarification"
 >;
 
 export async function applyImprovementAssessmentCompletion(input: {
@@ -24,11 +28,16 @@ export async function applyImprovementAssessmentCompletion(input: {
   if (!record) return { result, applied: false };
   const dossier = buildImprovementTriageDossier(record, []);
   if (improvementAssessmentTaskId(input.caseId, dossier.snapshotKey) !== input.taskId) {
-    await awaitingHuman(input.repo, input.caseId, "assessment_signal_snapshot_changed", result?.summary, input.taskId);
+    await input.repo.recordImprovementReconciliationDecision({
+      caseId: input.caseId,
+      eventName: "reconciliation.assessment_superseded",
+      reason: "assessment_signal_snapshot_changed",
+      metadata: { taskId: input.taskId },
+    });
     return { result, applied: false };
   }
   if (!result) {
-    await awaitingHuman(input.repo, input.caseId, "assessment_failed_without_structured_result", null, input.taskId);
+    await awaitingHuman(input.repo, input.caseId, "assessment_failed_without_structured_result", input.taskId);
     return { result: null, applied: false };
   }
 
@@ -40,7 +49,7 @@ export async function applyImprovementAssessmentCompletion(input: {
 
   if (result.disposition === "confirmed_fixed") {
     if (input.taskStatus !== "succeeded" || !input.prUrl || !result.regression) {
-      await awaitingHuman(input.repo, input.caseId, "confirmed_report_repair_did_not_complete", result.summary, input.taskId);
+      await awaitingHuman(input.repo, input.caseId, "confirmed_report_repair_did_not_complete", input.taskId);
       return { result, applied: false };
     }
     const application = improvementTriageApplication(dossier, {
@@ -73,7 +82,7 @@ export async function applyImprovementAssessmentCompletion(input: {
     return { result, applied: outcome.applied };
   }
 
-  await input.repo.applyImprovementTriage({
+  const outcome = await input.repo.applyImprovementTriage({
     ...improvementTriageApplication(dossier, {
       verdict: "insufficient_evidence",
       evidenceSummary: result.summary,
@@ -82,7 +91,22 @@ export async function applyImprovementAssessmentCompletion(input: {
     actorId: "improvement-assessor",
     actorKind: "automation",
   });
-  await awaitingHuman(input.repo, input.caseId, "assessment_requires_clarification", result.summary, input.taskId);
+  if (!outcome.applied) return { result, applied: false };
+  const reporterCount = await input.repo.requestImprovementReporterClarification({
+    caseId: input.caseId,
+    taskId: input.taskId,
+    question: result.summary,
+  });
+  if (reporterCount > 0) {
+    await input.repo.recordImprovementReconciliationDecision({
+      caseId: input.caseId,
+      eventName: "reconciliation.awaiting_reporter",
+      reason: "assessment_requires_clarification",
+      metadata: { taskId: input.taskId, reporterCount },
+    });
+  } else {
+    await awaitingHuman(input.repo, input.caseId, "assessment_requires_clarification_without_reachable_reporter", input.taskId);
+  }
   return { result, applied: true };
 }
 
@@ -99,13 +123,12 @@ async function awaitingHuman(
   repo: AssessmentRepository,
   caseId: string,
   reason: string,
-  question: string | null | undefined,
   taskId: string,
 ) {
   await repo.recordImprovementReconciliationDecision({
     caseId,
     eventName: "reconciliation.awaiting_operator",
     reason,
-    metadata: { taskId, ...(question ? { question } : {}) },
+    metadata: { taskId },
   });
 }

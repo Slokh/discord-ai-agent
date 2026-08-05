@@ -13,6 +13,7 @@ const permissions =
   PermissionFlagsBits.ReadMessageHistory |
   PermissionFlagsBits.SendMessages |
   PermissionFlagsBits.SendMessagesInThreads |
+  PermissionFlagsBits.CreatePublicThreads |
   PermissionFlagsBits.AttachFiles |
   PermissionFlagsBits.CreateGuildExpressions;
 

@@ -25,6 +25,7 @@ import { handleDiscordRichInteraction } from "./components/interactionHandler.js
 import { DiscordInteractionResponder } from "./components/interactionResponder.js";
 import { DiscordTaskSupervisor } from "./taskSupervisor.js";
 import { waitForDeploymentPromotion } from "./deploymentPromotion.js";
+import { handleImprovementClarificationReply } from "./improvementReporterConversations.js";
 
 export type DiscordAiAgentBotRuntime = {
   client: Client;
@@ -56,6 +57,7 @@ export function createDiscordAiAgentBot(input: {
         GatewayIntentBits.GuildMembers,
         GatewayIntentBits.GuildMessages,
         GatewayIntentBits.GuildMessageReactions,
+        GatewayIntentBits.DirectMessages,
         GatewayIntentBits.MessageContent
       ],
       partials: [Partials.Message, Partials.Channel, Partials.Reaction]
@@ -142,7 +144,10 @@ export function createDiscordAiAgentBot(input: {
     kind: "request",
     label: "message_create",
     logContext: { messageId: message.id, channelId: message.channelId },
-    task: () => runWithTrace(discordMessageTraceContext(message), () => handleMessageCreate(input, client, message)),
+    task: () => runWithTrace(discordMessageTraceContext(message), async () => {
+      if (await handleImprovementClarificationReply(input, message)) return;
+      await handleMessageCreate(input, client, message);
+    }),
   }));
 
   client.on(Events.MessageUpdate, (_oldMessage, newMessage) => void taskSupervisor.run({ kind: "maintenance", label: "message_update", task: () =>

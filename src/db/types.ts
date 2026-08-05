@@ -107,6 +107,35 @@ export type ImprovementSignal = {
   updatedAt: Date;
 };
 
+export type ImprovementReporterConversation = {
+  conversationId: string;
+  caseId: string;
+  guildId: string;
+  sourceChannelId: string;
+  sourceMessageId: string;
+  reporterId: string;
+  signalActive: boolean;
+  caseStatus: ImprovementCaseStatus;
+  caseResolution: string | null;
+  deliveryKind: "thread" | "dm" | null;
+  deliveryChannelId: string | null;
+  deliveryMessageId: string | null;
+  clarificationTaskId: string | null;
+  clarificationQuestion: string | null;
+  clarificationAnswer: string | null;
+  answerSignalId: string | null;
+  lastRenderedSignature: string | null;
+  lastRenderedAt: Date | null;
+  deliveryAttempts: number;
+  lastDeliveryError: string | null;
+  nextDeliveryAt: Date | null;
+  deliveryAbandonedAt: Date | null;
+  clarificationRequestedAt: Date | null;
+  answeredAt: Date | null;
+  createdAt: Date;
+  updatedAt: Date;
+};
+
 export type ImprovementWorkAttempt = {
   workId: string;
   caseId: string;

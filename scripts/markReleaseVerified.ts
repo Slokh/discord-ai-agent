@@ -1,6 +1,7 @@
 import { loadConfig } from "../src/config/env.js";
 import { createPool } from "../src/db/pool.js";
 import { createAppDatabase } from "../src/db/repositories.js";
+import { reconcileImprovementPullRequestWork } from "../src/improvements/work.js";
 
 const revision = argument("--revision");
 const deploymentId = argument("--deployment-id");
@@ -14,6 +15,7 @@ if (!deploymentId || deploymentId !== config.releaseNotes.verificationId) {
 const pool = createPool(config);
 try {
   const repo = createAppDatabase(pool);
+  const reconciledPullRequests = await reconcileImprovementPullRequestWork(repo, config);
   await repo.markDeploymentVerified({ revision, deploymentId });
   let improvementVerification: Record<string, number>;
   try {
@@ -26,7 +28,11 @@ try {
   } catch {
     improvementVerification = { error: 1 };
   }
-  process.stdout.write(`${JSON.stringify({ status: "promoted", revision, deploymentId, improvementVerification })}\n`);
+  const pullRequestReconciliation = reconciledPullRequests.reduce<Record<string, number>>((counts, result) => {
+    counts[result.status] = (counts[result.status] ?? 0) + 1;
+    return counts;
+  }, {});
+  process.stdout.write(`${JSON.stringify({ status: "promoted", revision, deploymentId, pullRequestReconciliation, improvementVerification })}\n`);
 } finally {
   await pool.end();
 }

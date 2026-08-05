@@ -153,7 +153,7 @@ describe("improvement tools", () => {
     expect(getImprovementCase).toHaveBeenCalledWith("case-1");
   });
 
-  it("returns a linked case to actionable when task enqueue fails", async () => {
+  it("leaves an actionable linked case unchanged when task enqueue never starts", async () => {
     const transitionImprovementCase = vi.fn(async () => undefined);
     const ctx = codeUpdateContext({
       getImprovementCase: vi.fn(async () => ({
@@ -166,17 +166,6 @@ describe("improvement tools", () => {
     await expect(createAgentUpdateFromRequest(ctx, "fix it", null, {
       improvementCaseId: "case-1",
     })).rejects.toThrow(/queue is unavailable/);
-    expect(transitionImprovementCase).toHaveBeenNthCalledWith(1, {
-      caseId: "case-1",
-      to: "in_progress",
-      actorKind: "operator",
-      actorId: "user-1",
-    });
-    expect(transitionImprovementCase).toHaveBeenNthCalledWith(2, {
-      caseId: "case-1",
-      to: "actionable",
-      actorKind: "system",
-      resolution: "Task enqueue failed.",
-    });
+    expect(transitionImprovementCase).not.toHaveBeenCalled();
   });
 });

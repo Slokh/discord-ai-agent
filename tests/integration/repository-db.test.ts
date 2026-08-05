@@ -321,10 +321,16 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
     });
     await repo.transitionImprovementCase({ caseId: caseRecord.case.caseId, to: "actionable", actorKind: "operator" });
     const taskId = `task-${randomUUID()}`;
-    await repo.upsertAgentTaskQueued({ taskId, taskType: "code_update", title: "Repair invariant", request: "Repair the focused invariant.", requestedBy: "operator" });
+    await repo.upsertAgentTaskQueued({
+      taskId, improvementCaseId: caseRecord.case.caseId, taskType: "code_update", title: "Repair invariant",
+      request: "Repair the focused invariant.", requestedBy: "operator",
+    });
     await expect(repo.linkImprovementCaseTask({ caseId: caseRecord.case.caseId, taskId, actorId: "operator" })).resolves.toMatchObject({ status: "in_progress" });
     await repo.markAgentTaskSucceeded({ taskId, branchName: "operator/repair", prUrl: "https://github.com/example/repo/pull/1", draft: false, verifyPassed: true });
-    await expect(repo.getImprovementCase(caseRecord.case.caseId)).resolves.toMatchObject({ case: { status: "verifying" } });
+    await expect(repo.getImprovementCase(caseRecord.case.caseId)).resolves.toMatchObject({
+      case: { status: "verifying" },
+      workAttempts: [expect.objectContaining({ source: "agent_task", taskId, status: "succeeded", pullRequestUrl: "https://github.com/example/repo/pull/1" })],
+    });
     await expect(repo.transitionImprovementCase({ caseId: caseRecord.case.caseId, to: "resolved", actorKind: "operator" })).rejects.toThrow(/verification receipt/);
     await expect(repo.inspectImprovementVerification({ caseId: caseRecord.case.caseId, revision: "test-abc123" }))
       .rejects.toThrow(/durable deployment verification/);
@@ -355,6 +361,40 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
     expect(stored?.events).toEqual(expect.arrayContaining([
       expect.objectContaining({ eventName: "verification.passed", metadata: expect.objectContaining({ receiptId: first.receipt.receiptId }) }),
     ]));
+  });
+
+  it("links and reconciles direct GitHub pull request work idempotently", async () => {
+    const caseRecord = await repo.recordImprovementSignal({
+      source: "developer_report", sourceKey: `source-${randomUUID()}`, reporterKind: "developer",
+      summary: "Direct repository work needs durable tracking", classification: "developer_friction", scope: "repository",
+    });
+    await repo.addImprovementEvidence({
+      caseId: caseRecord.case.caseId, kind: "workflow_gap", disposition: "supports",
+      summary: "Direct pull requests are not represented by task-specific linkage.",
+    });
+    await repo.acceptImprovementContract({
+      caseId: caseRecord.case.caseId, expectedBehavior: "Direct pull request work enters the canonical lifecycle.",
+      checks: [{ kind: "test", reference: "release-verify" }], createdBy: "operator",
+    });
+    await repo.transitionImprovementCase({ caseId: caseRecord.case.caseId, to: "actionable", actorKind: "operator" });
+    const openPullRequest = {
+      repository: "Example/Repo", pullRequestNumber: 17, pullRequestUrl: "https://github.com/Example/Repo/pull/17",
+      state: "open" as const, headRevision: "head-17", mergeRevision: null,
+    };
+    const first = await repo.linkImprovementCasePullRequest({ caseId: caseRecord.case.caseId, pullRequest: openPullRequest, actorId: "operator" });
+    const repeated = await repo.linkImprovementCasePullRequest({ caseId: caseRecord.case.caseId, pullRequest: openPullRequest, actorId: "operator" });
+    expect(first).toMatchObject({ case: { status: "in_progress" }, work: { source: "github_pull_request", status: "in_progress" } });
+    expect(repeated.work.workId).toBe(first.work.workId);
+    const merged = await repo.linkImprovementCasePullRequest({
+      caseId: caseRecord.case.caseId,
+      pullRequest: { ...openPullRequest, state: "merged", mergeRevision: "merge-17" },
+      actorId: "automation",
+    });
+    expect(merged).toMatchObject({ case: { status: "verifying" }, work: { workId: first.work.workId, status: "succeeded", mergeRevision: "merge-17" } });
+    const stored = await repo.getImprovementCase(caseRecord.case.caseId);
+    expect(stored?.workAttempts).toHaveLength(1);
+    expect(stored?.events.filter((event) => event.eventName === "work.started")).toHaveLength(1);
+    expect(stored?.events.filter((event) => event.eventName === "work.completed")).toHaveLength(1);
   });
 
   it("records content-free private replay proof and resolves it automatically after promotion", async () => {

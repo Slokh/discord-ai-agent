@@ -98,14 +98,14 @@ describe("improvement triage", () => {
       verdict: "confirmed",
       evidenceSummary: "A focused reproduction demonstrates the invariant failure.",
       expectedBehavior: "The focused invariant remains true.",
-      checks: [{ kind: "test", reference: "focused-invariant" }],
+      checks: [{ kind: "test", reference: "release-verify" }],
     });
     expect(application).toMatchObject({
       verdict: "confirmed",
       targetStatus: "actionable",
       contract: {
         expectedBehavior: "The focused invariant remains true.",
-        checks: [{ kind: "test", reference: "focused-invariant" }],
+        checks: [{ kind: "test", reference: "release-verify" }],
       },
       evidence: expect.arrayContaining([
         expect.objectContaining({ kind: "operator_assessment", disposition: "supports" }),

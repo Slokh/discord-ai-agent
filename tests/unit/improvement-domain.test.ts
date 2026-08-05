@@ -17,18 +17,30 @@ describe("improvement domain", () => {
     expect(() => assertImprovementTransition("open", "resolved")).toThrow(/Invalid improvement/);
     expect(() => assertImprovementTransition("verifying", "resolved")).not.toThrow();
     expect(improvementChecksExecutable([{ kind: "manual", description: "look" }])).toBe(false);
-    expect(() => assertActionableContract([{ kind: "manual", description: "look" }])).toThrow(/machine-executable/);
-    expect(() => assertActionableContract([{ kind: "test", reference: "unit" }])).not.toThrow();
+    expect(() => assertActionableContract([{ kind: "manual", description: "look" }])).toThrow(/registered proof adapter/);
+    expect(() => assertActionableContract([{ kind: "test", reference: "unknown-gate" }])).toThrow(/registered proof adapter/);
+    expect(() => assertActionableContract([{ kind: "tool", name: "inspectDiscordFile", expectation: "required" }])).toThrow(/registered proof adapter/);
+    expect(() => assertActionableContract([{ kind: "tool", name: "transferWalletFunds", expectation: "required" }])).toThrow(/registered proof adapter/);
+    expect(() => assertActionableContract([{ kind: "tool", name: "transferWalletFunds", expectation: "forbidden" }])).toThrow(/registered proof adapter/);
+    expect(() => assertActionableContract([{ kind: "test", reference: "release-verify" }])).not.toThrow();
   });
 
   it("projects accepted contracts into private prompt-eval assertions", () => {
     const assertions = improvementContractAssertions([
       { kind: "tool", name: "searchDiscordHistory", expectation: "required" },
       { kind: "answer_text", value: "source", expectation: "required" },
-      { kind: "test", reference: "unit" },
+      { kind: "runtime_event", name: "agent.execution.failed", expectation: "forbidden" },
+      { kind: "test", reference: "release-verify" },
     ]);
-    expect(assertions).toEqual({ expectedTools: ["searchDiscordHistory"], forbiddenTools: [], mustContain: ["source"], mustNotContain: [] });
-    expect(improvementContractReplaySkipReason({ hasAssertion: true, hasReplayScope: true, expectedTools: assertions.expectedTools })).toBeNull();
-    expect(improvementContractReplaySkipReason({ hasAssertion: false, hasReplayScope: true, expectedTools: [] })).toMatch(/no tool or answer-text/);
+    expect(assertions).toEqual({
+      expectedTools: ["searchDiscordHistory"],
+      forbiddenTools: [],
+      mustContain: ["source"],
+      mustNotContain: [],
+      expectedRuntimeEvents: [],
+      forbiddenRuntimeEvents: ["agent.execution.failed"],
+    });
+    expect(improvementContractReplaySkipReason({ hasAssertion: true, hasReplayScope: true })).toBeNull();
+    expect(improvementContractReplaySkipReason({ hasAssertion: false, hasReplayScope: true })).toMatch(/no private-replay assertion/);
   });
 });

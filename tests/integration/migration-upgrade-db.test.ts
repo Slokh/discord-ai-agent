@@ -190,6 +190,9 @@ describe.skipIf(!runDbTests)("forward migration upgrades", () => {
         .resolves.toEqual(expect.objectContaining({ rows: [] }));
       await expect(client.query("SELECT receipt_id, contract_id, status, application_key FROM improvement_verification_receipts LIMIT 0"))
         .resolves.toEqual(expect.objectContaining({ rows: [] }));
+      await client.query(await readFile(path.resolve("migrations/042_improvement_proof_execution.sql"), "utf8"));
+      await expect(client.query("SELECT execution_id, check_results FROM improvement_verification_proofs LIMIT 0"))
+        .resolves.toEqual(expect.objectContaining({ rows: [] }));
     } finally {
       await client.query("RESET search_path").catch(() => undefined);
       await client.query(`DROP SCHEMA IF EXISTS ${schema} CASCADE`).catch(() => undefined);

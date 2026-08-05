@@ -1,4 +1,5 @@
 import type { ImprovementCaseStatus, ImprovementContractCheck } from "../db/types.js";
+import { improvementCheckHash, unregisteredImprovementChecks } from "./proofAdapters.js";
 
 const transitions: Readonly<Record<ImprovementCaseStatus, readonly ImprovementCaseStatus[]>> = {
   open: ["needs_evidence", "actionable", "dismissed"],
@@ -16,7 +17,7 @@ export function assertImprovementTransition(from: ImprovementCaseStatus, to: Imp
 }
 
 export function improvementChecksExecutable(checks: readonly ImprovementContractCheck[]) {
-  return checks.some((check) => check.kind !== "manual");
+  return checks.length > 0 && unregisteredImprovementChecks(checks).length === 0;
 }
 
 export function assertImprovementChecks(value: unknown): asserts value is ImprovementContractCheck[] {
@@ -35,12 +36,16 @@ export function assertImprovementChecks(value: unknown): asserts value is Improv
     else if (item.kind === "manual") requiredText("description");
     else throw new Error(`Unknown improvement contract check kind: ${String(item.kind)}.`);
   }
+  const hashes = value.map(improvementCheckHash);
+  if (new Set(hashes).size !== hashes.length) throw new Error("Improvement contract checks must not contain duplicates.");
 }
 
 export function assertActionableContract(checks: readonly ImprovementContractCheck[]) {
   assertImprovementChecks(checks);
   if (checks.length === 0) throw new Error("An actionable improvement case requires at least one acceptance check.");
-  if (!improvementChecksExecutable(checks)) {
-    throw new Error("Automatic improvement work requires at least one machine-executable acceptance check.");
+  const unregistered = unregisteredImprovementChecks(checks);
+  if (unregistered.length > 0) {
+    const kinds = [...new Set(unregistered.map((check) => check.kind))].join(", ");
+    throw new Error(`Every actionable improvement check requires a registered proof adapter; missing: ${kinds}.`);
   }
 }

@@ -145,7 +145,6 @@ try {
       caseId,
       revision,
       deploymentId: option("--deployment-id"),
-      executionId: option("--execution-id"),
     };
     const dossier = await repo.inspectImprovementVerification(verificationInput);
     print(args.includes("--apply")

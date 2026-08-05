@@ -7,7 +7,7 @@ Improvement cases are the one lifecycle for anything that says the product or it
 - A **case** is the current materialized unit of work: title, classification, severity, owner, status, privacy boundary, and timestamps.
 - A **signal** is immutable source provenance plus an active/withdrawn state. Its source key provides exact idempotency.
 - **Evidence** supports, contradicts, or leaves the case inconclusive. Large or sensitive source detail remains in the canonical runtime ledger and is referenced rather than copied.
-- A **contract** versions expected behavior and acceptance checks. At least one check must be machine-executable before a case becomes actionable.
+- A **contract** versions expected behavior and acceptance checks. Every check must resolve to a registered proof adapter before a case becomes actionable.
 - A **case event** records each lifecycle decision for the operator stream.
 
 The canonical tables are `improvement_cases`, `improvement_signals`, `improvement_evidence`, `improvement_contracts`, `improvement_verification_proofs`, `improvement_verification_receipts`, and `improvement_case_events`. `src/db/improvementRepository.ts` owns intake and lifecycle state; `src/db/improvementVerificationRepository.ts` owns source proofs and receipt application. `agent_tasks.improvement_case_id` links explicitly authorized code work without turning the task projection into a second case tracker.
@@ -45,7 +45,7 @@ Privacy deletion removes reporter-owned signals and evidence directly linked to 
 
 The allowed states are `open`, `needs_evidence`, `actionable`, `in_progress`, `verifying`, `resolved`, and `dismissed`.
 
-- `actionable` requires supporting evidence and an active contract with at least one executable check.
+- `actionable` requires supporting evidence and an active contract whose checks all have registered proof adapters. Private-replay checks additionally require retained requester, channel, prompt, visible-channel scope, and an original execution with no mutating tool use.
 - Work starts only from `actionable`. Enqueue failure restores `actionable`.
 - Successful linked work moves to `verifying`; failed, cancelled, or no-diff work returns to `actionable`.
 - `resolved` requires a passed receipt for the active contract on an exact durable deployment. The receipt, supporting `deployment_verification` evidence, event, and transition are written atomically.
@@ -64,11 +64,22 @@ Known source-owned gates may propose an executable contract. Unknown detector co
 
 ## Deployment verification
 
-`improve verify <case-id> --revision <sha>` is read-only by default. It loads the active contract, exact durable deployment ID, case-specific private replay result, and an optional `--execution-id`, then emits one result per check without copying prompt, answer, event-summary, or tool-output content. `--apply` rebuilds the authoritative proof immediately before writing an immutable receipt.
+`improve verify <case-id> --revision <sha>` is read-only by default. It loads the active contract, exact durable deployment ID, and source-owned typed proofs, then emits one result per check without copying prompt, answer, event-summary, or tool-output content. `--apply` rebuilds the authoritative proof immediately before writing an immutable receipt. There is no operator-supplied execution override.
 
-Proof ownership follows the check kind. Tool and answer-text checks use the case-specific private replay recorded by the deployment eval runner, or an explicitly supplied terminal execution from the requested revision. Runtime-event and delivery-state checks require that terminal execution. Repository tests and database invariants use the trusted release admission gates. Known post-deploy canaries use durable promotion. The `revision-quality-gate` remains inconclusive until the scheduled production observation has enough member traffic; it cannot pass merely because pods became ready. Manual or unknown checks remain inconclusive.
+Proof ownership follows this closed registry:
 
-A passed receipt atomically records supporting evidence and resolves the case. A failed receipt records contradictory evidence and returns the case to `actionable`. An inconclusive receipt records the missing-proof decision and leaves the case in `verifying`. The receipt key covers the contract version, deployment, optional execution, and every check result, making exact retries harmless. Successful release promotion invokes the verifier automatically, and later production-observation proof re-invokes it for traffic-gated cases. Neither path replays an old member request.
+| Check | Registered reference or constraint | Producer |
+| --- | --- | --- |
+| Tool, answer text, runtime event | Installed non-mutating tools; required file inspection is excluded | Read-only case-specific replay after deployment and on the scheduled private-regression run |
+| Repository test | `release-verify` | Trusted release-admission CI followed by durable promotion |
+| Database invariant | `release-db-verify` | Trusted database admission gate followed by durable promotion |
+| Eval | `private-regression-suite` | Successful private-regression deployment stage |
+| Deployment canary | A known `post-deploy-*` stage | Durable promotion after the registered canary |
+| Delivery or revision quality | `delivered` or `revision-quality-gate` | Traffic-sampled production observation |
+
+Manual checks, unknown references, required mutating tools, and checks with unavailable replay inputs are rejected before `actionable`; they cannot become permanent “collect proof later” states. Private case replays hide mutating tools and remove current-turn mutation authority. The proof row stores only per-check hashes and conclusions plus the canonical replay execution ID. Production observation remains inconclusive until enough member traffic exists; pod readiness alone cannot prove delivery or quality.
+
+A passed receipt atomically records supporting evidence and resolves the case. A failed receipt records contradictory evidence and returns the case to `actionable`. An inconclusive receipt records which adapter and trigger are pending and leaves the case in `verifying`. The receipt key covers the contract version, deployment, automatically linked execution, and every check result, making exact retries harmless. Successful release promotion invokes the verifier automatically. The deployment and scheduled private-regression stages produce case replay proofs and invoke it again when promotion already exists; production observation does the same for traffic-gated cases.
 
 ## Operator workflow
 
@@ -79,16 +90,16 @@ npm run improve -- --target local inbox
 npm run improve -- --target local show <case-id>
 npm run improve -- --target local triage <case-id>
 npm run improve -- --target local triage <case-id> --apply
-npm run improve -- --target local triage <case-id> --apply --verdict confirmed --evidence-summary "A focused reproduction confirms the failure." --expected "The focused invariant passes." --check '{"kind":"test","reference":"focused-invariant"}'
+npm run improve -- --target local triage <case-id> --apply --verdict confirmed --evidence-summary "A focused reproduction confirms the failure." --expected "The repository release gate passes." --check '{"kind":"test","reference":"release-verify"}'
 npm run improve -- --target local suggest <case-id>
 npm run improve -- --target local evidence <case-id> --kind runtime_trace --disposition supports --summary "..."
-npm run improve -- --target local contract <case-id> --expected "..." --check '{"kind":"test","reference":"focused-test"}'
+npm run improve -- --target local contract <case-id> --expected "..." --check '{"kind":"test","reference":"release-verify"}'
 npm run improve -- --target local transition <case-id> actionable
 npm run improve -- --target local link-task <case-id> --task <task-id>
 npm run improve -- --target local verify <case-id> --revision <sha>
-npm run improve -- --target local verify <case-id> --revision <sha> --execution-id <execution-id> --apply
+npm run improve -- --target local verify <case-id> --revision <sha> --apply
 ```
 
 Production commands require `--target production --confirm-production`, `NODE_ENV=production`, and a non-local configured database host. The CLI refuses a target/database mismatch.
 
-Active prompt-compatible contracts export with `npm run eval:export-improvements`; `npm run eval:regressions` runs the resulting private suite. Other contract kinds stay in their owning test, database, delivery, or deployment harness.
+Active private-replay contracts export with `npm run eval:export-improvements`; `npm run eval:regressions` runs the resulting read-only private suite. Other registered contract kinds stay in their owning CI, delivery, observation, or deployment producer.

@@ -86,10 +86,10 @@ npm run improve -- --target local inbox
 npm run improve -- --target local show <case-id>
 npm run improve -- --target local triage <case-id>
 npm run improve -- --target local verify <case-id> --revision <sha>
-npm run improve -- --target local verify <case-id> --revision <sha> --execution-id <execution-id> --apply
+npm run improve -- --target local verify <case-id> --revision <sha> --apply
 npm run improve -- --target local suggest <case-id>
 npm run improve -- --target local evidence <case-id> --kind runtime_trace --disposition supports --summary "..."
-npm run improve -- --target local contract <case-id> --expected "..." --check '{"kind":"test","reference":"focused-test"}'
+npm run improve -- --target local contract <case-id> --expected "..." --check '{"kind":"test","reference":"release-verify"}'
 ```
 
 Production access is explicit and requires confirmation. The production image omits npm, so use the compiled CLI in a configured pod:
@@ -131,7 +131,7 @@ Every source feeds the same case stream. Source keys provide exact idempotency; 
 
 Trusted runtime, deployment, CI, and eval observers use the same private intake contract. They provide a stable observation ID for exact idempotency and a separate stable failure code for cross-run coalescing. The intake accepts only bounded identifiers and content-minimized summaries; it never accepts prompt, reply, member, or private-eval payloads. Terminal failures create signals, while passing, awaiting-traffic, and insufficient-data observations do not. PR jobs remain isolated from production credentials; `ci_detection` is available only to a trusted configured caller and does not synchronize cases to GitHub.
 
-`triage <case-id>` is read-only by default and reconstructs a redacted dossier from active signals plus content-free runtime and delivery aggregates. `triage <case-id> --apply` records the reviewed conclusion, evidence, contract, ownership fields, and lifecycle transition atomically and idempotently; an explicit verdict override requires an operator evidence summary. Triage never starts work. Moving a case to `actionable` still requires supporting evidence and an accepted contract with at least one machine-executable check. `suggest` returns same-boundary title candidates but never merges them. Explicitly requested linked coding work moves the case to `in_progress`; member-owned cases can link during `runCodingAgent`, while operator cases can attach an already queued/running task with `link-task <case-id> --task <task-id>`. Success moves the case to `verifying`, while failure returns it to `actionable`. `verify <case-id> --revision <sha>` is read-only by default and derives typed check results from retained source-owned proof; `--apply` writes the immutable receipt and lifecycle transition. Free-form success summaries cannot resolve a case. Never copy private source evidence into a public issue, PR metadata, or tracked fixtures.
+`triage <case-id>` is read-only by default and reconstructs a redacted dossier from active signals plus content-free runtime and delivery aggregates. `triage <case-id> --apply` records the reviewed conclusion, evidence, contract, ownership fields, and lifecycle transition atomically and idempotently; an explicit verdict override requires an operator evidence summary. Triage never starts work. Moving a case to `actionable` requires supporting evidence and an accepted contract whose every check resolves to a registered proof adapter with its inputs available. `suggest` returns same-boundary title candidates but never merges them. Explicitly requested linked coding work moves the case to `in_progress`; member-owned cases can link during `runCodingAgent`, while operator cases can attach an already queued/running task with `link-task <case-id> --task <task-id>`. Success moves the case to `verifying`, while failure returns it to `actionable`. `verify <case-id> --revision <sha>` is read-only by default and derives typed check results from retained source-owned proof; `--apply` writes the immutable receipt and lifecycle transition. Free-form success summaries and operator-selected executions cannot resolve a case. Never copy private source evidence into a public issue, PR metadata, or tracked fixtures.
 
 Active contracts that the prompt evaluator can represent are exported into the private regression suite:
 
@@ -139,9 +139,9 @@ Active contracts that the prompt evaluator can represent are exported into the p
 npm run eval:regressions
 ```
 
-The export stays under `.discord-ai-agent/evals/` with owner-only file permissions. Cases without an observable assertion remain skipped instead of pretending that a note is an executable test.
+The export stays under `.discord-ai-agent/evals/` with owner-only file permissions. Replays are read-only: mutating tools are removed from the model contract and current-turn mutation authority is false. Contracts without a safe observable replay assertion stay with their registered owning producer rather than becoming an eval note.
 
-Private regression cases carry their source application revision and failure category. The deployment workflow runs them after the capability canary, and a separate scheduled/manual workflow checks the deployed revision daily. A terminal failure records an idempotent private `eval_detection` signal before the workflow fails. CI logs receive only aggregate counts by source revision and category; prompts, answers, run IDs, notes, and full reports stay inside the production worker.
+Private regression cases carry their source application revision and failure category. The deployment workflow runs them after the capability canary, and a separate scheduled/manual workflow checks the deployed revision daily. Both record content-free per-check results and the automatically resolved canonical replay execution before invoking case verification. Harness errors remain inconclusive; they do not masquerade as product failures. A terminal workflow failure records an idempotent private `eval_detection` signal before the workflow fails. CI logs receive only aggregate counts by source revision and category; prompts, answers, run IDs, notes, and full reports stay inside the production worker.
 
 ## Production triage
 

@@ -60,6 +60,13 @@ describe("deployment announcements", () => {
       reasoningEffort: "high",
       toolChoice: "none"
     }));
+    const modelMessages = fixture.openRouter.chat.mock.calls[0]?.[0].messages;
+    expect(modelMessages[0]?.content).toContain("curious Discord community in plain English");
+    expect(modelMessages[0]?.content).toContain("Explain what changed and why it matters");
+    expect(modelMessages[0]?.content).toContain("Translate the evidence into language that makes sense without repository context");
+    expect(modelMessages[0]?.content).toContain("explain what it does or what changed in the same bullet");
+    expect(modelMessages[0]?.content).toContain("Describe internal maintenance directly");
+    expect(modelMessages[0]?.content).not.toContain("say it is a small behind-the-scenes reliability update");
     expect(fixture.send).toHaveBeenCalledWith(expect.objectContaining({
       content: expect.stringContaining("## ✨ Bot update\n- Casino games now keep working across replies."),
       allowedMentions: { parse: [] }
@@ -114,6 +121,22 @@ describe("deployment announcements", () => {
 
     await expect(announceDeployment(fixture as any)).resolves.toBe("posted");
     expect(fixture.send.mock.calls[0]?.[0].content).toContain("- Fix durable games");
+  });
+
+  it("falls back to concrete changed files when commit summaries are unavailable", async () => {
+    const fixture = setup();
+    fixture.openRouter.chat.mockRejectedValue(new Error("provider down"));
+    fixture.fetchImpl.mockResolvedValue(new Response(JSON.stringify({
+      status: "ahead",
+      ahead_by: 1,
+      commits: [],
+      files: [{ filename: "src/observability/revisionQuality.ts", status: "modified", additions: 28, deletions: 0 }]
+    }), { status: 200 }));
+
+    await expect(announceDeployment(fixture as any)).resolves.toBe("posted");
+    expect(fixture.send.mock.calls[0]?.[0].content)
+      .toContain("- modified src/observability/revisionQuality.ts (+28/-0).");
+    expect(fixture.send.mock.calls[0]?.[0].content).not.toContain("behind-the-scenes");
   });
 
   it("falls back instead of publishing a token-truncated or structurally incomplete model bullet", async () => {

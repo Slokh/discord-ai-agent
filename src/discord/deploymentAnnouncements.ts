@@ -175,8 +175,15 @@ function fallbackPatchNotes(comparison: GitHubCompare): string {
     .filter((title) => !/^merge (pull request|branch)\b/i.test(title))
     .map((title) => title.replace(/^(?:feat|fix|chore|refactor|docs|test|build|ci|perf)(?:\([^)]+\))?!?:\s*/i, ""))
     .slice(0, 5);
-  if (!titles.length) return "- Small behind-the-scenes reliability update.";
-  return titles.map((title) => `- ${title.replace(/^[-*]\s*/, "").slice(0, 240)}`).join("\n");
+  if (titles.length) return titles.map((title) => `- ${title.replace(/^[-*]\s*/, "").slice(0, 240)}`).join("\n");
+
+  const files = (comparison.files ?? [])
+    .filter((file) => Boolean(file.filename))
+    .slice(0, 5)
+    .map((file) => `- ${file.status ?? "Changed"} ${file.filename} (+${file.additions ?? 0}/-${file.deletions ?? 0}).`);
+  if (files.length) return files.join("\n");
+
+  return "- GitHub returned no commit or file details for this deployment.";
 }
 
 function formatAnnouncement(body: string, repository: string, base: string, head: string): string {

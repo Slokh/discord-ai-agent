@@ -74,6 +74,7 @@ Randomness and wagers add two rules: exposure is reserved before entropy is cons
 - A member can add `🔄` or `🔃` to retry a terminal code/bug task or their own non-mutating bot reply. Each active reaction is durable and idempotent; retries never repeat a completed mutation.
 - Final content, files, components, and non-model footers are delivered through one durable response path. Every terminal prompt reply includes a compact elapsed-time footer independent of operator tooling.
 - Long-running code updates edit a dedicated task status message and finish with a PR or a concrete terminal reason.
+- Deployment announcements explain member-visible and internal changes concretely in plain English. Technical names are included only when useful and are explained rather than presented as unexplained jargon; available details are not hidden behind generic maintenance or reliability language.
 - Internal tool names, implementation jargon, canned report templates, and chain-of-thought claims do not belong in ordinary answers.
 
 ## Improvement loop

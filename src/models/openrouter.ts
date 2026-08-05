@@ -152,6 +152,7 @@ export class OpenRouterClient {
     maxTokens?: number;
     reasoningEffort?: OpenRouterReasoningEffort;
     retryPolicy?: OpenRouterRetryPolicy;
+    timeoutMs?: number;
     signal?: AbortSignal;
   }): Promise<ChatResult> {
     const startedAt = Date.now();
@@ -172,6 +173,7 @@ export class OpenRouterClient {
         localToolCount,
         hostedToolCount,
         maxTokens: input.maxTokens ?? 4096,
+        timeoutMs: input.timeoutMs ?? OPENROUTER_CHAT_TIMEOUT_MS,
         temperature,
         reasoningEffort: input.reasoningEffort
       },
@@ -189,7 +191,7 @@ export class OpenRouterClient {
         max_tokens: input.maxTokens ?? 4096,
         reasoning: openRouterReasoning(input.reasoningEffort)
       },
-      OPENROUTER_CHAT_TIMEOUT_MS,
+      input.timeoutMs ?? OPENROUTER_CHAT_TIMEOUT_MS,
       { retryPolicy: input.retryPolicy, signal: input.signal }
     );
 

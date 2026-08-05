@@ -59,6 +59,7 @@ describe("web__run", () => {
       toolChoice: "required",
       maxTokens: 1_200,
       reasoningEffort: "none",
+      timeoutMs: 25_000,
       signal: undefined,
     }));
     expect(submitted?.messages).toEqual(expect.arrayContaining([

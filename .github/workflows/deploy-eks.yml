@@ -25,7 +25,7 @@ jobs:
       ECR_REPOSITORY: ${{ vars.ECR_REPOSITORY }}
       HELM_RELEASE: ${{ vars.HELM_RELEASE || 'discord-ai-agent' }}
       K8S_NAMESPACE: ${{ vars.K8S_NAMESPACE || 'discord-ai-agent' }}
-      RELEASE_NOTES_CHANNEL_ID: ${{ vars.RELEASE_NOTES_CHANNEL_ID }}
+      DISCORD_BOT_CHANNEL_ID: ${{ vars.DISCORD_BOT_CHANNEL_ID }}
       IMAGE_TAG: ${{ inputs.image_tag }}
     steps:
       - uses: aws-actions/configure-aws-credentials@v6
@@ -69,8 +69,8 @@ jobs:
           if [ -n "$previous_app_revision" ]; then
             helm_args+=(--set-string "config.previousAppRevision=$previous_app_revision")
           fi
-          if [ -n "${RELEASE_NOTES_CHANNEL_ID:-}" ]; then
-            helm_args+=(--set-string "config.releaseNotesChannelId=$RELEASE_NOTES_CHANNEL_ID")
+          if [ -n "${DISCORD_BOT_CHANNEL_ID:-}" ]; then
+            helm_args+=(--set-string "config.botChannelId=$DISCORD_BOT_CHANNEL_ID")
           fi
           helm upgrade --install "$HELM_RELEASE" deploy/helm/discord-ai-agent \
             --rollback-on-failure \

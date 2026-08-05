@@ -67,7 +67,10 @@ const envSchema = z.object({
   APP_REVISION: z.string().trim().default("unknown"),
   RELEASE_VERIFICATION_ID: z.string().trim().default(""),
   PREVIOUS_APP_REVISION: z.string().trim().default(""),
-  RELEASE_NOTES_CHANNEL_ID: z.string().trim().default(""),
+  DISCORD_BOT_CHANNEL_ID: z.string().trim().default("").refine(
+    (value) => value === "" || /^\d{17,20}$/.test(value),
+    "Discord bot channel ID must be a Discord snowflake."
+  ),
 
   DISCORD_TOKEN: z.string().optional(),
   DISCORD_CLIENT_ID: z.string().trim().default(""),
@@ -127,8 +130,7 @@ export function loadConfig(argv = process.argv) {
     appRevision: env.APP_REVISION || "unknown",
     releaseNotes: {
       verificationId: env.RELEASE_VERIFICATION_ID || null,
-      previousRevision: env.PREVIOUS_APP_REVISION || null,
-      channelId: env.RELEASE_NOTES_CHANNEL_ID || null
+      previousRevision: env.PREVIOUS_APP_REVISION || null
     },
     logLevel: defaultLogLevel(env.NODE_ENV),
     processRole,
@@ -137,6 +139,7 @@ export function loadConfig(argv = process.argv) {
       token: env.DISCORD_TOKEN,
       clientId: env.DISCORD_CLIENT_ID,
       guildId: env.DISCORD_GUILD_ID,
+      botChannelId: env.DISCORD_BOT_CHANNEL_ID || null,
       botName: productConfig.discord.botName,
       loadingReaction: productConfig.discord.loadingReaction,
       premiumSkuIds: parseCsv(env.DISCORD_PREMIUM_SKU_IDS)

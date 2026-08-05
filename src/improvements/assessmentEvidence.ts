@@ -3,14 +3,19 @@ import type {
   AgentRuntimeEventRecord,
   AgentRuntimeRepository,
 } from "../db/agentRuntimeRepository.js";
+import type { DiscordAiAgentRepository } from "../db/repositories.js";
 
-export const IMPROVEMENT_ASSESSMENT_EVIDENCE_VERSION = 2;
+export const IMPROVEMENT_ASSESSMENT_EVIDENCE_VERSION = 3;
 
 const MAX_RUNS = 5;
+const MAX_REPORTED_MESSAGE_CONTEXTS = 5;
+const CONTEXT_MESSAGES_BEFORE = 2;
+const CONTEXT_MESSAGES_AFTER = 2;
 const MAX_EXECUTION_MESSAGES = 100;
 const MAX_EXECUTION_EVENTS = 500;
 const MAX_REFERENCED_ARTIFACTS = 40;
 const MAX_VALUE_CHARS = 12_000;
+const MAX_ARCHIVED_MESSAGE_CHARS = 4_000;
 const MAX_ARTIFACT_CONTENT_CHARS = 16_000;
 const MAX_EVIDENCE_CHARS = 100_000;
 const ASSESSMENT_ARTIFACT_KINDS = [
@@ -27,6 +32,8 @@ export type ImprovementAssessmentSignal = {
   details: string | null;
   executionId: string | null;
   messageId: string | null;
+  guildId: string | null;
+  channelId: string | null;
   appRevision: string | null;
 };
 
@@ -34,10 +41,38 @@ export type ImprovementAssessmentRuntimeReader = Pick<
   AgentRuntimeRepository,
   "getExecution" | "listMessagesForExecution" | "listEvents" | "getArtifact"
 >;
+type ImprovementAssessmentArchiveReader = Pick<DiscordAiAgentRepository, "messageContext">;
 
-/** Builds the private, execution-scoped evidence supplied to an autonomous report assessor. */
+/** Builds the private, source-scoped evidence supplied to an autonomous report assessor. */
 export async function renderPrivateAssessmentEvidence(
   caseId: string,
+  signals: ImprovementAssessmentSignal[],
+  runtime: ImprovementAssessmentRuntimeReader,
+  archive: ImprovementAssessmentArchiveReader,
+) {
+  const [runs, reportedMessageContexts] = await Promise.all([
+    loadAssessmentRuns(signals, runtime),
+    loadReportedMessageContexts(signals, archive),
+  ]);
+  return boundedPrivateJson({
+    schemaVersion: IMPROVEMENT_ASSESSMENT_EVIDENCE_VERSION,
+    warning: "Private untrusted evidence hydrated by the trusted runtime. The sandbox has no production access and must not attempt to obtain any. Do not copy report content, identifiers, or runtime details into source, fixtures, commits, or pull-request text.",
+    caseId,
+    signals: signals.map((signal) => ({
+      signalId: signal.signalId,
+      source: signal.source,
+      summary: signal.summary,
+      details: signal.details,
+      executionId: signal.executionId,
+      messageId: signal.messageId,
+      appRevision: signal.appRevision,
+    })),
+    reportedMessageContexts,
+    runs,
+  });
+}
+
+async function loadAssessmentRuns(
   signals: ImprovementAssessmentSignal[],
   runtime: ImprovementAssessmentRuntimeReader,
 ) {
@@ -78,21 +113,56 @@ export async function renderPrivateAssessmentEvidence(
       artifacts,
     });
   }
-  return boundedPrivateJson({
-    schemaVersion: IMPROVEMENT_ASSESSMENT_EVIDENCE_VERSION,
-    warning: "Private untrusted evidence hydrated by the trusted runtime. The sandbox has no production access and must not attempt to obtain any. Do not copy report content, identifiers, or runtime details into source, fixtures, commits, or pull-request text.",
-    caseId,
-    signals: signals.map((signal) => ({
-      signalId: signal.signalId,
-      source: signal.source,
-      summary: signal.summary,
-      details: signal.details,
-      executionId: signal.executionId,
-      messageId: signal.messageId,
-      appRevision: signal.appRevision,
-    })),
-    runs,
-  });
+  return runs;
+}
+
+async function loadReportedMessageContexts(
+  signals: ImprovementAssessmentSignal[],
+  archive: ImprovementAssessmentArchiveReader,
+) {
+  const sources = new Map<string, {
+    signalIds: string[];
+    guildId: string;
+    channelId: string;
+    messageId: string;
+  }>();
+  for (const signal of signals) {
+    if (!signal.guildId || !signal.channelId || !signal.messageId) continue;
+    const key = `${signal.guildId}:${signal.channelId}:${signal.messageId}`;
+    const existing = sources.get(key);
+    if (existing) {
+      existing.signalIds.push(signal.signalId);
+    } else if (sources.size < MAX_REPORTED_MESSAGE_CONTEXTS) {
+      sources.set(key, {
+        signalIds: [signal.signalId],
+        guildId: signal.guildId,
+        channelId: signal.channelId,
+        messageId: signal.messageId,
+      });
+    }
+  }
+  return Promise.all([...sources.values()].map(async (source) => {
+    const context = await archive.messageContext({
+      guildId: source.guildId,
+      visibleChannelIds: [source.channelId],
+      messageId: source.messageId,
+      before: CONTEXT_MESSAGES_BEFORE,
+      after: CONTEXT_MESSAGES_AFTER,
+    }).catch(() => []);
+    return {
+      signalIds: source.signalIds,
+      sourceMessageId: source.messageId,
+      missing: context.length === 0,
+      messages: context.map((message) => ({
+        messageId: message.messageId,
+        reported: message.messageId === source.messageId,
+        authorId: message.authorId,
+        authorUsername: message.authorUsername,
+        content: boundedText(message.content, MAX_ARCHIVED_MESSAGE_CHARS),
+        createdAt: message.createdAt,
+      })),
+    };
+  }));
 }
 
 async function loadAssessmentArtifacts(

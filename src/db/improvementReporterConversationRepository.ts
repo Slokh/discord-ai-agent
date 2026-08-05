@@ -138,6 +138,18 @@ export async function listRenderableImprovementReporterConversations(pool: DbPoo
        AND any_reporter.reporter_id IS NOT NULL
        AND (conversation.next_delivery_at IS NULL OR conversation.next_delivery_at <= now())
        AND (
+         conversation.delivery_kind IS NOT NULL
+         OR (
+           active_reporter.reporter_id IS NOT NULL
+           AND (
+             (case_row.status = 'needs_evidence'
+               AND conversation.clarification_question IS NOT NULL
+               AND conversation.clarification_answer IS NULL)
+             OR case_row.status IN ('in_progress', 'verifying', 'resolved')
+           )
+         )
+       )
+       AND (
          conversation.last_rendered_at IS NULL
          OR greatest(conversation.updated_at, case_row.updated_at) > conversation.last_rendered_at
          OR EXISTS (

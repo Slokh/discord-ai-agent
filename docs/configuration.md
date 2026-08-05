@@ -31,7 +31,7 @@ Production startup rejects retired variables so old deployment settings cannot s
 | `APP_REVISION` | release workflow | no | Immutable deployed git revision. |
 | `RELEASE_VERIFICATION_ID` | release workflow | no | Unique public identifier for this rollout's post-deploy promotion. |
 | `PREVIOUS_APP_REVISION` | release announcements | no | Previously deployed git revision. |
-| `RELEASE_NOTES_CHANNEL_ID` | release announcements | no | Discord channel receiving deployment announcements. |
+| `DISCORD_BOT_CHANNEL_ID` | bot updates and improvement conversations | no | Single Discord text channel for bot updates, deployment announcements, and improvement threads. |
 | `POD_NAMESPACE` | Kubernetes worker | no | Namespace where isolated code-update Jobs are created. |
 | `SANDBOX_IMAGE` | Kubernetes worker | no | Immutable code-update sandbox image reference. |
 

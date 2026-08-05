@@ -4,6 +4,7 @@ import {
   handleImprovementClarificationReply,
   resolveImprovementReporterThread,
   renderImprovementReporterConversation,
+  shouldDeliverImprovementReporterConversation,
 } from "../../src/discord/improvementReporterConversations.js";
 
 describe("improvement reporter conversations", () => {
@@ -21,6 +22,27 @@ describe("improvement reporter conversations", () => {
     expect(renderImprovementReporterConversation(conversation({ signalActive: false })).content).toContain("stopped tracking");
     expect(renderImprovementReporterConversation(conversation({ caseStatus: "in_progress" })).content).toContain("fix is in progress");
     expect(renderImprovementReporterConversation(conversation({ caseStatus: "resolved" })).content).toContain("verified in production");
+  });
+
+  it("opens a conversation only for reporter input or repair work, then keeps it alive", () => {
+    expect(shouldDeliverImprovementReporterConversation(conversation({ caseStatus: "open" }))).toBe(false);
+    expect(shouldDeliverImprovementReporterConversation(conversation({ caseStatus: "needs_evidence" }))).toBe(false);
+    expect(shouldDeliverImprovementReporterConversation(conversation({ caseStatus: "actionable" }))).toBe(false);
+    expect(shouldDeliverImprovementReporterConversation(conversation({ caseStatus: "dismissed" }))).toBe(false);
+    expect(shouldDeliverImprovementReporterConversation(conversation({
+      caseStatus: "needs_evidence",
+      clarificationQuestion: "What result did you expect?",
+    }))).toBe(true);
+    expect(shouldDeliverImprovementReporterConversation(conversation({ caseStatus: "in_progress" }))).toBe(true);
+    expect(shouldDeliverImprovementReporterConversation(conversation({ caseStatus: "verifying" }))).toBe(true);
+    expect(shouldDeliverImprovementReporterConversation(conversation({ caseStatus: "resolved" }))).toBe(true);
+    expect(shouldDeliverImprovementReporterConversation(conversation({
+      caseStatus: "dismissed",
+      signalActive: false,
+      deliveryKind: "thread",
+      deliveryChannelId: "thread-1",
+      deliveryMessageId: "message-1",
+    }))).toBe(true);
   });
 
   it("accepts a natural guild-thread follow-up without requiring a message reply", async () => {
@@ -73,26 +95,45 @@ describe("improvement reporter conversations", () => {
     }));
   });
 
-  it("creates a public thread from the reported source message", async () => {
+  it("creates a standalone public thread in the configured bot channel", async () => {
     const thread = { id: "thread-1", isThread: () => true };
-    const startThread = vi.fn(async () => thread);
-    const sourceMessage = {
-      inGuild: () => true,
-      guildId: "guild-1",
-      thread: null,
-      hasThread: false,
-      startThread,
-    };
+    const create = vi.fn(async () => thread);
     const client = {
-      channels: { fetch: vi.fn(async () => ({ isThread: () => false, messages: { fetch: vi.fn(async () => sourceMessage) } })) },
+      channels: { fetch: vi.fn(async () => ({
+        type: 0,
+        guildId: "guild-1",
+        guild: { members: { fetch: vi.fn(async () => ({ id: "member-1" })) } },
+        permissionsFor: vi.fn(() => ({ has: vi.fn(() => true) })),
+        threads: { create },
+      })) },
     };
-    await expect(resolveImprovementReporterThread(client as never, conversation())).resolves.toBe(thread);
-    expect(startThread).toHaveBeenCalledWith(expect.objectContaining({ name: "🐛 report follow-up" }));
+    await expect(resolveImprovementReporterThread(client as never, conversation(), "hub-channel")).resolves.toBe(thread);
+    expect(client.channels.fetch).toHaveBeenCalledWith("hub-channel");
+    expect(create).toHaveBeenCalledWith(expect.objectContaining({ name: "🐛 report follow-up", type: 11 }));
   });
 
-  it("uses DM fallback when the report was made inside an existing thread", async () => {
-    const client = { channels: { fetch: vi.fn(async () => ({ isThread: () => true })) } };
-    await expect(resolveImprovementReporterThread(client as never, conversation())).resolves.toBeNull();
+  it("declines hub delivery when the channel is unconfigured or outside the report guild", async () => {
+    const fetch = vi.fn(async () => ({ type: 0, guildId: "other-guild" }));
+    const client = { channels: { fetch } };
+    await expect(resolveImprovementReporterThread(client as never, conversation(), null)).resolves.toBeNull();
+    expect(fetch).not.toHaveBeenCalled();
+    await expect(resolveImprovementReporterThread(client as never, conversation(), "hub-channel")).resolves.toBeNull();
+  });
+
+  it("requires the reporter to view the hub and send in its threads", async () => {
+    const create = vi.fn();
+    const client = {
+      channels: { fetch: vi.fn(async () => ({
+        type: 0,
+        guildId: "guild-1",
+        guild: { members: { fetch: vi.fn(async () => ({ id: "member-1" })) } },
+        permissionsFor: vi.fn(() => ({ has: vi.fn(() => false) })),
+        threads: { create },
+      })) },
+    };
+
+    await expect(resolveImprovementReporterThread(client as never, conversation(), "hub-channel")).resolves.toBeNull();
+    expect(create).not.toHaveBeenCalled();
   });
 });
 

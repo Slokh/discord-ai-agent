@@ -12,6 +12,11 @@ import type {
 import type { DbPool } from "./pool.js";
 import { assertActionableContract, assertImprovementChecks, assertImprovementTransition, improvementChecksExecutable } from "../improvements/policy.js";
 import { normalizeImprovementTitle } from "../improvements/coalescing.js";
+import {
+  improvementTriageApplicationKey,
+  improvementTriageSnapshotKey,
+  type ImprovementTriageApplication,
+} from "../improvements/triage.js";
 
 export type RecordImprovementSignalInput = {
   source: ImprovementSignalSource;
@@ -160,14 +165,21 @@ export async function withdrawImprovementSignal(pool: DbPool, input: { sourceKey
     if (!result.rows[0]) { await client.query("COMMIT"); return false; }
     const signal = rowToImprovementSignal(result.rows[0]);
     await insertCaseEvent(client, { caseId: signal.caseId, signalId: signal.signalId, eventName: "signal.withdrawn", actorKind: "member", actorId: input.actorId });
-    const active = await client.query("SELECT 1 FROM improvement_signals WHERE case_id = $1 AND active = true LIMIT 1", [signal.caseId]);
-    if (!active.rowCount) {
-      await client.query(
-        `UPDATE improvement_cases SET status = 'dismissed', resolution = 'All source signals were withdrawn.', resolved_at = now(), version = version + 1, updated_at = now()
-         WHERE case_id = $1 AND status IN ('open', 'needs_evidence')`,
-        [signal.caseId],
-      );
-    }
+    await client.query(
+      `UPDATE improvement_cases case_row SET
+         status = CASE WHEN status IN ('open', 'needs_evidence')
+           AND NOT EXISTS (SELECT 1 FROM improvement_signals active WHERE active.case_id = case_row.case_id AND active.active = true)
+           THEN 'dismissed' ELSE status END,
+         resolution = CASE WHEN status IN ('open', 'needs_evidence')
+           AND NOT EXISTS (SELECT 1 FROM improvement_signals active WHERE active.case_id = case_row.case_id AND active.active = true)
+           THEN 'All source signals were withdrawn.' ELSE resolution END,
+         resolved_at = CASE WHEN status IN ('open', 'needs_evidence')
+           AND NOT EXISTS (SELECT 1 FROM improvement_signals active WHERE active.case_id = case_row.case_id AND active.active = true)
+           THEN now() ELSE resolved_at END,
+         version = version + 1, updated_at = now()
+       WHERE case_id = $1`,
+      [signal.caseId],
+    );
     await client.query("COMMIT");
     return true;
   } catch (error) {
@@ -202,10 +214,18 @@ export async function withdrawImprovementSignalsForMessage(pool: DbPool, input: 
     const caseIds = [...new Set(result.rows.map((row) => String(row.case_id)))];
     if (caseIds.length) {
       await client.query(
-        `UPDATE improvement_cases case_row SET status = 'dismissed', resolution = 'All source signals were withdrawn.',
-           resolved_at = now(), version = version + 1, updated_at = now()
-         WHERE case_row.case_id = ANY($1::text[]) AND case_row.status IN ('open', 'needs_evidence')
-           AND NOT EXISTS (SELECT 1 FROM improvement_signals signal WHERE signal.case_id = case_row.case_id AND signal.active = true)`,
+        `UPDATE improvement_cases case_row SET
+           status = CASE WHEN status IN ('open', 'needs_evidence')
+             AND NOT EXISTS (SELECT 1 FROM improvement_signals active WHERE active.case_id = case_row.case_id AND active.active = true)
+             THEN 'dismissed' ELSE status END,
+           resolution = CASE WHEN status IN ('open', 'needs_evidence')
+             AND NOT EXISTS (SELECT 1 FROM improvement_signals active WHERE active.case_id = case_row.case_id AND active.active = true)
+             THEN 'All source signals were withdrawn.' ELSE resolution END,
+           resolved_at = CASE WHEN status IN ('open', 'needs_evidence')
+             AND NOT EXISTS (SELECT 1 FROM improvement_signals active WHERE active.case_id = case_row.case_id AND active.active = true)
+             THEN now() ELSE resolved_at END,
+           version = version + 1, updated_at = now()
+         WHERE case_row.case_id = ANY($1::text[])`,
         [caseIds],
       );
     }
@@ -377,6 +397,142 @@ export async function recordImprovementCaseEvent(pool: DbPool, input: Parameters
   await insertCaseEvent(pool, input);
 }
 
+/** Atomically records one reviewed signal snapshot and applies its lifecycle decision exactly once. */
+export async function applyImprovementTriage(
+  pool: DbPool,
+  input: ImprovementTriageApplication & { actorId: string },
+) {
+  if (input.applicationKey !== improvementTriageApplicationKey(input)) {
+    throw new Error("Improvement triage application key does not match its decision.");
+  }
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const caseResult = await client.query("SELECT * FROM improvement_cases WHERE case_id = $1 FOR UPDATE", [input.caseId]);
+    if (!caseResult.rows[0]) throw new Error(`Improvement case ${input.caseId} was not found.`);
+    const current = rowToImprovementCase(caseResult.rows[0]);
+    const prior = await client.query(
+      `SELECT metadata FROM improvement_case_events
+       WHERE case_id = $1 AND event_name = 'triage.applied' AND metadata->>'applicationKey' = $2
+       ORDER BY event_id DESC LIMIT 1`,
+      [input.caseId, input.applicationKey],
+    );
+    if (prior.rows[0]) {
+      const metadata = object(prior.rows[0].metadata);
+      const evidenceIds = stringArray(metadata.evidenceIds);
+      const evidenceResult = evidenceIds.length
+        ? await client.query("SELECT * FROM improvement_evidence WHERE evidence_id = ANY($1::text[]) ORDER BY created_at ASC", [evidenceIds])
+        : { rows: [] as Record<string, unknown>[] };
+      const contractId = nullable(metadata.contractId);
+      const contractResult = contractId
+        ? await client.query("SELECT * FROM improvement_contracts WHERE contract_id = $1", [contractId])
+        : { rows: [] as Record<string, unknown>[] };
+      await client.query("COMMIT");
+      return {
+        applied: false,
+        case: current,
+        evidence: evidenceResult.rows.map(rowToEvidence),
+        contract: contractResult.rows[0] ? rowToContract(contractResult.rows[0]) : null,
+      };
+    }
+    if (current.version !== input.expectedVersion) {
+      throw new Error(`Improvement case ${input.caseId} changed; expected version ${input.expectedVersion}, found ${current.version}.`);
+    }
+    if (!(["open", "needs_evidence", "actionable"] as ImprovementCaseStatus[]).includes(current.status)) {
+      throw new Error(`Improvement case ${input.caseId} cannot be triaged from ${current.status}.`);
+    }
+    const expectedTarget = input.verdict === "confirmed" ? "actionable" : input.verdict === "not_reproduced" ? "dismissed" : "needs_evidence";
+    if (input.targetStatus !== expectedTarget) throw new Error("Improvement triage target status does not match its verdict.");
+    assertImprovementTransition(current.status, input.targetStatus);
+    if (input.evidence.length === 0) throw new Error("Improvement triage requires at least one evidence conclusion.");
+    const signalResult = await client.query("SELECT * FROM improvement_signals WHERE case_id = $1 ORDER BY signal_id", [input.caseId]);
+    const storedSignals = signalResult.rows.map(rowToImprovementSignal);
+    if (improvementTriageSnapshotKey(input.caseId, storedSignals.filter((signal) => signal.active)) !== input.snapshotKey) {
+      throw new Error(`Improvement case ${input.caseId} signals changed; regenerate the triage dossier.`);
+    }
+    const signalIds = new Set(storedSignals.map((signal) => signal.signalId));
+    for (const evidence of input.evidence) {
+      if (evidence.signalId && !signalIds.has(evidence.signalId)) throw new Error(`Improvement signal ${evidence.signalId} does not belong to ${input.caseId}.`);
+      if (evidence.privacy !== current.privacy) throw new Error("Triage evidence must preserve the case privacy boundary.");
+    }
+
+    const insertedEvidence = [];
+    for (const evidence of input.evidence) {
+      const evidenceId = `evi-${randomUUID()}`;
+      const result = await client.query(
+        `INSERT INTO improvement_evidence(
+           evidence_id,case_id,signal_id,kind,disposition,summary,reference_type,reference_id,
+           collected_by_execution_id,privacy,metadata
+         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING *`,
+        [
+          evidenceId,
+          input.caseId,
+          evidence.signalId ?? null,
+          required(evidence.kind, "kind", 100),
+          evidence.disposition,
+          required(evidence.summary, "summary", 4_000),
+          evidence.referenceType ?? null,
+          evidence.referenceId ?? null,
+          evidence.collectedByExecutionId ?? null,
+          evidence.privacy,
+          JSON.stringify({ ...(evidence.metadata ?? {}), triageSnapshotKey: input.snapshotKey }),
+        ],
+      );
+      insertedEvidence.push(rowToEvidence(result.rows[0]));
+    }
+
+    let contract = null;
+    if (input.verdict === "confirmed") {
+      if (!input.contract) throw new Error("Confirmed triage requires an executable acceptance contract.");
+      assertActionableContract(input.contract.checks);
+      const versionResult = await client.query("SELECT coalesce(max(version),0)::int + 1 AS version FROM improvement_contracts WHERE case_id = $1", [input.caseId]);
+      const version = Number(versionResult.rows[0]?.version ?? 1);
+      await client.query("UPDATE improvement_contracts SET active = false WHERE case_id = $1 AND active = true", [input.caseId]);
+      const contractResult = await client.query(
+        `INSERT INTO improvement_contracts(contract_id,case_id,version,expected_behavior,checks,executable,source_revision,created_by)
+         VALUES ($1,$2,$3,$4,$5,true,$6,$7) RETURNING *`,
+        [`con-${randomUUID()}`, input.caseId, version, required(input.contract.expectedBehavior, "expectedBehavior", 4_000),
+          JSON.stringify(input.contract.checks), input.contract.sourceRevision, input.actorId],
+      );
+      contract = rowToContract(contractResult.rows[0]);
+    } else if (input.contract) {
+      throw new Error("Only confirmed triage may accept an improvement contract.");
+    }
+
+    const resolution = input.verdict === "not_reproduced" ? required(input.resolution ?? "", "resolution", 4_000) : null;
+    const updated = await client.query(
+      `UPDATE improvement_cases SET status = $2, classification = $3, severity = $4, owning_domain = $5,
+         resolution = $6, resolved_at = CASE WHEN $2 = 'dismissed' THEN now() ELSE NULL END,
+         version = version + 1, updated_at = now()
+       WHERE case_id = $1 RETURNING *`,
+      [input.caseId, input.targetStatus, input.classification, input.severity, input.owningDomain, resolution],
+    );
+    await insertCaseEvent(client, {
+      caseId: input.caseId,
+      eventName: "triage.applied",
+      actorKind: "operator",
+      actorId: input.actorId,
+      summary: `Triage concluded ${input.verdict}.`,
+      metadata: {
+        snapshotKey: input.snapshotKey,
+        applicationKey: input.applicationKey,
+        verdict: input.verdict,
+        fromStatus: current.status,
+        targetStatus: input.targetStatus,
+        evidenceIds: insertedEvidence.map((evidence) => evidence.evidenceId),
+        contractId: contract?.contractId ?? null,
+      },
+    });
+    await client.query("COMMIT");
+    return { applied: true, case: rowToImprovementCase(updated.rows[0]), evidence: insertedEvidence, contract };
+  } catch (error) {
+    await client.query("ROLLBACK").catch(() => undefined);
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
 export async function completeImprovementWorkForTask(pool: DbPool, input: {
   taskId: string;
   succeeded: boolean;
@@ -546,5 +702,6 @@ function required(value: string, label: string, max: number) { const normalized 
 function boundedLimit(value?: number, max = 50) { return Math.max(1, Math.min(max, Math.trunc(value ?? 20))); }
 function nullable(value: unknown) { return value == null ? null : String(value); }
 function object(value: unknown) { return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {}; }
+function stringArray(value: unknown) { return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : []; }
 function date(value: unknown) { return value instanceof Date ? value : new Date(String(value)); }
 function nullableDate(value: unknown) { return value == null ? null : date(value); }

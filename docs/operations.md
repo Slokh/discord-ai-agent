@@ -84,6 +84,7 @@ Improvement cases are the single operator stream for member reports, model-detec
 ```bash
 npm run improve -- --target local inbox
 npm run improve -- --target local show <case-id>
+npm run improve -- --target local triage <case-id>
 npm run improve -- --target local suggest <case-id>
 npm run improve -- --target local evidence <case-id> --kind runtime_trace --disposition supports --summary "..."
 npm run improve -- --target local contract <case-id> --expected "..." --check '{"kind":"test","reference":"focused-test"}'
@@ -94,6 +95,7 @@ Production access is explicit and requires confirmation. The production image om
 ```bash
 kubectl -n discord-ai-agent exec deploy/discord-ai-agent-worker -- node dist/scripts/improve.js --target production --confirm-production inbox
 kubectl -n discord-ai-agent exec deploy/discord-ai-agent-worker -- node dist/scripts/improve.js --target production --confirm-production show <case-id>
+kubectl -n discord-ai-agent exec deploy/discord-ai-agent-worker -- node dist/scripts/improve.js --target production --confirm-production triage <case-id>
 ```
 
 The API role is an internal-only signed callback receiver. It exposes only `/healthz` and task-scoped callback writes from isolated code-update sandboxes; it has no operator reads, metrics, browser UI, public service, or password configuration.
@@ -126,7 +128,7 @@ Every source feeds the same case stream. Source keys provide exact idempotency; 
 
 Trusted runtime, deployment, CI, and eval observers use the same private intake contract. They provide a stable observation ID for exact idempotency and a separate stable failure code for cross-run coalescing. The intake accepts only bounded identifiers and content-minimized summaries; it never accepts prompt, reply, member, or private-eval payloads. Terminal failures create signals, while passing, awaiting-traffic, and insufficient-data observations do not. PR jobs remain isolated from production credentials; `ci_detection` is available only to a trusted configured caller and does not synchronize cases to GitHub.
 
-Operators attach supporting, contradictory, or inconclusive evidence. Moving a case to `actionable` requires supporting evidence and an accepted contract with at least one machine-executable check. `suggest` returns same-boundary title candidates but never merges them. Explicitly requested linked coding work moves the case to `in_progress`; member-owned cases can link during `runCodingAgent`, while operator cases can attach an already queued/running task with `link-task <case-id> --task <task-id>`. Success moves the case to `verifying`, while failure returns it to `actionable`. Record deployed proof and resolve atomically with `improve verify <case-id> --revision <sha> --summary "..."`. Never copy private source evidence into a public issue, PR metadata, or tracked fixtures.
+`triage <case-id>` is read-only by default and reconstructs a redacted dossier from active signals plus content-free runtime and delivery aggregates. `triage <case-id> --apply` records the reviewed conclusion, evidence, contract, ownership fields, and lifecycle transition atomically and idempotently; an explicit verdict override requires an operator evidence summary. Triage never starts work. Moving a case to `actionable` still requires supporting evidence and an accepted contract with at least one machine-executable check. `suggest` returns same-boundary title candidates but never merges them. Explicitly requested linked coding work moves the case to `in_progress`; member-owned cases can link during `runCodingAgent`, while operator cases can attach an already queued/running task with `link-task <case-id> --task <task-id>`. Success moves the case to `verifying`, while failure returns it to `actionable`. Record deployed proof and resolve atomically with `improve verify <case-id> --revision <sha> --summary "..."`. Never copy private source evidence into a public issue, PR metadata, or tracked fixtures.
 
 Active contracts that the prompt evaluator can represent are exported into the private regression suite:
 

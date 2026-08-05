@@ -52,6 +52,16 @@ The allowed states are `open`, `needs_evidence`, `actionable`, `in_progress`, `v
 - Withdrawing the last signal dismisses only an untriaged `open` or `needs_evidence` case. Re-adding the signal reopens that specific automatically dismissed case.
 - Resolved and dismissed cases may be reopened explicitly; no hidden retry or request replay occurs at deployment startup.
 
+## Triage
+
+`improve triage <case-id>` is the single read-only triage view. It combines active signal provenance with content-free aggregates from signal-linked runtime executions: terminal status, warning/error counts, terminal tool outcomes, duration, delivery state, and safe event names. It never copies prompts, replies, event summaries, artifact bodies, member identities, or private eval content into the dossier.
+
+Deterministic runtime, deployment, CI, and eval gate failures may be confirmed from their authoritative signal. An ordinary member, agent, operator, or developer report remains `insufficient_evidence` unless its retained runtime aggregates establish a terminal execution, tool, event, or delivery failure. Code never declares a subjective report `not_reproduced`; that verdict requires an explicit operator conclusion.
+
+Known source-owned gates may propose an executable contract. Unknown detector codes and semantic reports require the operator to provide expected behavior and a concrete executable check. This prevents a stable label from masquerading as a runnable acceptance test.
+
+`--apply` performs one transaction: it records the dossier evidence, accepts the confirmed contract when present, updates classification/owner/severity, transitions confirmed cases to `actionable`, inconclusive cases to `needs_evidence`, or explicitly not-reproduced cases to `dismissed`, and appends one audit event. The operation compares the case version and locks the case. Its application key covers the signal snapshot, verdict, evidence, contract, and ownership decision, so concurrent exact retries are harmless while a later materially different conclusion may still be applied. Triage never starts a coding task or publishes anything to GitHub.
+
 ## Operator workflow
 
 Use the configured database explicitly:
@@ -59,6 +69,9 @@ Use the configured database explicitly:
 ```bash
 npm run improve -- --target local inbox
 npm run improve -- --target local show <case-id>
+npm run improve -- --target local triage <case-id>
+npm run improve -- --target local triage <case-id> --apply
+npm run improve -- --target local triage <case-id> --apply --verdict confirmed --evidence-summary "A focused reproduction confirms the failure." --expected "The focused invariant passes." --check '{"kind":"test","reference":"focused-invariant"}'
 npm run improve -- --target local suggest <case-id>
 npm run improve -- --target local evidence <case-id> --kind runtime_trace --disposition supports --summary "..."
 npm run improve -- --target local contract <case-id> --expected "..." --check '{"kind":"test","reference":"focused-test"}'

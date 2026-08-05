@@ -8,6 +8,7 @@ import { createAppDatabase, type DiscordAiAgentRepository } from "../../src/db/r
 import { runDataRetentionOnce } from "../../src/observability/dataRetention.js";
 import { passingRandomCanaryChannel, passingStatsCanaryChannel, passingWebCanaryChannel } from "../../src/observability/postDeployCanaryEvidence.js";
 import { recordAutomatedImprovementDetection } from "../../src/improvements/detections.js";
+import { buildImprovementTriageDossier, improvementTriageApplication } from "../../src/improvements/triage.js";
 import { createIsolatedTestDatabase, type IsolatedTestDatabase } from "./testDatabase.js";
 import { cleanupRepositoryTestRows, sha256Hex } from "./repositoryTestSupport.js";
 
@@ -204,6 +205,107 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
     expect(repeated.signalCreated).toBe(false);
     expect(laterRevision.case.caseId).toBe(first.case.caseId);
     expect(laterRevision.signal.signalId).not.toBe(first.signal.signalId);
+  });
+
+  it("atomically applies one triage snapshot without duplicating evidence or contracts", async () => {
+    const detected = await recordAutomatedImprovementDetection(repo, {
+      source: "eval_detection",
+      sourceId: "private-regressions:run-a",
+      summary: "Private regression verification failed.",
+      stableCode: "private-regression-suite",
+      appRevision: "revision-a",
+      classification: "defect",
+      severity: "high",
+      owningDomain: "evals",
+    });
+    const record = await repo.getImprovementCase(detected.case.caseId);
+    if (!record) throw new Error("Expected improvement case.");
+    const dossier = buildImprovementTriageDossier(record, []);
+    const application = improvementTriageApplication(dossier);
+    await expect(repo.applyImprovementTriage({ ...application, applicationKey: "0".repeat(64), actorId: "operator" }))
+      .rejects.toThrow(/application key/);
+    const attempts = await Promise.all([
+      repo.applyImprovementTriage({ ...application, actorId: "operator" }),
+      repo.applyImprovementTriage({ ...application, actorId: "operator" }),
+    ]);
+    const first = attempts.find((attempt) => attempt.applied);
+    const repeated = attempts.find((attempt) => !attempt.applied);
+    if (!first || !repeated) throw new Error("Expected one applied and one idempotent triage result.");
+
+    expect(first).toMatchObject({
+      applied: true,
+      case: { status: "actionable" },
+      evidence: [expect.objectContaining({ disposition: "supports", kind: "eval_regression" })],
+      contract: {
+        version: 1,
+        expectedBehavior: "The private regression suite passes for the candidate revision.",
+        checks: [{ kind: "eval", reference: "private-regression-suite" }],
+      },
+    });
+    expect(repeated).toMatchObject({ applied: false, case: { status: "actionable" } });
+    expect(repeated.evidence.map((evidence) => evidence.evidenceId)).toEqual(first.evidence.map((evidence) => evidence.evidenceId));
+    expect(repeated.contract?.contractId).toBe(first.contract?.contractId);
+
+    const stored = await repo.getImprovementCase(detected.case.caseId);
+    expect(stored?.evidence).toHaveLength(1);
+    expect(stored?.contracts).toHaveLength(1);
+    expect(stored?.events.filter((event) => event.eventName === "triage.applied")).toHaveLength(1);
+  });
+
+  it("rejects a stale triage dossier when an active signal is withdrawn", async () => {
+    const fingerprint = `triage-${randomUUID()}`;
+    const sourceKey = `developer:${randomUUID()}`;
+    const first = await repo.recordImprovementSignal({
+      source: "developer_report", sourceKey, reporterKind: "developer",
+      summary: "A shared case needs evidence.", scope: "repository", fingerprint,
+    });
+    await repo.recordImprovementSignal({
+      source: "operator_report", sourceKey: `operator:${randomUUID()}`, reporterKind: "operator",
+      summary: "A shared case needs evidence.", scope: "repository", fingerprint,
+    });
+    const record = await repo.getImprovementCase(first.case.caseId);
+    if (!record) throw new Error("Expected improvement case.");
+    const application = improvementTriageApplication(buildImprovementTriageDossier(record, []));
+    await repo.withdrawImprovementSignal({ sourceKey, actorId: "developer" });
+
+    await expect(repo.applyImprovementTriage({ ...application, actorId: "operator" }))
+      .rejects.toThrow(/changed/);
+  });
+
+  it("moves report-only triage to needs evidence without inventing a contract", async () => {
+    const reported = await repo.recordImprovementSignal({
+      source: "developer_report",
+      sourceKey: `developer:${randomUUID()}`,
+      reporterKind: "developer",
+      summary: "A repository behavior needs investigation.",
+      classification: "developer_friction",
+      scope: "repository",
+    });
+    const record = await repo.getImprovementCase(reported.case.caseId);
+    if (!record) throw new Error("Expected improvement case.");
+    const application = improvementTriageApplication(buildImprovementTriageDossier(record, []));
+    const applied = await repo.applyImprovementTriage({ ...application, actorId: "operator" });
+
+    expect(applied).toMatchObject({
+      applied: true,
+      case: { status: "needs_evidence" },
+      contract: null,
+      evidence: [expect.objectContaining({ disposition: "inconclusive", kind: "source_report" })],
+    });
+
+    const reviewed = await repo.getImprovementCase(reported.case.caseId);
+    if (!reviewed) throw new Error("Expected reviewed improvement case.");
+    const confirmed = improvementTriageApplication(buildImprovementTriageDossier(reviewed, []), {
+      verdict: "confirmed",
+      evidenceSummary: "A focused reproduction confirmed the repository failure.",
+      expectedBehavior: "The focused repository invariant passes.",
+      checks: [{ kind: "test", reference: "focused-repository-invariant" }],
+    });
+    await expect(repo.applyImprovementTriage({ ...confirmed, actorId: "operator" })).resolves.toMatchObject({
+      applied: true,
+      case: { status: "actionable" },
+      contract: { checks: [{ kind: "test", reference: "focused-repository-invariant" }] },
+    });
   });
 
   it("links explicit work and requires deployed evidence before resolving", async () => {

@@ -2,12 +2,20 @@ import { randomUUID } from "node:crypto";
 import { loadConfig } from "../src/config/env.js";
 import { createPool } from "../src/db/pool.js";
 import { createAppDatabase } from "../src/db/repositories.js";
+import { AgentRuntimeRepository } from "../src/db/agentRuntimeRepository.js";
+import { DeliveryObligationsRepository } from "../src/db/deliveryObligationsRepository.js";
 import type { ImprovementCase, ImprovementCaseStatus, ImprovementClassification, ImprovementContractCheck, ImprovementSeverity } from "../src/db/types.js";
 import { improvementFingerprint } from "../src/improvements/coalescing.js";
 import {
   recordAutomatedImprovementDetection,
   type AutomatedImprovementSource,
 } from "../src/improvements/detections.js";
+import {
+  buildImprovementTriageDossier,
+  collectImprovementRuntimeObservations,
+  improvementTriageApplication,
+  type ImprovementTriageVerdict,
+} from "../src/improvements/triage.js";
 
 const args = process.argv.slice(2);
 const target = option("--target");
@@ -32,6 +40,30 @@ try {
     print(result);
   } else if (command === "suggest") {
     print(await repo.suggestImprovementCaseMerges({ caseId: requiredPositional(1, "case id"), limit: numberOption("--limit", 10) }));
+  } else if (command === "triage") {
+    const caseId = requiredPositional(1, "case id");
+    const record = await repo.getImprovementCase(caseId);
+    if (!record) fail("Improvement case not found.");
+    const runtime = await collectImprovementRuntimeObservations(record.signals, {
+      runtime: new AgentRuntimeRepository(pool),
+      deliveries: new DeliveryObligationsRepository(pool),
+    });
+    const dossier = buildImprovementTriageDossier(record, runtime);
+    if (!args.includes("--apply")) {
+      print(dossier);
+    } else {
+      const checkValues = repeated("--check");
+      const application = improvementTriageApplication(dossier, {
+        verdict: option("--verdict") ? triageVerdict(option("--verdict")!) : undefined,
+        evidenceSummary: option("--evidence-summary"),
+        expectedBehavior: option("--expected"),
+        checks: checkValues.length ? checkValues.map(parseCheck) : undefined,
+        classification: option("--classification") ? classificationValue(option("--classification")!) : undefined,
+        severity: option("--severity") ? severityValue(option("--severity")!) : undefined,
+        owningDomain: option("--domain"),
+      });
+      print({ dossier, result: await repo.applyImprovementTriage({ ...application, actorId: process.env.USER ?? "operator" }) });
+    }
   } else if (command === "report") {
     const summary = requiredOption("--summary");
     const classification = classificationValue(option("--classification") ?? "unknown");
@@ -133,7 +165,7 @@ try {
 
 function option(name: string) { const index = args.indexOf(name); return index >= 0 ? args[index + 1] : undefined; }
 function repeated(name: string) { return args.flatMap((value, index) => value === name && args[index + 1] ? [args[index + 1]!] : []); }
-function positionals() { const values: string[] = []; for (let i = 0; i < args.length; i += 1) { if (args[i]?.startsWith("--")) { if (!["--confirm-production", "--publication-safe"].includes(args[i]!)) i += 1; } else values.push(args[i]!); } return values; }
+function positionals() { const values: string[] = []; for (let i = 0; i < args.length; i += 1) { if (args[i]?.startsWith("--")) { if (!["--confirm-production", "--publication-safe", "--apply"].includes(args[i]!)) i += 1; } else values.push(args[i]!); } return values; }
 function positional(index: number) { return positionals()[index]; }
 function requiredPositional(index: number, name: string) { const value = positional(index); if (!value) fail(`Missing ${name}.`); return value; }
 function requiredOption(name: string) { const value = option(name); if (!value) fail(`Missing ${name}.`); return value; }
@@ -144,9 +176,10 @@ function classificationValue(value: string): ImprovementClassification { const v
 function severityValue(value: string): ImprovementSeverity { const values: ImprovementSeverity[] = ["low", "medium", "high", "critical"]; if (!values.includes(value as ImprovementSeverity)) fail(`Invalid severity: ${value}`); return value as ImprovementSeverity; }
 function automatedDetectionSource(value: string): AutomatedImprovementSource { const values: AutomatedImprovementSource[] = ["runtime_detection", "deployment_detection", "ci_detection", "eval_detection"]; if (!values.includes(value as AutomatedImprovementSource)) fail(`Invalid automated detection source: ${value}`); return value as AutomatedImprovementSource; }
 function improvementScope(value: string): ImprovementCase["scope"] { const values: ImprovementCase["scope"][] = ["guild", "repository", "deployment", "global"]; if (!values.includes(value as ImprovementCase["scope"])) fail(`Invalid improvement scope: ${value}`); return value as ImprovementCase["scope"]; }
+function triageVerdict(value: string): ImprovementTriageVerdict { const values: ImprovementTriageVerdict[] = ["confirmed", "not_reproduced", "insufficient_evidence"]; if (!values.includes(value as ImprovementTriageVerdict)) fail(`Invalid triage verdict: ${value}`); return value as ImprovementTriageVerdict; }
 function evidenceDisposition(value: string) { if (value !== "supports" && value !== "contradicts" && value !== "inconclusive") fail(`Invalid evidence disposition: ${value}`); return value; }
 function parseCheck(value: string): ImprovementContractCheck { try { const parsed = JSON.parse(value) as ImprovementContractCheck; if (!parsed || typeof parsed !== "object" || typeof parsed.kind !== "string") throw new Error(); return parsed; } catch { fail(`Invalid --check JSON: ${value}`); } }
 function print(value: unknown) { process.stdout.write(`${JSON.stringify(value, null, 2)}\n`); }
 function fail(message: string): never { throw new Error(message); }
 function assertDatabaseTarget(selected: "local" | "production", databaseUrl: string) { const host = new URL(databaseUrl).hostname; const local = ["localhost", "127.0.0.1", "::1", "postgres"].includes(host); if (selected === "local" && !local) fail(`Refusing --target local for database host ${host}.`); if (selected === "production" && (process.env.NODE_ENV !== "production" || local)) fail("Production target requires NODE_ENV=production and a non-local database host."); }
-function usage() { return "Usage: npm run improve -- --target local|production [--confirm-production] inbox|show|suggest|report|detect|transition|evidence|contract|link-task|verify|merge ..."; }
+function usage() { return "Usage: npm run improve -- --target local|production [--confirm-production] inbox|show|suggest|triage|report|detect|transition|evidence|contract|link-task|verify|merge ..."; }

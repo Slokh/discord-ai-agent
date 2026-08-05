@@ -427,6 +427,7 @@ async function buildNanoCodexPrompt(
     promptOverlay,
     capabilityContributions,
     { displayName: ctx.config.discord.botName },
+    ctx.requestEmbeds ?? [],
   );
   const instructions = messages
     .filter((message, index) => isStableNanoCodexInstruction(message, index))

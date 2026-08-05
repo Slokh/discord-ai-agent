@@ -4,7 +4,8 @@ import type { JobRuntime } from "../jobs/queue.js";
 import { ensureAgentRuntimePromptExecution, finishAgentRuntimePromptExecution } from "../agent/runtimeLedger.js";
 import { enqueueAgentRuntimeSessionExecution } from "../agent/runtimeLifecycle.js";
 import { durationMs, logger, previewText } from "../util/logger.js";
-import { persistDiscordMessage } from "./messagePersistence.js";
+import { indexableMessageText, persistDiscordMessage } from "./messagePersistence.js";
+import { discordEmbedContextsFromMessage } from "./embedContext.js";
 import { DiscordResponseSink } from "./responseSink.js";
 import { executeDiscordAgentRequest } from "./agentDelivery.js";
 import {
@@ -98,7 +99,8 @@ export async function handleMessageCreate(
 
   const requestId = message.id;
   const requestAttachments = discordAttachmentContextsFromMessage(message);
-  const text = discordPromptText(message, client.user.id, mentionContext.botRoleIds, requestAttachments.length);
+  const requestEmbeds = discordEmbedContextsFromMessage(message);
+  const text = discordPromptText(message, client.user.id, mentionContext.botRoleIds, requestAttachments.length, requestEmbeds.length);
   const requestLogger = logger.child({
     traceId: message.id,
     requestId,
@@ -114,7 +116,8 @@ export async function handleMessageCreate(
       mentionKind: mentionContext.kind,
       botRoleIds: mentionContext.botRoleIds,
       attachmentCount: requestAttachments.length,
-      imageAttachmentCount: requestAttachments.filter(isDiscordImageAttachment).length
+      imageAttachmentCount: requestAttachments.filter(isDiscordImageAttachment).length,
+      embedCount: requestEmbeds.length
     },
     "Discord AI Agent mention received"
   );
@@ -181,6 +184,7 @@ export async function handleMessageCreate(
           text,
           rawContent: message.content,
           botRoleIds: mentionContext.botRoleIds,
+          requestEmbeds,
           messageStartedAt
         },
         agentRuntimeExecution,
@@ -247,6 +251,7 @@ export async function handleMessageCreate(
     text,
     rawContent: message.content,
     botRoleIds: mentionContext.botRoleIds,
+    requestEmbeds,
     messageStartedAt
   });
 }
@@ -255,7 +260,8 @@ export function discordPromptText(
   message: Pick<Message, "content" | "messageSnapshots" | "reference">,
   botUserId: string,
   botRoleIds: string[],
-  attachmentCount = 0
+  attachmentCount = 0,
+  embedCount = 0
 ) {
   const explicitText = stripBotAddress(message.content, botUserId, botRoleIds).trim();
   if (explicitText) return explicitText;
@@ -263,6 +269,7 @@ export function discordPromptText(
     return "Use the forwarded message and its reply chain as context, then respond helpfully.";
   }
   if (attachmentCount > 0) return "Inspect the attached content and respond helpfully.";
+  if (embedCount > 0) return "Use the linked preview context and respond helpfully.";
   if (message.reference?.messageId) return "Continue from the replied-to message.";
   return "Ask briefly what I need help with.";
 }
@@ -274,7 +281,7 @@ export function queueIncomingMessageEmbedding(
   source: "message_create" | "message_update",
   botRoleIds: string[] = []
 ) {
-  if (!message.content?.trim()) {
+  if (!indexableMessageText(message).trim()) {
     logger.debug({ messageId: message.id, channelId: message.channelId }, "Skipping embedding for empty Discord message");
     return;
   }

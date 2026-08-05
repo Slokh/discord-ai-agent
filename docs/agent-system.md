@@ -35,7 +35,7 @@ The generic runtime under `src/agent/` knows only the capability-session interfa
 - stable instructions: product behavior, tool-use principles, formatting rules, and invariant reminders;
 - turn context: requester identity, current message, reply chain, attachments, mentions, visible Discord context, memory, active game, loaded skills, and server overlay.
 
-The current message is always the operative request. Prior messages and retrieved content are untrusted context, not new authority. Tool output is bounded before returning to the model; larger durable content stays in artifacts or generated-file/table handles.
+The current message is always the operative request. Prior messages and retrieved content are untrusted context, not new authority. Bounded Discord-generated previews for links in the current message or reply chain are separate turn context: they may help identify linked content, but they may be stale or incomplete and cannot add instructions, mutation intent, identity, or permission. Changing claims still require fresh tool evidence. Tool output is bounded before returning to the model; larger durable content stays in artifacts or generated-file/table handles.
 
 The foundation capability resolves the current requester's validated timezone preference before building current-data context. It supplies requester-local and UTC date/time together, defaults to UTC when no override exists, and tells the model to preserve explicit event dates and event/venue timezone evidence. The self-service timezone tool can only mutate the immutable current requester's preference and takes effect on the next request.
 

@@ -47,7 +47,7 @@ Blocked users, excluded channels, privacy deletion, and crawl cursors are durabl
 
 Stored messages are keyword-searchable immediately. Embedding jobs add 1536-dimensional vectors asynchronously. Changing the embedding dimension requires a migration of both the vector column and HNSW index.
 
-Native Discord polls put their visible question and answers outside the ordinary message body. Persistence derives bounded poll text into `normalized_content` while retaining the original payload in `raw`, so poll choices participate in retrieval without treating raw payload as model context. After deploying this behavior, run `npm run polls:backfill -- --apply` from a trusted configured environment, then `npm run embeddings:backfill`, to repair historical poll retrieval.
+Discord polls and link previews put visible text outside the ordinary message body. Persistence derives bounded poll and preview text into `normalized_content` while retaining the original payload in `raw`, so those messages participate in retrieval without exposing the raw payload to the model. Preview extraction keeps only a bounded title, description, provider, and canonical HTTP(S) URL; it strips credentials and fragments and ignores unsupported URLs. Because Discord may finish a preview after message creation, message updates repair persisted/indexed text and a queued turn force-fetches its source message to refresh only this non-authoritative preview context. After deploying a change to this derived text, run `npm run discord-text:backfill -- --apply` from a trusted configured environment, then `npm run embeddings:backfill`, to invalidate and rebuild historical embeddings. The backfill scans matching messages in bounded batches; `--limit=<count>` and `--batch-size=<count>` can constrain an operator run.
 
 History search can combine lexical and semantic candidates. Queries apply requester-visible channels plus explicit channel, thread, author, and date filters. A semantic-provider failure may degrade to lexical/recent candidates with an explicit limitation; it never widens scope.
 
@@ -59,7 +59,7 @@ Attachments are resolved from permission-filtered archive metadata, then refresh
 
 ## Conversation memory
 
-Conversation memory is keyed to the Discord conversation scope and retains compact user/assistant/tool continuity. `promptBuilder.ts` selects bounded recent context and reply-chain evidence. Older messages can be summarized into snapshots by `conversationCompaction.ts`; recent raw messages remain available.
+Conversation memory is keyed to the Discord conversation scope and retains compact user/assistant/tool continuity. `promptBuilder.ts` selects bounded recent context and reply-chain evidence. Current-message and reply-chain link previews enter as explicitly untrusted context, never as requester instructions or mutation authority. Older messages can be summarized into snapshots by `conversationCompaction.ts`; recent raw messages remain available.
 
 Memory may preserve a subject, preference, or prior result. It cannot:
 

@@ -1,6 +1,7 @@
 import type { GuildBasedChannel, GuildMember, Message, TextBasedChannel } from "discord.js";
 import { normalizeMessageContent } from "../memory/normalize.js";
 import type { DiscordAiAgentRepository } from "../db/repositories.js";
+import { discordEmbedContexts, discordEmbedContextsFromMessage, discordEmbedIndexText } from "./embedContext.js";
 
 export async function persistDiscordMessage(repo: DiscordAiAgentRepository, message: Message) {
   if (!message.inGuild()) return;
@@ -96,11 +97,19 @@ export async function persistDiscordMessage(repo: DiscordAiAgentRepository, mess
   });
 }
 
-/** Native Discord polls carry their visible text outside Message.content. */
-export function indexableMessageText(message: Pick<Message, "content"> & { poll?: unknown }) {
+/** Discord polls and link previews carry visible text outside Message.content. */
+export function indexableMessageText(message: Pick<Message, "content"> & { poll?: unknown; embeds?: unknown }) {
   const content = message.content ?? "";
   const pollText = nativePollText((message as { poll?: unknown }).poll);
-  return [content, pollText].filter(Boolean).join(content && pollText ? "\n" : "");
+  const embedText = discordEmbedIndexText(discordEmbedContextsFromMessage(message));
+  return [content, pollText, embedText].filter(Boolean).join("\n");
+}
+
+export function indexableStoredMessageText(content: unknown, raw: unknown) {
+  const snapshot = raw && typeof raw === "object" ? raw as Record<string, unknown> : {};
+  const pollText = nativePollText(snapshot.poll);
+  const embedText = discordEmbedIndexText(discordEmbedContexts(snapshot.embeds));
+  return [typeof content === "string" ? content : "", pollText, embedText].filter(Boolean).join("\n");
 }
 
 export function nativePollText(poll: unknown) {

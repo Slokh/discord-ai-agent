@@ -42,6 +42,7 @@ export type DiscordAgentExecutionRequest = {
   userDisplayName?: string;
   interaction?: AgentRuntimeTurnEnvelope["interaction"];
   requestAttachments?: AgentRuntimeTurnEnvelope["requestAttachments"];
+  requestEmbeds?: AgentRuntimeTurnEnvelope["requestEmbeds"];
 };
 
 export type PreparedDiscordAgentTurn = {
@@ -179,11 +180,11 @@ export async function waitForDiscordClientReady(client: Client, timeoutMs = 30_0
   ]);
 }
 
-export async function fetchDiscordMessage(client: Client, channelId: string, messageId: string): Promise<Message> {
+export async function fetchDiscordMessage(client: Client, channelId: string, messageId: string, force = false): Promise<Message> {
   const channel = await client.channels.fetch(channelId);
   const messages = (channel as any)?.messages;
   if (!messages?.fetch) throw new Error(`Discord channel ${channelId} cannot fetch messages.`);
-  return (await messages.fetch(messageId)) as Message;
+  return (await messages.fetch(force ? { message: messageId, force: true } : messageId)) as Message;
 }
 
 export function parseDateMs(value: string | undefined) {

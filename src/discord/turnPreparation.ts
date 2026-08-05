@@ -18,6 +18,7 @@ import { visibleChannelIdsForMember } from "./permissions.js";
 import { discordChannelThreadKey, explicitChannelMentionIds, explicitUserMentionIds } from "./mentionParsing.js";
 import { mentionedUserIdentitiesFromMessage } from "./mentionedUsers.js";
 import { discordAttachmentContextsFromMessage, resolveDiscordReplyContext, REPLY_CHAIN_CONTEXT_MESSAGE_LIMIT } from "./replyContext.js";
+import { discordEmbedContextsFromMessage } from "./embedContext.js";
 import type { DiscordResponseSink } from "./responseSink.js";
 import {
   recordAgentRuntimeSpan,
@@ -57,6 +58,7 @@ export async function prepareDiscordAgentTurn(input: {
     : await guild.members.fetch(requesterId);
   const userDisplayName = input.request.userDisplayName ?? requesterMember.displayName ?? requesterMember.user.username;
   const requestAttachments = input.request.requestAttachments ?? discordAttachmentContextsFromMessage(input.message);
+  const requestEmbeds = input.request.requestEmbeds ?? discordEmbedContextsFromMessage(input.message);
   await input.context.repo.ensureConversationSession({
     threadKey,
     guildId,
@@ -167,6 +169,7 @@ export async function prepareDiscordAgentTurn(input: {
     mentionedChannelIds,
     replyContext,
     requestAttachments,
+    requestEmbeds,
     sessionMessages: priorSessionMessages,
     statusChannelId: input.responseSink.statusChannelId,
     statusMessageId: input.responseSink.statusMessageId,
@@ -211,7 +214,10 @@ export async function replayPreparedDiscordAgentTurn(input: {
   const startedAt = Date.now();
   const sessionContextLimit = sessionContextMessageLimitForReplyContext(input.turnEnvelope.replyContext);
   let priorSessionMessages = conversationMessagesFromEnvelope(input.turnEnvelope);
-  let turnEnvelope = input.turnEnvelope;
+  const refreshedRequestEmbeds = input.request.requestEmbeds !== undefined;
+  let turnEnvelope = refreshedRequestEmbeds
+    ? { ...input.turnEnvelope, requestEmbeds: input.request.requestEmbeds }
+    : input.turnEnvelope;
   let refreshed = false;
   try {
     priorSessionMessages = await input.context.repo.recentConversationMessages({
@@ -219,7 +225,7 @@ export async function replayPreparedDiscordAgentTurn(input: {
       limit: sessionContextLimit,
       requesterAuthorId: input.turnEnvelope.userId,
     });
-    turnEnvelope = replaceAgentRuntimeTurnEnvelopeSessionMessages(input.turnEnvelope, priorSessionMessages);
+    turnEnvelope = replaceAgentRuntimeTurnEnvelopeSessionMessages(turnEnvelope, priorSessionMessages);
     refreshed = true;
   } catch (error) {
     input.requestLogger.warn({ err: error, threadKey: input.turnEnvelope.threadKey }, "Failed to refresh queued channel memory; using stored envelope memory");
@@ -233,6 +239,9 @@ export async function replayPreparedDiscordAgentTurn(input: {
       sessionMessageCount: priorSessionMessages.length,
       staleSessionMessageCount: input.turnEnvelope.sessionMessages.length,
       visibleChannelCount: turnEnvelope.visibleChannelIds.length,
+      storedEmbedCount: input.turnEnvelope.requestEmbeds?.length ?? 0,
+      embedCount: turnEnvelope.requestEmbeds?.length ?? 0,
+      refreshedRequestEmbeds,
       sessionContextLimit,
       refreshed,
       durationMs: durationMs(startedAt)

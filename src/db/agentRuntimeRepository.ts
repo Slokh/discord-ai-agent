@@ -245,6 +245,29 @@ export class AgentRuntimeRepository {
     return result.rows.map(rowToAgentRuntimeMessage);
   }
 
+  async listMessagesForExecution(input: {
+    sessionId: string;
+    executionId: string;
+    limit?: number | null;
+  }): Promise<AgentRuntimeMessageRecord[]> {
+    const result = await this.pool.query(
+      `
+        SELECT *
+        FROM agent_runtime_messages
+        WHERE session_id = $1
+          AND metadata->>'executionId' = $2
+        ORDER BY created_at ASC, message_id ASC
+        LIMIT $3
+      `,
+      [
+        input.sessionId,
+        input.executionId,
+        Math.max(1, Math.min(500, Math.trunc(input.limit ?? 100)))
+      ]
+    );
+    return result.rows.map(rowToAgentRuntimeMessage);
+  }
+
   async createExecution(input: {
     executionId?: string | null;
     sessionId: string;

@@ -900,6 +900,22 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
     });
     expect(execution).toEqual(expect.objectContaining({ executionId, sessionId, status: "running", attempt: 1 }));
 
+    const linkedMessage = await agentRuntimeRepo.appendMessage({
+      sessionId,
+      role: "assistant",
+      parts: [{ type: "text", text: "linked reply" }],
+      metadata: { executionId }
+    });
+    await agentRuntimeRepo.appendMessage({
+      sessionId,
+      role: "assistant",
+      parts: [{ type: "text", text: "different execution reply" }],
+      metadata: { executionId: "different-execution" }
+    });
+    await expect(agentRuntimeRepo.listMessagesForExecution({ sessionId, executionId })).resolves.toEqual([
+      expect.objectContaining({ messageId: linkedMessage.messageId })
+    ]);
+
     const event = await agentRuntimeRepo.recordEvent({
       sessionId,
       executionId,

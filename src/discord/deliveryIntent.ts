@@ -17,6 +17,7 @@ const commonFields = {
   storedContent: z.string(),
   responseRedacted: z.boolean(),
   footer: z.object({
+    durationMs: z.number().finite().nonnegative().optional(),
     extraLines: z.array(z.string()).optional(),
   }).nullable(),
   presentation: discordPresentationSchema.nullable(),

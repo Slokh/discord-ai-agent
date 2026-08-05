@@ -158,7 +158,7 @@ export async function executeDiscordAgentRequest(
   });
   if (!agentRuntimeExecution) {
     const errorContent = "I hit an error: could not create the agent runtime ledger for this turn.";
-    await responseSink.sendError(errorContent);
+    await responseSink.sendError(errorContent, elapsedResponseFooter(request.messageStartedAt));
     return;
   }
   const preparedTurn = request.turnEnvelope
@@ -311,7 +311,7 @@ export async function executeDiscordAgentRequest(
       },
       "Agent response ready"
     );
-    const formattedFooter = response.footerLines?.length ? { extraLines: response.footerLines } : null;
+    const formattedFooter = elapsedResponseFooter(request.messageStartedAt, response.footerLines);
     const storedResponseContent = response.storedContent ?? response.content;
     const responseRedacted = Boolean(response.storedContent);
     const deliveryFileReferences = input.agentRuntime
@@ -487,7 +487,7 @@ export async function executeDiscordAgentRequest(
         "The model/provider blocked that one, so I’m not going to keep it in channel memory. Try rephrasing it.",
         input.config.maxReplyChars
       );
-      const finalReply = (await responseSink.sendError(filteredContent)).message;
+      const finalReply = (await responseSink.sendError(filteredContent, elapsedResponseFooter(request.messageStartedAt))).message;
       await markDiscordDeliveryDelivered(input, agentRuntimeExecution.executionId, finalReply, requestLogger);
       await attachPromptTasksToDiscordReply(input, request.requestId, finalReply, requestLogger);
       const deletedMemoryRows = await input.repo
@@ -533,7 +533,7 @@ export async function executeDiscordAgentRequest(
         .catch((auditError) => requestLogger.warn({ err: auditError }, "Failed to audit agent timeout"));
     }
     const errorContent = cleanResponse(`I hit an error: ${error instanceof Error ? error.message : String(error)}`, input.config.maxReplyChars);
-    const finalReply = (await responseSink.sendError(errorContent)).message;
+    const finalReply = (await responseSink.sendError(errorContent, elapsedResponseFooter(request.messageStartedAt))).message;
     await markDiscordDeliveryDelivered(input, agentRuntimeExecution.executionId, finalReply, requestLogger);
     await attachPromptTasksToDiscordReply(input, request.requestId, finalReply, requestLogger);
     requestLogger.info({ replyMessageId: finalReply.id }, "Sent Discord error response");
@@ -604,4 +604,11 @@ export async function executeDiscordAgentRequest(
     });
     requestLogger.info({ durationMs: durationMs(request.messageStartedAt) }, "Discord mention failed");
   }
+}
+
+function elapsedResponseFooter(startedAt: number, extraLines?: string[]) {
+  return {
+    durationMs: durationMs(startedAt),
+    ...(extraLines?.length ? { extraLines } : {}),
+  };
 }

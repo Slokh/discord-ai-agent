@@ -1,5 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
-import { DEFAULT_DISCORD_LOADING_REACTION, DiscordResponseSink, discordDeliveryNonce } from "../../src/discord/responseSink.js";
+import {
+  DEFAULT_DISCORD_LOADING_REACTION,
+  DiscordResponseSink,
+  discordDeliveryNonce,
+  formatDiscordResponseFooter,
+} from "../../src/discord/responseSink.js";
 
 const suppressedMentions = { parse: [], repliedUser: false };
 
@@ -60,7 +65,7 @@ describe("DiscordResponseSink", () => {
     });
   });
 
-  it("appends Discord subtext footer lines to final replies", async () => {
+  it("appends elapsed time after other Discord subtext footer lines", async () => {
     const sourceMessage = fakeMessage();
     const sink = new DiscordResponseSink({
       client: fakeClient(),
@@ -72,14 +77,24 @@ describe("DiscordResponseSink", () => {
     await sink.sendFinal({
       content: "done",
       footer: {
+        durationMs: 12_440,
         extraLines: ["💸 [transfer](<https://explore.tempo.xyz/tx/abc>)"]
       }
     });
 
     expect(sourceMessage.reply).toHaveBeenCalledWith({
-      content: "done\n\n-# 💸 [transfer](<https://explore.tempo.xyz/tx/abc>)",
+      content: "done\n\n-# 💸 [transfer](<https://explore.tempo.xyz/tx/abc>)\n-# 12.4s",
       allowedMentions: suppressedMentions
     });
+  });
+
+  it.each([
+    [0, "-# 0.0s"],
+    [12_440, "-# 12.4s"],
+    [59_950, "-# 1m0s"],
+    [91_600, "-# 1m32s"],
+  ])("formats %dms as a compact elapsed-time footer", (durationMs, expected) => {
+    expect(formatDiscordResponseFooter({ durationMs })).toBe(expected);
   });
 
   it("normalizes Markdown tables at the final Discord delivery boundary", async () => {

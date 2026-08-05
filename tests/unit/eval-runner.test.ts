@@ -47,11 +47,12 @@ describe("eval runner", () => {
   });
 
   it("can isolate private production regressions from committed evals", () => {
-    expect(parseEvalArgs(["--private-only", "--safe-summary"])).toEqual(
+    expect(parseEvalArgs(["--private-only", "--safe-summary", "--record-improvement-results"])).toEqual(
       expect.objectContaining({
         dirs: [".discord-ai-agent/evals"],
         includePrivate: true,
         safeSummary: true,
+        recordImprovementResults: true,
       }),
     );
   });
@@ -65,6 +66,9 @@ describe("eval runner", () => {
         id: "private-run-id",
         category: "wrong_tool",
         sourceRevision: "revision-a",
+        improvementCaseId: "private-case-id",
+        improvementContractId: "private-contract-id",
+        improvementContractVersion: 2,
         prompt: "private member prompt",
         status: "failed",
         durationMs: 100,
@@ -78,7 +82,7 @@ describe("eval runner", () => {
     const summary = JSON.stringify(safeEvalSummary(report));
     expect(summary).toContain('"revision":"revision-a"');
     expect(summary).toContain('"category":"wrong_tool"');
-    expect(summary).not.toMatch(/private member prompt|private answer|run-secret|trace-secret|private assertion/);
+    expect(summary).not.toMatch(/private member prompt|private answer|run-secret|trace-secret|private assertion|private-case-id|private-contract-id/);
   });
 
   it("filters prompts by category and text", () => {

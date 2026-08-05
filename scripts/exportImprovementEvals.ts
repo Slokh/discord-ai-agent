@@ -9,7 +9,7 @@ const outputPath = path.resolve(process.argv[2] ?? ".discord-ai-agent/evals/impr
 const pool = createPool(loadConfig());
 try {
   const result = await pool.query(`
-    SELECT case_row.case_id, case_row.classification, contract.version, contract.expected_behavior, contract.checks,
+    SELECT case_row.case_id, case_row.classification, contract.contract_id, contract.version, contract.expected_behavior, contract.checks,
            contract.source_revision, contract.created_at,
            signal.execution_id, signal.guild_id, signal.channel_id, signal.reporter_id AS user_id,
            coalesce(turn.envelope->>'text', session.request) AS request,
@@ -46,6 +46,9 @@ try {
       id: `improvement-${safeId(String(row.case_id))}-v${Number(row.version)}`,
       category: String(row.classification),
       sourceRevision: String(row.source_revision ?? "unknown"),
+      improvementCaseId: String(row.case_id),
+      improvementContractId: String(row.contract_id),
+      improvementContractVersion: Number(row.version),
       prompt,
       notes: `Expected behavior: ${String(row.expected_behavior)}\nPrivate improvement case: ${String(row.case_id)}`,
       ...assertions,

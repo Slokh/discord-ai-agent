@@ -188,6 +188,7 @@ async function runCli() {
         command("kubectl", [
           "--namespace", args.namespace, "exec", `deployment/${args.release}-worker`, "--",
           "node", "dist/scripts/eval.js", "--private-only", "--safe-summary",
+          "--record-improvement-results",
         ], 8 * 60_000);
       } catch (error) {
         throw new Error(privateEvalFailureMessage(error), { cause: error });

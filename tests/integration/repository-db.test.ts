@@ -324,8 +324,142 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
     await expect(repo.linkImprovementCaseTask({ caseId: caseRecord.case.caseId, taskId, actorId: "operator" })).resolves.toMatchObject({ status: "in_progress" });
     await repo.markAgentTaskSucceeded({ taskId, branchName: "operator/repair", prUrl: "https://github.com/example/repo/pull/1", draft: false, verifyPassed: true });
     await expect(repo.getImprovementCase(caseRecord.case.caseId)).resolves.toMatchObject({ case: { status: "verifying" } });
-    await expect(repo.transitionImprovementCase({ caseId: caseRecord.case.caseId, to: "resolved", actorKind: "operator" })).rejects.toThrow(/deployment evidence/);
-    await expect(repo.verifyImprovementCase({ caseId: caseRecord.case.caseId, revision: "abc123", summary: "Focused contract passed on the deployed revision.", actorId: "operator" })).resolves.toMatchObject({ status: "resolved" });
+    await expect(repo.transitionImprovementCase({ caseId: caseRecord.case.caseId, to: "resolved", actorKind: "operator" })).rejects.toThrow(/verification receipt/);
+    await expect(repo.inspectImprovementVerification({ caseId: caseRecord.case.caseId, revision: "test-abc123" }))
+      .rejects.toThrow(/durable deployment verification/);
+    await repo.markDeploymentVerified({ revision: "test-abc123", deploymentId: "deployment-a" });
+    const dossier = await repo.inspectImprovementVerification({ caseId: caseRecord.case.caseId, revision: "test-abc123" });
+    expect(dossier).toMatchObject({
+      status: "passed",
+      deployment: { deploymentId: "deployment-a" },
+      checks: [{ status: "passed", proofSource: "release_ci" }],
+    });
+    await expect(pool.query("SELECT count(*)::int AS count FROM improvement_verification_receipts WHERE case_id = $1", [caseRecord.case.caseId]))
+      .resolves.toEqual(expect.objectContaining({ rows: [{ count: 0 }] }));
+    const attempts = await Promise.all([
+      repo.verifyImprovementCase({ caseId: caseRecord.case.caseId, revision: "test-abc123", actorId: "operator" }),
+      repo.verifyImprovementCase({ caseId: caseRecord.case.caseId, revision: "test-abc123", actorId: "operator" }),
+    ]);
+    const first = attempts.find((attempt) => attempt.recorded);
+    const repeated = attempts.find((attempt) => !attempt.recorded);
+    if (!first || !repeated) throw new Error("Expected one recorded and one idempotent verification receipt.");
+    expect(first).toMatchObject({ recorded: true, case: { status: "resolved" }, receipt: { status: "passed", applied: true } });
+    expect(repeated).toMatchObject({ recorded: false, case: { status: "resolved" }, receipt: { receiptId: first.receipt.receiptId } });
+    await expect(repo.verifyImprovementCase({ caseId: caseRecord.case.caseId, revision: "test-abc123", actorId: "operator" }))
+      .resolves.toMatchObject({ recorded: false, case: { status: "resolved" }, receipt: { receiptId: first.receipt.receiptId } });
+    const stored = await repo.getImprovementCase(caseRecord.case.caseId);
+    expect(stored?.evidence).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: "deployment_verification", disposition: "supports", referenceId: first.receipt.receiptId }),
+    ]));
+    expect(stored?.events).toEqual(expect.arrayContaining([
+      expect.objectContaining({ eventName: "verification.passed", metadata: expect.objectContaining({ receiptId: first.receipt.receiptId }) }),
+    ]));
+  });
+
+  it("records content-free private replay proof and resolves it automatically after promotion", async () => {
+    const caseRecord = await repo.recordImprovementSignal({
+      source: "member_report", sourceKey: `source-${randomUUID()}`, reporterKind: "member",
+      summary: "A reply contract needs deployment verification.", scope: "repository",
+    });
+    await repo.addImprovementEvidence({ caseId: caseRecord.case.caseId, kind: "runtime_trace", disposition: "supports", summary: "Retained evidence confirms the mismatch." });
+    const contract = await repo.acceptImprovementContract({
+      caseId: caseRecord.case.caseId,
+      expectedBehavior: "The reply cites its source.",
+      checks: [{ kind: "answer_text", value: "source", expectation: "required" }],
+      createdBy: "operator",
+    });
+    await repo.transitionImprovementCase({ caseId: caseRecord.case.caseId, to: "actionable", actorKind: "operator" });
+    await repo.transitionImprovementCase({ caseId: caseRecord.case.caseId, to: "in_progress", actorKind: "operator" });
+    await repo.transitionImprovementCase({ caseId: caseRecord.case.caseId, to: "verifying", actorKind: "system" });
+    await expect(repo.recordImprovementEvalResults([{
+      caseId: caseRecord.case.caseId,
+      contractId: contract.contractId,
+      contractVersion: contract.version,
+      revision: "test-replay-revision",
+      deploymentId: "deployment-replay",
+      status: "passed",
+      referenceId: `improvement-${caseRecord.case.caseId}-v${contract.version}`,
+      runKey: "run-a",
+      durationMs: 125,
+    }])).resolves.toEqual({ recorded: 1, total: 1 });
+    await repo.markDeploymentVerified({ revision: "test-replay-revision", deploymentId: "deployment-replay" });
+
+    const outcomes = await repo.verifyImprovementCasesForDeployment({
+      revision: "test-replay-revision",
+      deploymentId: "deployment-replay",
+    });
+    expect(outcomes).toEqual(expect.arrayContaining([
+      { caseId: caseRecord.case.caseId, status: "passed", recorded: true },
+    ]));
+    await expect(repo.getImprovementCase(caseRecord.case.caseId)).resolves.toMatchObject({ case: { status: "resolved" } });
+    const proofs = await pool.query("SELECT status,summary,metadata FROM improvement_verification_proofs WHERE case_id = $1", [caseRecord.case.caseId]);
+    expect(proofs.rows).toEqual([expect.objectContaining({
+      status: "passed",
+      summary: "The case-specific private contract replay passed.",
+      metadata: { durationMs: 125 },
+    })]);
+  });
+
+  it("waits for traffic-sampled revision quality before resolving a quality-gate case", async () => {
+    const caseRecord = await repo.recordImprovementSignal({
+      source: "runtime_detection", sourceKey: `source-${randomUUID()}`, reporterKind: "automation",
+      summary: "The deployed revision failed its quality gate.", scope: "deployment",
+    });
+    await repo.addImprovementEvidence({ caseId: caseRecord.case.caseId, kind: "runtime_gate", disposition: "supports", summary: "Production observation recorded the regression." });
+    await repo.acceptImprovementContract({
+      caseId: caseRecord.case.caseId,
+      expectedBehavior: "The deployed revision satisfies the production quality policy.",
+      checks: [{ kind: "deployment_canary", reference: "revision-quality-gate" }],
+      createdBy: "automation",
+    });
+    await repo.transitionImprovementCase({ caseId: caseRecord.case.caseId, to: "actionable", actorKind: "automation" });
+    await repo.transitionImprovementCase({ caseId: caseRecord.case.caseId, to: "in_progress", actorKind: "operator" });
+    await repo.transitionImprovementCase({ caseId: caseRecord.case.caseId, to: "verifying", actorKind: "system" });
+    await repo.markDeploymentVerified({ revision: "test-quality-revision", deploymentId: "deployment-quality" });
+
+    await expect(repo.verifyImprovementCasesForDeployment({ revision: "test-quality-revision", deploymentId: "deployment-quality" }))
+      .resolves.toEqual(expect.arrayContaining([{ caseId: caseRecord.case.caseId, status: "inconclusive", recorded: true }]));
+    await expect(repo.getImprovementCase(caseRecord.case.caseId)).resolves.toMatchObject({ case: { status: "verifying" } });
+    await expect(repo.recordImprovementRevisionQualityResult({
+      revision: "test-quality-revision",
+      status: "passed",
+      runKey: "quality-run-a",
+    })).resolves.toEqual({ recorded: 1, deploymentId: "deployment-quality" });
+    await expect(repo.verifyImprovementCasesForDeployment({ revision: "test-quality-revision", deploymentId: "deployment-quality" }))
+      .resolves.toEqual(expect.arrayContaining([{ caseId: caseRecord.case.caseId, status: "passed", recorded: true }]));
+    await expect(repo.getImprovementCase(caseRecord.case.caseId)).resolves.toMatchObject({ case: { status: "resolved" } });
+  });
+
+  it("returns failed runtime-backed verification to actionable", async () => {
+    const caseRecord = await repo.recordImprovementSignal({
+      source: "runtime_detection", sourceKey: `source-${randomUUID()}`, reporterKind: "automation",
+      summary: "A runtime failure needs repair.", scope: "deployment",
+    });
+    await repo.addImprovementEvidence({ caseId: caseRecord.case.caseId, kind: "runtime_trace", disposition: "supports", summary: "A terminal execution failed." });
+    await repo.acceptImprovementContract({
+      caseId: caseRecord.case.caseId,
+      expectedBehavior: "The deployed execution succeeds.",
+      checks: [{ kind: "runtime_event", name: "agent.execution.failed", expectation: "forbidden" }],
+      createdBy: "operator",
+    });
+    await repo.transitionImprovementCase({ caseId: caseRecord.case.caseId, to: "actionable", actorKind: "operator" });
+    await repo.transitionImprovementCase({ caseId: caseRecord.case.caseId, to: "in_progress", actorKind: "operator" });
+    await repo.transitionImprovementCase({ caseId: caseRecord.case.caseId, to: "verifying", actorKind: "system" });
+    await repo.markDeploymentVerified({ revision: "test-runtime-revision", deploymentId: "deployment-runtime" });
+    const sessionId = `agent-session-${randomUUID()}`;
+    const executionId = `agent-execution-${randomUUID()}`;
+    await agentRuntimeRepo.upsertSession({ sessionId, threadKey: `verification:${sessionId}`, request: "verification", status: "failed", metadata: { appRevision: "test-runtime-revision" } });
+    await agentRuntimeRepo.createExecution({ executionId, sessionId, status: "failed", metadata: { appRevision: "test-runtime-revision" } });
+    await agentRuntimeRepo.recordEvent({ sessionId, executionId, kind: "error", level: "error", eventName: "agent.execution.failed" });
+
+    const result = await repo.verifyImprovementCase({
+      caseId: caseRecord.case.caseId,
+      revision: "test-runtime-revision",
+      deploymentId: "deployment-runtime",
+      executionId,
+      actorId: "operator",
+    });
+    expect(result).toMatchObject({ recorded: true, case: { status: "actionable" }, receipt: { status: "failed", applied: true } });
   });
 
   it("withdraws and reactivates an idempotent member signal", async () => {

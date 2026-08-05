@@ -141,10 +141,16 @@ try {
   } else if (command === "verify") {
     const caseId = requiredPositional(1, "case id");
     const revision = requiredOption("--revision");
-    print(await repo.verifyImprovementCase({
-      caseId, revision, summary: requiredOption("--summary"), actorId: process.env.USER ?? "operator",
-      privacy: publicationSafe() ? "publication_safe" : "private",
-    }));
+    const verificationInput = {
+      caseId,
+      revision,
+      deploymentId: option("--deployment-id"),
+      executionId: option("--execution-id"),
+    };
+    const dossier = await repo.inspectImprovementVerification(verificationInput);
+    print(args.includes("--apply")
+      ? { dossier, result: await repo.verifyImprovementCase({ ...verificationInput, actorId: process.env.USER ?? "operator" }) }
+      : dossier);
   } else if (command === "link-task") {
     print(await repo.linkImprovementCaseTask({
       caseId: requiredPositional(1, "case id"), taskId: requiredOption("--task"), actorId: process.env.USER ?? "operator",

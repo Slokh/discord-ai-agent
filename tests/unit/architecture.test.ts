@@ -74,6 +74,7 @@ describe("architecture guardrails", () => {
     expect(deployment).toContain("scripts/postDeployVerification.ts");
     expect(verification).toContain("--safe-summary");
     expect(verification).toContain("--private-only");
+    expect(verification).toContain("--record-improvement-results");
     expect(verification).toContain("dist/scripts/exportImprovementEvals.js");
     expect(verification).not.toContain("exportRunFeedbackEvals");
     expect(verification).toContain("verifyDeploymentStability");
@@ -83,6 +84,7 @@ describe("architecture guardrails", () => {
     expect(verification).toContain("eval_detection");
     expect(observation).toContain("--record-detection");
     expect(observation).toContain("improvements, detection");
+    expect(observation).toContain("verification");
     expect(observation).not.toContain("feedback");
     expect(deployment).toContain("--force-conflicts");
     expect(scheduled).not.toContain("upload-artifact");

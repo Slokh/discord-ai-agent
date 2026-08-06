@@ -216,8 +216,11 @@ async function main() {
     if (args.recordImprovementResults) await recordPrivateReplayProducerRun(producerRunKey, "failed", "producer_execution_failed");
     throw error;
   }
-  if (args.recordImprovementResults) await recordPrivateReplayProducerRun(producerRunKey, "succeeded");
   const hasFailures = report.totals.failed > 0 || report.totals.error > 0;
+  if (args.recordImprovementResults) {
+    const producerResult = privateReplayProducerResult(report);
+    await recordPrivateReplayProducerRun(producerRunKey, producerResult.status, producerResult.outcomeCode);
+  }
   if (args.safeSummary) {
     process.stdout.write(`${JSON.stringify(safeEvalSummary(report), null, 2)}\n`);
     process.exitCode = hasFailures ? 1 : 0;
@@ -231,6 +234,13 @@ async function main() {
 
   process.stdout.write(formatEvalSummary(report, outputPath, comparison));
   process.exitCode = hasFailures ? 1 : 0;
+}
+
+/** A completed eval process can still be an unsuccessful proof producer. */
+export function privateReplayProducerResult(report: Pick<EvalRunReport, "totals">) {
+  return report.totals.failed > 0 || report.totals.error > 0
+    ? { status: "failed" as const, outcomeCode: "eval_assertions_failed" }
+    : { status: "succeeded" as const, outcomeCode: undefined };
 }
 
 async function recordPrivateReplayProducerRun(

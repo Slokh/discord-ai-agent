@@ -9,6 +9,7 @@ import {
   filterPrompts,
   formatEvalSummary,
   parseEvalArgs,
+  privateReplayProducerResult,
   safeEvalSummary,
   validateEvalToolNames,
   type EvalPrompt,
@@ -58,6 +59,15 @@ describe("eval runner", () => {
         recordImprovementResults: true,
       }),
     );
+  });
+
+  it("records failed assertions as a failed private replay producer run", () => {
+    expect(privateReplayProducerResult({
+      totals: { passed: 0, failed: 1, error: 0, skipped: 0, total: 1 },
+    })).toEqual({ status: "failed", outcomeCode: "eval_assertions_failed" });
+    expect(privateReplayProducerResult({
+      totals: { passed: 1, failed: 0, error: 0, skipped: 0, total: 1 },
+    })).toEqual({ status: "succeeded", outcomeCode: undefined });
   });
 
   it("formats private regression output without prompts, answers, or run identifiers", () => {

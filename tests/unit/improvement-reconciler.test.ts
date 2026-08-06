@@ -45,7 +45,7 @@ describe("improvement reconciler", () => {
       getImprovementReporterClarificationState: vi.fn(async () => clarificationState()),
       ensureImprovementReporterConversationsForCase: vi.fn(async () => 0),
       listActiveImprovementPullRequestWork: vi.fn(async () => []),
-      linkImprovementCasePullRequest: vi.fn(),
+      reconcileImprovementPullRequestWorkAttempt: vi.fn(),
       latestDeploymentVerification: vi.fn(async () => ({ revision: "revision-b", deploymentId: "deployment-b", verifiedAt: now })),
       verifyImprovementCasesForDeployment,
       listImprovementCaseIdsNeedingHealth: vi.fn(async () => []),
@@ -116,7 +116,7 @@ describe("improvement reconciler", () => {
       ensureImprovementReporterConversationsForCase: vi.fn(async () => 1),
       messageContext: vi.fn(async () => []),
       listActiveImprovementPullRequestWork: vi.fn(async () => []),
-      linkImprovementCasePullRequest: vi.fn(),
+      reconcileImprovementPullRequestWorkAttempt: vi.fn(),
       latestDeploymentVerification: vi.fn(async () => null),
       verifyImprovementCasesForDeployment: vi.fn(),
       listImprovementCaseIdsNeedingHealth: vi.fn(async () => []),
@@ -158,7 +158,7 @@ describe("improvement reconciler", () => {
       getImprovementReporterClarificationState: vi.fn(async () => clarificationState()),
       ensureImprovementReporterConversationsForCase: vi.fn(async () => 0),
       listActiveImprovementPullRequestWork: vi.fn(async () => []),
-      linkImprovementCasePullRequest: vi.fn(),
+      reconcileImprovementPullRequestWorkAttempt: vi.fn(),
       latestDeploymentVerification: vi.fn(async () => null),
       verifyImprovementCasesForDeployment: vi.fn(),
       listImprovementCaseIdsNeedingHealth: vi.fn(async () => []),
@@ -200,7 +200,7 @@ describe("improvement reconciler", () => {
       getImprovementReporterClarificationState: vi.fn(async () => clarificationState()),
       ensureImprovementReporterConversationsForCase: vi.fn(async () => 0),
       listActiveImprovementPullRequestWork: vi.fn(async () => []),
-      linkImprovementCasePullRequest: vi.fn(),
+      reconcileImprovementPullRequestWorkAttempt: vi.fn(),
       latestDeploymentVerification: vi.fn(async () => null),
       verifyImprovementCasesForDeployment: vi.fn(),
       listImprovementCaseIdsNeedingHealth: vi.fn(async () => []),
@@ -239,7 +239,7 @@ describe("improvement reconciler", () => {
       getImprovementReporterClarificationState: vi.fn(async () => clarificationState({ pendingCount: 1, clarificationTaskId: "assessment-1", latestUpdatedAt: waiting.updatedAt })),
       ensureImprovementReporterConversationsForCase: vi.fn(async () => 1),
       listActiveImprovementPullRequestWork: vi.fn(async () => []),
-      linkImprovementCasePullRequest: vi.fn(),
+      reconcileImprovementPullRequestWorkAttempt: vi.fn(),
       latestDeploymentVerification: vi.fn(async () => null),
       verifyImprovementCasesForDeployment: vi.fn(),
       listImprovementCaseIdsNeedingHealth: vi.fn(async () => [waiting.caseId]),
@@ -272,6 +272,7 @@ describe("improvement reconciler", () => {
 
   it("surfaces the registered proof producer while verification awaits traffic", async () => {
     const now = new Date("2026-08-05T12:00:00.000Z");
+    const nextExpectedAt = new Date("2026-08-05T18:00:00.000Z");
     const verifying = improvementCase("imp-verifying", "verifying", now);
     const verifyingRecord = {
       ...record(verifying, signal(verifying.caseId, "deployment_detection", "revision_quality_gate")),
@@ -295,6 +296,12 @@ describe("improvement reconciler", () => {
           summary: "Awaiting enough production observations.",
           referenceType: null,
           referenceId: null,
+          proofMetadata: {
+            qualityVersion: "quality-one",
+            contributingRevisions: ["revision-one"],
+            observationStatus: "insufficient_data",
+            sample: { minimumAnswers: 10, minimumToolCalls: 5, answersRemaining: 4, toolCallsRemaining: 2 },
+          },
         }],
         applicationKey: "application-one",
         evidenceId: null,
@@ -313,11 +320,22 @@ describe("improvement reconciler", () => {
       getImprovementReporterClarificationState: vi.fn(async () => clarificationState()),
       ensureImprovementReporterConversationsForCase: vi.fn(async () => 0),
       listActiveImprovementPullRequestWork: vi.fn(async () => []),
-      linkImprovementCasePullRequest: vi.fn(),
+      reconcileImprovementPullRequestWorkAttempt: vi.fn(),
       latestDeploymentVerification: vi.fn(async () => null),
       verifyImprovementCasesForDeployment: vi.fn(),
       listImprovementCaseIdsNeedingHealth: vi.fn(async () => [verifying.caseId]),
       updateImprovementCaseHealth,
+      listImprovementProofProducerHealth: vi.fn(async () => [{
+        trigger: "production_observation" as const,
+        state: "healthy" as const,
+        reason: "current" as const,
+        latestRun: null,
+        latestSuccessAt: now,
+        consecutiveFailures: 0,
+        maxSilenceMs: 8 * 60 * 60 * 1_000,
+        nextExpectedAt,
+        evidenceKey: "production_observation:healthy:current",
+      }]),
     };
 
     await runImprovementReconciliationOnce({
@@ -330,10 +348,22 @@ describe("improvement reconciler", () => {
 
     expect(updateImprovementCaseHealth).toHaveBeenCalledWith(expect.objectContaining({
       state: "waiting",
-      blocker: "verification_proof_pending",
-      nextAction: "await_registered_proof_producer",
+      blocker: "verification_awaiting_traffic",
+      nextAction: "await_member_traffic",
       retryTrigger: "production_observation",
-      progressKey: `verification:application-one:${now.toISOString()}`,
+      retryAt: nextExpectedAt,
+      details: {
+        verification: {
+          reason: "insufficient_data",
+          answersRemaining: 4,
+          toolCallsRemaining: 2,
+          minimumAnswers: 10,
+          minimumToolCalls: 5,
+          qualityVersion: "quality-one",
+          contributingRevisionCount: 1,
+        },
+      },
+      progressKey: "verification:application-one",
     }));
   });
 
@@ -378,6 +408,7 @@ describe("improvement reconciler", () => {
       latestSuccessAt: null,
       consecutiveFailures: 2,
       maxSilenceMs: 8 * 60 * 60 * 1_000,
+      nextExpectedAt: null,
       evidenceKey: "production_observation:unhealthy:repeated_failures:run-two",
     };
     const recordImprovementSignal = vi.fn(async () => ({ signalCreated: true, caseCreated: true }));
@@ -391,7 +422,7 @@ describe("improvement reconciler", () => {
       getImprovementReporterClarificationState: vi.fn(async () => clarificationState()),
       ensureImprovementReporterConversationsForCase: vi.fn(async () => 0),
       listActiveImprovementPullRequestWork: vi.fn(async () => []),
-      linkImprovementCasePullRequest: vi.fn(),
+      reconcileImprovementPullRequestWorkAttempt: vi.fn(),
       latestDeploymentVerification: vi.fn(async () => null),
       verifyImprovementCasesForDeployment: vi.fn(),
       listImprovementCaseIdsNeedingHealth: vi.fn(async () => [verifying.caseId]),
@@ -440,7 +471,7 @@ describe("improvement reconciler", () => {
       getImprovementReporterClarificationState: vi.fn(async () => clarificationState()),
       ensureImprovementReporterConversationsForCase: vi.fn(async () => 1),
       listActiveImprovementPullRequestWork: vi.fn(async () => []),
-      linkImprovementCasePullRequest: vi.fn(),
+      reconcileImprovementPullRequestWorkAttempt: vi.fn(),
       latestDeploymentVerification: vi.fn(async () => null),
       verifyImprovementCasesForDeployment: vi.fn(),
       listImprovementCaseIdsNeedingHealth: vi.fn(async () => []),
@@ -489,7 +520,7 @@ describe("improvement reconciler", () => {
       getImprovementReporterClarificationState: vi.fn(async () => clarificationState()),
       ensureImprovementReporterConversationsForCase: vi.fn(async () => 1),
       listActiveImprovementPullRequestWork: vi.fn(async () => []),
-      linkImprovementCasePullRequest: vi.fn(),
+      reconcileImprovementPullRequestWorkAttempt: vi.fn(),
       latestDeploymentVerification: vi.fn(async () => null),
       verifyImprovementCasesForDeployment: vi.fn(),
       listImprovementCaseIdsNeedingHealth: vi.fn(async () => [actionable.caseId]),
@@ -543,7 +574,7 @@ describe("improvement reconciler", () => {
       getImprovementReporterClarificationState: vi.fn(async () => clarificationState()),
       ensureImprovementReporterConversationsForCase: vi.fn(async () => 0),
       listActiveImprovementPullRequestWork: vi.fn(async () => []),
-      linkImprovementCasePullRequest: vi.fn(),
+      reconcileImprovementPullRequestWorkAttempt: vi.fn(),
       latestDeploymentVerification: vi.fn(async () => null),
       verifyImprovementCasesForDeployment: vi.fn(),
       listImprovementCaseIdsNeedingHealth: vi.fn(async () => [actionable.caseId]),
@@ -622,7 +653,7 @@ describe("improvement reconciler", () => {
       getImprovementReporterClarificationState: vi.fn(async () => clarificationState()),
       ensureImprovementReporterConversationsForCase: vi.fn(async () => 1),
       listActiveImprovementPullRequestWork: vi.fn(async () => []),
-      linkImprovementCasePullRequest: vi.fn(),
+      reconcileImprovementPullRequestWorkAttempt: vi.fn(),
       latestDeploymentVerification: vi.fn(async () => null),
       verifyImprovementCasesForDeployment: vi.fn(),
       listImprovementCaseIdsNeedingHealth: vi.fn(async () => [reported.caseId]),

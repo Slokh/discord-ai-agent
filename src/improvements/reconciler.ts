@@ -20,8 +20,7 @@ import {
   improvementDetectorPolicyForSignal,
   improvementSignalRequiresAutonomousAssessment,
 } from "./detectorPolicies.js";
-import { recordAutomatedImprovementDetection } from "./detections.js";
-import { improvementProofProducerPolicy } from "./proofProducerRegistry.js";
+import { recordObservedProofProducerDetections } from "./producerHealth.js";
 const TRIAGE_STATUSES: ImprovementCaseStatus[] = ["open", "needs_evidence", "actionable"];
 const CASE_PAGE_SIZE = 100;
 const ACTOR_ID = "improvement-reconciler";
@@ -39,12 +38,12 @@ type ImprovementReconciliationRepository = Pick<
   | "messageContext"
   | "ensureImprovementReporterConversationsForCase"
   | "listActiveImprovementPullRequestWork"
-  | "linkImprovementCasePullRequest"
+  | "reconcileImprovementPullRequestWorkAttempt"
   | "latestDeploymentVerification"
   | "verifyImprovementCasesForDeployment"
   | "listImprovementCaseIdsNeedingHealth"
   | "updateImprovementCaseHealth"
-> & Partial<Pick<DiscordAiAgentRepository, "listImprovementProofProducerHealth" | "recordImprovementSignal">>;
+> & Partial<Pick<DiscordAiAgentRepository, "listImprovementProofProducerHealth" | "recordImprovementSignal" | "enqueueImprovementBotUpdate">>;
 
 type RuntimeReader = ImprovementAssessmentRuntimeReader;
 type DeliveryReader = Pick<DeliveryObligationsRepository, "getByExecutionId">;
@@ -80,8 +79,13 @@ export async function runImprovementReconciliationOnce(input: {
   const proofProducers = input.repo.listImprovementProofProducerHealth
     ? await input.repo.listImprovementProofProducerHealth({ now })
     : [];
-  const proofProducerDetections = input.config.nodeEnv === "production"
-    ? await recordUnhealthyProofProducerDetections(input.repo, proofProducers, input.config.appRevision)
+  const proofProducerDetections = input.config.nodeEnv === "production" && input.repo.recordImprovementSignal
+    ? await recordObservedProofProducerDetections({
+        repo: input.repo as ImprovementReconciliationRepository & Pick<DiscordAiAgentRepository, "recordImprovementSignal">,
+        health: proofProducers,
+        appRevision: input.config.appRevision,
+        observer: "improvement_reconciliation",
+      })
     : [];
   const triage = await reconcileTriage(input);
   const pullRequests = await reconcileImprovementPullRequestWork(input.repo, input.config, ACTOR_ID);
@@ -107,43 +111,6 @@ export async function runImprovementReconciliationOnce(input: {
     health,
     stalled,
   };
-}
-
-async function recordUnhealthyProofProducerDetections(
-  repo: ImprovementReconciliationRepository,
-  health: ImprovementProofProducerHealth[],
-  appRevision: string,
-) {
-  const results: ImprovementReconciliationResult["proofProducerDetections"] = [];
-  if (!repo.recordImprovementSignal) return results;
-  for (const producer of health.filter((candidate) => candidate.state === "unhealthy")) {
-    const policy = improvementProofProducerPolicy(producer.trigger);
-    if (!policy) continue;
-    try {
-      const episode = createHash("sha256").update(producer.evidenceKey).digest("hex").slice(0, 24);
-      const recorded = await recordAutomatedImprovementDetection({ recordImprovementSignal: repo.recordImprovementSignal.bind(repo) }, {
-        source: policy.detector.source,
-        sourceId: `proof-producer:${producer.trigger}:${episode}`,
-        stableCode: policy.detector.reference,
-        summary: policy.detector.summary,
-        appRevision,
-        scope: "deployment",
-        classification: policy.detector.classification,
-        severity: policy.detector.severity,
-        owningDomain: policy.detector.owningDomain,
-        metadata: {
-          producerTrigger: producer.trigger,
-          livenessReason: producer.reason,
-          consecutiveFailures: producer.consecutiveFailures,
-          latestRunStatus: producer.latestRun?.status ?? null,
-        },
-      });
-      results.push({ trigger: producer.trigger, status: recorded.signalCreated ? "recorded" : "unchanged" });
-    } catch {
-      results.push({ trigger: producer.trigger, status: "error" });
-    }
-  }
-  return results;
 }
 
 async function reconcileTriage(input: {
@@ -269,6 +236,8 @@ async function reconcileAutonomousAssessment(
       return { status: "deferred", reason: "assessment_running" };
     }
     if (existing.status === "succeeded" || existing.status === "no_changes") {
+      const work = record.workAttempts.find((candidate) => candidate.taskId === taskId);
+      if (existing.status === "succeeded" && work?.status === "failed") continue;
       await input.repo.recordImprovementReconciliationDecision({
         caseId: record.case.caseId,
         eventName: "reconciliation.awaiting_operator",
@@ -350,6 +319,8 @@ async function reconcileAutomatedRepair(
       return { status: "deferred", reason: "repair_running" };
     }
     if (existing.status === "succeeded" || existing.status === "no_changes") {
+      const work = record.workAttempts.find((candidate) => candidate.taskId === taskId);
+      if (existing.status === "succeeded" && work?.status === "failed") continue;
       await input.repo.recordImprovementReconciliationDecision({
         caseId: record.case.caseId,
         eventName: "reconciliation.awaiting_operator",
@@ -509,6 +480,18 @@ async function deriveImprovementCaseHealth(
   if (improvementCase.status === "in_progress") {
     const active = [...record.workAttempts].reverse().find((work) => work.status === "in_progress") ?? null;
     if (!active) return { ...base, state: "blocked" as const, blocker: "active_work_projection_missing", nextAction: "operator_repair_work_link", retryTrigger: null, retryAt: null, progressKey: `in_progress:${improvementCase.version}:missing` };
+    if (active.pullRequestUrl) {
+      const blocker = typeof active.metadata.promotionBlocker === "string" ? active.metadata.promotionBlocker : null;
+      return {
+        ...base,
+        state: blocker ? "blocked" as const : "waiting" as const,
+        blocker: blocker ? `pull_request_${blocker}` : "pull_request_merge_pending",
+        nextAction: blocker ? "operator_resolve_pull_request_blocker" : "sync_pull_request",
+        retryTrigger: blocker ? null : "improvement_reconciliation",
+        retryAt: null,
+        progressKey: `work:${active.workId}:${active.updatedAt.toISOString()}:${active.metadata.promotionState ?? "published"}`,
+      };
+    }
     if (active.taskId) {
       const task = await input.repo.getAgentTask(active.taskId);
       return {
@@ -533,15 +516,47 @@ async function deriveImprovementCaseHealth(
   const unhealthy = unhealthyProducer(pendingTriggers, proofProducers);
   if (unhealthy) return producerBlockedHealth(base, unhealthy, `verification:${receipt.applicationKey}:${receipt.createdAt.toISOString()}`);
   const retryTrigger = pendingTriggers.join(",") || null;
+  const pendingDetail = verificationPendingDetail(receipt.checks);
+  const retryAt = pendingTriggers.length === 1
+    ? proofProducers.find((producer) => producer.trigger === pendingTriggers[0])?.nextExpectedAt ?? null
+    : null;
   return {
     ...base,
     state: retryTrigger ? "waiting" as const : "blocked" as const,
-    blocker: retryTrigger ? "verification_proof_pending" : "verification_has_no_retry_owner",
-    nextAction: retryTrigger ? "await_registered_proof_producer" : "operator_define_proof_owner",
+    blocker: pendingDetail ? "verification_awaiting_traffic" : retryTrigger ? "verification_proof_pending" : "verification_has_no_retry_owner",
+    nextAction: pendingDetail ? "await_member_traffic" : retryTrigger ? "await_registered_proof_producer" : "operator_define_proof_owner",
     retryTrigger,
-    retryAt: null,
-    progressKey: `verification:${receipt.applicationKey}:${receipt.createdAt.toISOString()}`,
+    retryAt,
+    details: pendingDetail ? { verification: pendingDetail } : {},
+    progressKey: `verification:${receipt.applicationKey}`,
   };
+}
+
+function verificationPendingDetail(checks: Array<{ status: string; proofMetadata?: Record<string, unknown> }>) {
+  const metadata = checks
+    .filter((check) => check.status === "inconclusive")
+    .map((check) => check.proofMetadata ?? {})
+    .find((candidate) => candidate.observationStatus === "awaiting_traffic" || candidate.observationStatus === "insufficient_data");
+  if (!metadata) return null;
+  const sample = object(metadata.sample);
+  const contributingRevisions = Array.isArray(metadata.contributingRevisions) ? metadata.contributingRevisions : [];
+  return {
+    reason: metadata.observationStatus,
+    answersRemaining: safeCount(sample.answersRemaining),
+    toolCallsRemaining: safeCount(sample.toolCallsRemaining),
+    minimumAnswers: safeCount(sample.minimumAnswers),
+    minimumToolCalls: safeCount(sample.minimumToolCalls),
+    qualityVersion: typeof metadata.qualityVersion === "string" ? metadata.qualityVersion : null,
+    contributingRevisionCount: contributingRevisions.length,
+  };
+}
+
+function object(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
+}
+
+function safeCount(value: unknown) {
+  return typeof value === "number" && Number.isFinite(value) ? Math.max(0, Math.trunc(value)) : 0;
 }
 
 function unhealthyProducer(triggers: string[], producers: ImprovementProofProducerHealth[]) {
@@ -581,6 +596,12 @@ async function deriveAutomatedRepairHealth(
         ? { caseId: record.case.caseId, state: "blocked" as const, blocker: "automated_repair_retries_exhausted", nextAction: "operator_inspect_repair_failure", retryTrigger: null, retryAt: null, progressKey }
         : { caseId: record.case.caseId, state: "waiting" as const, blocker: "repair_retry_pending", nextAction: "retry_automated_repair", retryTrigger: "improvement_reconciliation", retryAt: null, progressKey };
     }
+    const work = record.workAttempts.find((candidate) => candidate.taskId === task.taskId);
+    if (task.status === "succeeded" && work?.status === "failed") {
+      return attempt === MAX_AUTOMATED_REPAIR_ATTEMPTS
+        ? { caseId: record.case.caseId, state: "blocked" as const, blocker: "automated_repair_retries_exhausted", nextAction: "operator_inspect_repair_failure", retryTrigger: null, retryAt: null, progressKey }
+        : { caseId: record.case.caseId, state: "waiting" as const, blocker: "repair_retry_pending", nextAction: "retry_automated_repair", retryTrigger: "improvement_reconciliation", retryAt: null, progressKey };
+    }
     return { caseId: record.case.caseId, state: "blocked" as const, blocker: "automated_repair_completion_did_not_advance_case", nextAction: "operator_inspect_repair_completion", retryTrigger: null, retryAt: null, progressKey };
   }
   return { caseId: record.case.caseId, state: "pending" as const, blocker: null, nextAction: "queue_automated_repair", retryTrigger: "improvement_reconciliation", retryAt: null, progressKey: `actionable:${record.case.version}:repair:${contract.contractId}:${contract.version}` };
@@ -607,6 +628,12 @@ async function deriveAssessmentHealth(
       };
     }
     if (task.status === "failed" || task.status === "cancelled") {
+      return attempt === MAX_ASSESSMENT_ATTEMPTS
+        ? { caseId: record.case.caseId, state: "blocked" as const, blocker: "autonomous_assessment_retries_exhausted", nextAction: "operator_inspect_assessment_failure", retryTrigger: null, retryAt: null, progressKey }
+        : { caseId: record.case.caseId, state: "waiting" as const, blocker: "assessment_retry_pending", nextAction: "retry_autonomous_assessment", retryTrigger: "improvement_reconciliation", retryAt: null, progressKey };
+    }
+    const work = record.workAttempts.find((candidate) => candidate.taskId === task.taskId);
+    if (task.status === "succeeded" && work?.status === "failed") {
       return attempt === MAX_ASSESSMENT_ATTEMPTS
         ? { caseId: record.case.caseId, state: "blocked" as const, blocker: "autonomous_assessment_retries_exhausted", nextAction: "operator_inspect_assessment_failure", retryTrigger: null, retryAt: null, progressKey }
         : { caseId: record.case.caseId, state: "waiting" as const, blocker: "assessment_retry_pending", nextAction: "retry_autonomous_assessment", retryTrigger: "improvement_reconciliation", retryAt: null, progressKey };

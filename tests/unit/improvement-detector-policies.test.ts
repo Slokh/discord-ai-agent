@@ -45,6 +45,14 @@ describe("improvement detector policies", () => {
     }
   });
 
+  it("cross-observes the reconciler and watchdog without self-monitoring", () => {
+    const reconciler = IMPROVEMENT_PROOF_PRODUCERS.find((producer) => producer.trigger === "improvement_reconciliation");
+    const watchdog = IMPROVEMENT_PROOF_PRODUCERS.find((producer) => producer.trigger === "improvement_watchdog");
+    expect(reconciler).toMatchObject({ mode: "scheduled", observedBy: "improvement_watchdog", maxSilenceMs: 15 * 60 * 1_000 });
+    expect(watchdog).toMatchObject({ mode: "scheduled", observedBy: "improvement_reconciliation", maxSilenceMs: 30 * 60 * 1_000 });
+    for (const producer of IMPROVEMENT_PROOF_PRODUCERS) expect(producer.observedBy).not.toBe(producer.trigger);
+  });
+
   it("keeps observational incidents behind assessment and deterministic gates direct", () => {
     for (const policy of IMPROVEMENT_DETECTOR_POLICIES) {
       const detectorSignal = signal(policy.source, policy.sampleReference);

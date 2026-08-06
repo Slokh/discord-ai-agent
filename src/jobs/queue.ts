@@ -274,24 +274,56 @@ export async function startJobs(input: {
   }
 
   if (improvementWorkerEnabled && input.repo && input.agentRuntimeRepo && input.deliveryObligations) {
-    await boss.work(IMPROVEMENT_RECONCILIATION_JOB, { batchSize: 1, pollingIntervalSeconds: 2 }, async () => {
-      const result = await runImprovementReconciliationOnce({
-        repo: input.repo!,
-        config: input.config,
-        runtime: input.agentRuntimeRepo!,
-        deliveries: input.deliveryObligations!,
-        enqueueImprovementTask: (job) => enqueueAgentTaskJob({
-          boss,
-          queueName: AGENT_TASK_JOB,
-          config: input.config,
-          repo: input.repo,
-          agentRuntimeRepo: input.agentRuntimeRepo,
-          backendName: agentTaskBackendName,
-          job,
-        }),
-      });
-      logger.info(improvementReconciliationLog(result), "Improvement reconciliation complete");
-    });
+    await boss.work(
+      IMPROVEMENT_RECONCILIATION_JOB,
+      { batchSize: 1, pollingIntervalSeconds: 2, includeMetadata: true },
+      async (jobs) => {
+        const job = jobs[0];
+        if (!job) return;
+        const runKey = `pgboss-${job.id}-attempt-${job.retryCount + 1}`;
+        await input.repo!.recordImprovementProofProducerRun({
+          trigger: "improvement_reconciliation",
+          runKey,
+          status: "started",
+          revision: input.config.appRevision,
+        });
+        try {
+          const result = await runImprovementReconciliationOnce({
+            repo: input.repo!,
+            config: input.config,
+            runtime: input.agentRuntimeRepo!,
+            deliveries: input.deliveryObligations!,
+            enqueueImprovementTask: (task) => enqueueAgentTaskJob({
+              boss,
+              queueName: AGENT_TASK_JOB,
+              config: input.config,
+              repo: input.repo,
+              agentRuntimeRepo: input.agentRuntimeRepo,
+              backendName: agentTaskBackendName,
+              job: task,
+            }),
+          });
+          const deployment = await input.repo!.latestDeploymentVerification();
+          await input.repo!.recordImprovementProofProducerRun({
+            trigger: "improvement_reconciliation",
+            runKey,
+            status: "succeeded",
+            revision: input.config.appRevision,
+            deploymentId: deployment?.revision === input.config.appRevision ? deployment.deploymentId : null,
+          });
+          logger.info(improvementReconciliationLog(result), "Improvement reconciliation complete");
+        } catch (error) {
+          await input.repo!.recordImprovementProofProducerRun({
+            trigger: "improvement_reconciliation",
+            runKey,
+            status: "failed",
+            revision: input.config.appRevision,
+            outcomeCode: "reconciliation_failed",
+          }).catch(() => undefined);
+          throw error;
+        }
+      },
+    );
     await boss.schedule(IMPROVEMENT_RECONCILIATION_JOB, input.config.improvementReconcileScheduleCron);
     await boss.send(IMPROVEMENT_RECONCILIATION_JOB, {});
     logger.info(

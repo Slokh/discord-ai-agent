@@ -65,6 +65,7 @@ export type ImprovementCaseHealth = {
   nextAction: string;
   retryTrigger: string | null;
   retryAt: Date | null;
+  details: Record<string, unknown>;
   progressKey: string;
   lastProgressAt: Date;
   checkedAt: Date;
@@ -175,6 +176,14 @@ export type ImprovementPullRequestSnapshot = {
   state: "open" | "closed" | "merged";
   headRevision: string;
   mergeRevision?: string | null;
+  nodeId?: string | null;
+  draft?: boolean;
+  mergeable?: "mergeable" | "conflicting" | "unknown";
+  mergeStateStatus?: string | null;
+  reviewDecision?: "approved" | "changes_requested" | "review_required" | null;
+  unresolvedReviewThreads?: number;
+  checkRollupState?: "success" | "failure" | "error" | "pending" | null;
+  autoMergeEnabled?: boolean;
 };
 
 export type ImprovementContractCheck =

@@ -61,7 +61,13 @@ describe.skipIf(!runDbTests)("improvement proof-producer liveness", () => {
     });
     await expect(repo.listImprovementProofProducerHealth({ now: recoveryAt }))
       .resolves.toEqual(expect.arrayContaining([
-        expect.objectContaining({ trigger: "production_observation", state: "healthy", reason: "current", consecutiveFailures: 0 }),
+        expect.objectContaining({
+          trigger: "production_observation",
+          state: "healthy",
+          reason: "current",
+          consecutiveFailures: 0,
+          nextExpectedAt: new Date(recoveryAt.getTime() + 6 * 60 * 60 * 1_000),
+        }),
       ]));
     await expect(repo.listImprovementProofProducerHealth({ now: new Date(recoveryAt.getTime() + 8 * 60 * 60 * 1_000 + 1) }))
       .resolves.toEqual(expect.arrayContaining([
@@ -105,5 +111,98 @@ describe.skipIf(!runDbTests)("improvement proof-producer liveness", () => {
       deploymentId: "test-producer-deployment",
     })).resolves.toContainEqual({ caseId: caseRecord.case.caseId, status: "passed", recorded: true });
     await expect(repo.getImprovementCase(caseRecord.case.caseId)).resolves.toMatchObject({ case: { status: "resolved" } });
+  });
+
+  it("detects a missing reconciliation heartbeat and accepts only a later successful run as recovery", async () => {
+    const activated = await database.pool.query(
+      "SELECT activated_at FROM improvement_proof_producers WHERE trigger = 'improvement_reconciliation'",
+    );
+    const activatedAt = new Date(activated.rows[0].activated_at);
+    const missedAt = new Date(activatedAt.getTime() + 15 * 60 * 1_000 + 1);
+    await expect(repo.listImprovementProofProducerHealth({ now: missedAt })).resolves.toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        trigger: "improvement_reconciliation",
+        state: "unhealthy",
+        reason: "missed_sla",
+      }),
+    ]));
+
+    await repo.recordImprovementProofProducerRun({
+      trigger: "improvement_reconciliation",
+      runKey: "test-reconciliation-recovery",
+      status: "succeeded",
+      revision: "test-reconciler-revision",
+      observedAt: new Date(missedAt.getTime() + 1_000),
+    });
+    await expect(repo.listImprovementProofProducerHealth({ now: new Date(missedAt.getTime() + 2_000) })).resolves.toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        trigger: "improvement_reconciliation",
+        state: "healthy",
+        reason: "current",
+      }),
+    ]));
+  });
+
+  it("gives an active reconciliation its run budget before calling it stuck", async () => {
+    const activated = await database.pool.query(
+      "SELECT activated_at FROM improvement_proof_producers WHERE trigger = 'improvement_reconciliation'",
+    );
+    const activatedAt = new Date(activated.rows[0].activated_at);
+    const startedAt = new Date(activatedAt.getTime() + 16 * 60 * 1_000);
+    await repo.recordImprovementProofProducerRun({
+      trigger: "improvement_reconciliation",
+      runKey: "test-reconciliation-running",
+      status: "started",
+      revision: "test-reconciler-revision",
+      observedAt: startedAt,
+    });
+    await expect(repo.listImprovementProofProducerHealth({ now: new Date(startedAt.getTime() + 60_000) })).resolves.toEqual(expect.arrayContaining([
+      expect.objectContaining({ trigger: "improvement_reconciliation", state: "healthy", reason: "current" }),
+    ]));
+    await expect(repo.listImprovementProofProducerHealth({ now: new Date(startedAt.getTime() + 10 * 60 * 1_000 + 1) })).resolves.toEqual(expect.arrayContaining([
+      expect.objectContaining({ trigger: "improvement_reconciliation", state: "unhealthy", reason: "run_in_progress_too_long" }),
+    ]));
+  });
+
+  it("projects one bot-channel update per unhealthy producer episode", async () => {
+    const recorded = await repo.recordImprovementSignal({
+      source: "runtime_detection",
+      sourceKey: "test-reconciler-watchdog-alert",
+      reporterKind: "automation",
+      summary: "The improvement reconciler missed its heartbeat.",
+      scope: "deployment",
+    });
+    const update = await repo.enqueueImprovementBotUpdate({
+      caseId: recorded.case.caseId,
+      sourceKey: "test-reconciler-watchdog-alert",
+      producerTrigger: "improvement_reconciliation",
+      livenessReason: "missed_sla",
+    });
+    await repo.enqueueImprovementBotUpdate({
+      caseId: recorded.case.caseId,
+      sourceKey: "test-reconciler-watchdog-alert",
+      producerTrigger: "improvement_reconciliation",
+      livenessReason: "missed_sla",
+    });
+    await expect(repo.listRenderableImprovementBotUpdates()).resolves.toContainEqual(expect.objectContaining({
+      updateId: update.updateId,
+      caseId: recorded.case.caseId,
+      producerTrigger: "improvement_reconciliation",
+      livenessReason: "missed_sla",
+      caseStatus: "open",
+    }));
+    await repo.markImprovementBotUpdateRendered({
+      updateId: update.updateId,
+      deliveryChannelId: "test-bot-channel",
+      deliveryMessageId: "test-bot-message",
+      signature: "open",
+    });
+    await expect(repo.listRenderableImprovementBotUpdates()).resolves.not.toContainEqual(expect.objectContaining({ updateId: update.updateId }));
+    await repo.transitionImprovementCase({ caseId: recorded.case.caseId, to: "dismissed", actorKind: "automation", resolution: "Recovered without a code change." });
+    await expect(repo.listRenderableImprovementBotUpdates()).resolves.toContainEqual(expect.objectContaining({
+      updateId: update.updateId,
+      caseStatus: "dismissed",
+      caseResolution: "Recovered without a code change.",
+    }));
   });
 });

@@ -114,4 +114,56 @@ describe.skipIf(!runDbTests)("improvement lifecycle health database behavior", (
     expect(progressed.health.lastProgressAt.getUTCFullYear()).toBeGreaterThan(2000);
     await expect(repo.listImprovementCaseIdsNeedingHealth()).resolves.toContain(detected.case.caseId);
   });
+
+  it("persists safe pending detail without duplicating health changes", async () => {
+    const detected = await repo.recordImprovementSignal({
+      source: "runtime_detection",
+      sourceKey: `health-detail-${randomUUID()}`,
+      reporterKind: "automation",
+      scope: "deployment",
+      privacy: "private",
+      summary: "A quality gate awaits traffic",
+    });
+    const first = await repo.updateImprovementCaseHealth({
+      caseId: detected.case.caseId,
+      state: "waiting",
+      blocker: "verification_awaiting_traffic",
+      nextAction: "await_member_traffic",
+      retryTrigger: "production_observation",
+      retryAt: new Date("2026-08-06T06:17:00Z"),
+      details: { verification: {
+        reason: "insufficient_data",
+        answersRemaining: 4,
+        toolCallsRemaining: 2,
+        minimumAnswers: 10,
+        minimumToolCalls: 5,
+        qualityVersion: "quality-one",
+        contributingRevisionCount: 2,
+      } },
+      progressKey: "verification:snapshot-one",
+    });
+    await pool.query("UPDATE improvement_cases SET automation_last_progress_at = '2000-01-01T00:00:00Z' WHERE case_id = $1", [detected.case.caseId]);
+    const repeated = await repo.updateImprovementCaseHealth({
+      caseId: detected.case.caseId,
+      state: "waiting",
+      blocker: "verification_awaiting_traffic",
+      nextAction: "await_member_traffic",
+      retryTrigger: "production_observation",
+      retryAt: new Date("2026-08-06T06:17:00Z"),
+      details: { verification: {
+        reason: "insufficient_data",
+        answersRemaining: 4,
+        toolCallsRemaining: 2,
+        minimumAnswers: 10,
+        minimumToolCalls: 5,
+        qualityVersion: "quality-one",
+        contributingRevisionCount: 2,
+      } },
+      progressKey: "verification:snapshot-one",
+    });
+    expect(first.health.details).toMatchObject({ verification: { reason: "insufficient_data", answersRemaining: 4, toolCallsRemaining: 2 } });
+    expect(repeated).toMatchObject({ changed: false, progressed: false });
+    expect(repeated.health.lastProgressAt.getUTCFullYear()).toBe(2000);
+    expect(repeated.health.details).toMatchObject({ verification: { reason: "insufficient_data", answersRemaining: 4, toolCallsRemaining: 2 } });
+  });
 });

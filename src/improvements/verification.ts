@@ -29,6 +29,8 @@ export type ImprovementVerificationProof = {
   summary: string;
   executionId: string | null;
   checkResults: ImprovementReplayCheckResult[];
+  metadata?: Record<string, unknown>;
+  snapshotKey?: string;
   createdAt: Date;
 };
 
@@ -43,6 +45,8 @@ export type ImprovementVerificationCheckResult = {
   summary: string;
   referenceType: string | null;
   referenceId: string | null;
+  proofSnapshotKey?: string | null;
+  proofMetadata?: Record<string, unknown>;
 };
 
 export type ImprovementVerificationDossier = {
@@ -158,7 +162,50 @@ export function improvementVerificationApplicationKey(input: {
   status: ImprovementVerificationStatus;
   checks: ImprovementVerificationCheckResult[];
 }) {
+  if (input.status === "inconclusive") {
+    return hashJson({
+      caseId: input.caseId,
+      contractId: input.contractId,
+      contractVersion: input.contractVersion,
+      status: input.status,
+      pendingChecks: input.checks
+        .filter((check) => check.status === "inconclusive")
+        .map((check) => ({
+          checkHash: check.checkHash,
+          adapterId: check.adapterId,
+          retryTrigger: check.retryTrigger,
+          proofSource: check.proofSource,
+          referenceType: check.referenceType,
+          referenceId: check.referenceId,
+          proofSnapshotKey: check.proofSnapshotKey ?? null,
+        })),
+    });
+  }
   return hashJson(input);
+}
+
+export function improvementVerificationProofSnapshotKey(
+  proof: Omit<ImprovementVerificationProof, "createdAt" | "snapshotKey">,
+) {
+  return hashJson({
+    source: proof.source,
+    status: proof.status,
+    referenceType: proof.referenceType,
+    referenceId: proof.referenceId,
+    checkResults: proof.checkResults,
+    metadata: materialProofMetadata(proof),
+  });
+}
+
+function materialProofMetadata(proof: Omit<ImprovementVerificationProof, "createdAt" | "snapshotKey">) {
+  if (proof.source !== "revision_quality") return {};
+  const metadata = proof.metadata ?? {};
+  return {
+    qualityVersion: metadata.qualityVersion ?? null,
+    contributingRevisions: metadata.contributingRevisions ?? [],
+    observationStatus: metadata.observationStatus ?? null,
+    sample: metadata.sample ?? null,
+  };
 }
 
 function evaluateCheck(input: {
@@ -187,26 +234,26 @@ function evaluateCheck(input: {
     const proof = input.proofs.find((candidate) => candidate.source === "private_eval") ?? null;
     if (!proof) return result(base, "inconclusive", "unavailable", "The post-deploy private replay has not produced this check's proof.");
     const conclusion = proof.checkResults.find((candidate) => candidate.checkHash === base.checkHash);
-    if (!conclusion) return result(base, "inconclusive", "private_eval", "The latest private replay did not contain a conclusion for this check.", proof.referenceType, proof.referenceId);
-    return result(base, conclusion.status, "private_eval", replaySummary(conclusion.status), proof.referenceType, proof.referenceId);
+    if (!conclusion) return result(base, "inconclusive", "private_eval", "The latest private replay did not contain a conclusion for this check.", proof.referenceType, proof.referenceId, proof);
+    return result(base, conclusion.status, "private_eval", replaySummary(conclusion.status), proof.referenceType, proof.referenceId, proof);
   }
   if (adapter.id === "revision_quality") {
     const expectedReference = input.check.kind === "deployment_canary" ? input.check.reference : "revision-quality-gate";
     const proof = input.proofs.find((candidate) => candidate.source === "revision_quality" && candidate.referenceId === expectedReference) ?? null;
     if (!proof) return result(base, "inconclusive", "unavailable", "Production observation has not produced this check's traffic-sampled proof.");
-    return result(base, proof.status, "revision_quality", proof.summary, proof.referenceType, proof.referenceId);
+    return result(base, proof.status, "revision_quality", proof.summary, proof.referenceType, proof.referenceId, proof);
   }
   if (adapter.id === "schedule_health") {
     const expectedReference = input.check.kind === "schedule_health" ? input.check.reference : "";
     const proof = input.proofs.find((candidate) => candidate.source === "schedule_health" && candidate.referenceId === expectedReference) ?? null;
     if (!proof) return result(base, "inconclusive", "unavailable", "Production observation has not produced schedule-specific recovery proof.");
-    return result(base, proof.status, "schedule_health", proof.summary, proof.referenceType, proof.referenceId);
+    return result(base, proof.status, "schedule_health", proof.summary, proof.referenceType, proof.referenceId, proof);
   }
   if (adapter.id === "producer_health") {
     const expectedReference = input.check.kind === "proof_producer_health" ? input.check.reference : "";
     const proof = input.proofs.find((candidate) => candidate.source === "producer_health" && candidate.referenceId === expectedReference) ?? null;
     if (!proof) return result(base, "inconclusive", "unavailable", "The proof producer has not recorded a successful recovery run.");
-    return result(base, proof.status, "producer_health", proof.summary, proof.referenceType, proof.referenceId);
+    return result(base, proof.status, "producer_health", proof.summary, proof.referenceType, proof.referenceId, proof);
   }
   if (adapter.id === "release_verify") {
     return result(base, "passed", "release_ci", "The deployed revision passed the trusted repository verification gate.", "deployment_revision", input.revision);
@@ -227,8 +274,20 @@ function result(
   summary: string,
   referenceType: string | null = null,
   referenceId: string | null = null,
+  proof: ImprovementVerificationProof | null = null,
 ): ImprovementVerificationCheckResult {
-  return { ...base, status, proofSource, summary, referenceType, referenceId };
+  return {
+    ...base,
+    status,
+    proofSource,
+    summary,
+    referenceType,
+    referenceId,
+    proofSnapshotKey: proof
+      ? proof.snapshotKey ?? improvementVerificationProofSnapshotKey(proof)
+      : null,
+    proofMetadata: proof?.metadata ?? {},
+  };
 }
 
 function overallStatus(checks: ImprovementVerificationCheckResult[]): ImprovementVerificationStatus {

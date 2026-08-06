@@ -65,6 +65,7 @@ export async function main() {
         updatedExistingPullRequest: result.updatedExistingPullRequest,
         improvementAssessment: result.improvementAssessment ?? null,
         autoMergeEnabled: result.autoMergeEnabled,
+        headRevision: result.headRevision,
         resultSummary,
       }
     });
@@ -284,6 +285,7 @@ export async function runCodeUpdate(env: SandboxEnv, timings: TaskTimings, total
           updatedExistingPullRequest: false,
           improvementAssessment: null,
           autoMergeEnabled: false,
+          headRevision: null,
           resultSummary,
           timings,
           cacheSummary
@@ -459,6 +461,7 @@ export async function runCodeUpdate(env: SandboxEnv, timings: TaskTimings, total
     } else {
       await progress(env, "commit_skipped", "Generated changes were already committed by the coding harness; pushing existing commits.", gitChangeStateMetadata(preCommitChangeState));
     }
+    const headRevision = await gitRevision(checkoutDir, "HEAD");
     await timedPhase(env, timings, "push", target.updateExistingBranch ? "Pushing changes to the target branch." : "Pushing the generated branch to GitHub.", async () => {
       assertCodeUpdatePushAllowed({
         branchName,
@@ -552,6 +555,7 @@ export async function runCodeUpdate(env: SandboxEnv, timings: TaskTimings, total
       updatedExistingPullRequest,
       improvementAssessment,
       autoMergeEnabled,
+      headRevision,
       timings,
       cacheSummary
     };
@@ -586,6 +590,7 @@ function noChangeImprovementResult(
     updatedExistingPullRequest: false,
     improvementAssessment,
     autoMergeEnabled: false,
+    headRevision: null,
     timings,
     cacheSummary
   };

@@ -28,6 +28,7 @@ export type ImprovementProofProducerHealth = {
   latestSuccessAt: Date | null;
   consecutiveFailures: number;
   maxSilenceMs: number | null;
+  nextExpectedAt: Date | null;
   evidenceKey: string;
 };
 
@@ -163,6 +164,9 @@ function producerHealth(
   } else if (latestRun?.status === "started" && now.getTime() - latestRun.startedAt.getTime() > policy.maxRunDurationMs) {
     state = "unhealthy";
     reason = "run_in_progress_too_long";
+  } else if (latestRun?.status === "started") {
+    state = "healthy";
+    reason = "current";
   } else if (consecutiveFailures >= policy.consecutiveFailureThreshold) {
     state = "unhealthy";
     reason = policy.consecutiveFailureThreshold === 1 ? "latest_run_failed" : "repeated_failures";
@@ -173,6 +177,7 @@ function producerHealth(
     state = "unobserved";
     reason = "not_yet_observed";
   }
+  const cadenceAnchor = latestRun?.startedAt ?? activatedAt;
   return {
     trigger: policy.trigger,
     state,
@@ -181,6 +186,9 @@ function producerHealth(
     latestSuccessAt: latestSuccess?.completedAt ?? null,
     consecutiveFailures,
     maxSilenceMs: policy.maxSilenceMs,
+    nextExpectedAt: policy.expectedIntervalMs != null && cadenceAnchor
+      ? new Date(cadenceAnchor.getTime() + policy.expectedIntervalMs)
+      : null,
     evidenceKey: [policy.trigger, state, reason, latestRun?.runKey ?? "none", latestRun?.status ?? "none", latestSuccess?.runKey ?? "none"].join(":"),
   };
 }

@@ -62,7 +62,7 @@ describe("sandbox callback server", () => {
 
     expect(response.status).toBe(200);
     expect(repo.markAgentTaskSucceeded).toHaveBeenCalledWith(expect.objectContaining({ taskId: "task-1" }));
-    expect(repo.completeImprovementWorkForTask).toHaveBeenCalledWith(expect.objectContaining({ taskId: "task-1", succeeded: true }));
+    expect(repo.completeImprovementWorkForTask).not.toHaveBeenCalled();
   });
 
   it("returns linked improvement work to actionable after task failure", async () => {
@@ -80,7 +80,7 @@ describe("sandbox callback server", () => {
     });
 
     expect(response.status).toBe(200);
-    expect(repo.completeImprovementWorkForTask).toHaveBeenCalledWith(expect.objectContaining({ taskId: "task-1", succeeded: false }));
+    expect(repo.completeImprovementWorkForTask).not.toHaveBeenCalled();
   });
 
   it("stores sandbox artifacts on the task-linked runtime execution", async () => {

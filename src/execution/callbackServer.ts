@@ -167,12 +167,6 @@ export async function handleSandboxCallbackRequest(input: {
       metadata,
     });
   }
-  await input.repo.completeImprovementWorkForTask({
-    taskId,
-    succeeded: status === "succeeded",
-    prUrl: optionalString(body.prUrl),
-    summary: optionalString(body.error) ?? `Task completed with status ${status}.`,
-  });
   sendJson(input.response, 200, { ok: true });
 }
 

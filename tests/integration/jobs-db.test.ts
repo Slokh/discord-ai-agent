@@ -534,6 +534,9 @@ describe.skipIf(!runDbTests)("pg-boss database behavior", () => {
         );
         return jobs.rows[0]?.state === "completed";
       }, 10_000);
+      await expect(pool.query(
+        "SELECT status,revision FROM improvement_proof_producer_runs WHERE trigger = 'improvement_reconciliation' ORDER BY started_at DESC LIMIT 1",
+      )).resolves.toEqual(expect.objectContaining({ rows: [expect.objectContaining({ status: "succeeded", revision: config.appRevision })] }));
     } finally {
       await pool.end();
     }

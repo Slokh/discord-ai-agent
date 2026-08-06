@@ -13,6 +13,7 @@ import type {
 } from "../db/types.js";
 import { assertActionableContract } from "./policy.js";
 import { isRevisionQualityClusterReference } from "./proofAdapters.js";
+import { isScheduleHealthReference } from "./scheduleHealthContract.js";
 
 export type ImprovementTriageVerdict = "confirmed" | "not_reproduced" | "insufficient_evidence";
 
@@ -172,7 +173,7 @@ export function buildImprovementTriageDossier(
   const hasObservedRuntimeFailure = runtime.some(runtimeFailure);
   const verdict = hasAutomatedFailure || hasObservedRuntimeFailure ? "confirmed" : "insufficient_evidence";
   const reason = hasAutomatedFailure
-    ? "A trusted automated observer recorded a terminal gate failure."
+    ? "A trusted automated observer recorded a source-owned failure observation."
     : hasObservedRuntimeFailure
       ? "Retained runtime aggregates contain a terminal execution, tool, event, or delivery failure."
       : "The retained references establish a report, but not an independently confirmed failure.";
@@ -292,7 +293,7 @@ function evidenceForSignal(
       signalId: signal.signalId,
       kind: automatedEvidenceKind(signal.source),
       disposition: "supports",
-      summary: `${sourceLabel(signal.source)} recorded terminal failure ${code}${revision}.`,
+      summary: `${sourceLabel(signal.source)} recorded failure ${code}${revision}.`,
       referenceType: "improvement_signal",
       referenceId: signal.signalId,
       privacy: signal.privacy,
@@ -349,6 +350,8 @@ function contractForFailures(
       checks.push({ kind: "database_invariant", reference });
     } else if (signal.source === "runtime_detection" && (reference === "revision-quality-gate" || isRevisionQualityClusterReference(reference))) {
       checks.push({ kind: "deployment_canary", reference });
+    } else if (signal.source === "runtime_detection" && isScheduleHealthReference(reference)) {
+      checks.push({ kind: "schedule_health", reference });
     } else if (signal.source === "deployment_detection" && knownPostDeployGate(reference)) {
       checks.push({ kind: "deployment_canary", reference });
     } else if (AUTOMATED_SOURCES.has(signal.source)) {
@@ -364,7 +367,9 @@ function contractForFailures(
   const uniqueChecks = deduplicateChecks(checks);
   if (uniqueChecks.length === 0) return null;
   const sources = new Set(signals.filter((signal) => AUTOMATED_SOURCES.has(signal.source)).map((signal) => signal.source));
-  const expectedBehavior = sources.size === 1
+  const expectedBehavior = uniqueChecks.every((check) => check.kind === "schedule_health")
+    ? "The affected schedule recovers without reproducing its observed health failure."
+    : sources.size === 1
     ? expectedBehaviorForSource([...sources][0]!)
     : sources.size > 1
       ? "Every detected automated gate passes for the candidate revision."

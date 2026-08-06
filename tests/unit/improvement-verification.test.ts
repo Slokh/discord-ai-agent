@@ -5,6 +5,7 @@ import {
   buildImprovementVerificationDossier,
   type ImprovementVerificationProof,
 } from "../../src/improvements/verification.js";
+import { scheduleHealthReference } from "../../src/observability/scheduleHealth.js";
 
 describe("improvement contract verification", () => {
   it("accepts registered release gates only from a verified deployment newer than the contract", () => {
@@ -107,6 +108,29 @@ describe("improvement contract verification", () => {
     expect(dossier).toMatchObject({
       status: "failed",
       checks: [{ status: "failed", referenceId: reference }],
+    });
+  });
+
+  it("uses only exact schedule-specific production proof", () => {
+    const reference = scheduleHealthReference("auto_paused", "schedule-a");
+    const otherReference = scheduleHealthReference("auto_paused", "schedule-b");
+    const proof = (referenceId: string, status: "passed" | "failed"): ImprovementVerificationProof => ({
+      status,
+      source: "schedule_health",
+      referenceType: "schedule_health",
+      referenceId,
+      summary: `${referenceId} ${status}`,
+      executionId: null,
+      checkResults: [],
+      createdAt: new Date("2026-08-05T06:00:00Z"),
+    });
+    const dossier = build([{ kind: "schedule_health", reference }], {
+      proofs: [proof(otherReference, "passed"), proof(reference, "failed")],
+    });
+
+    expect(dossier).toMatchObject({
+      status: "failed",
+      checks: [{ adapterId: "schedule_health", proofSource: "schedule_health", referenceId: reference }],
     });
   });
 

@@ -1,10 +1,16 @@
-import { createHash } from "node:crypto";
 import type { DbPool } from "../db/pool.js";
 import type { AutomatedImprovementDetectionInput } from "../improvements/detections.js";
+import {
+  scheduleHealthReference,
+  shortScheduleHealthIdentity,
+  type ScheduleHealthIssueKind,
+  type ScheduleHealthProofStatus,
+} from "../improvements/scheduleHealthContract.js";
+
+export { isScheduleHealthReference, scheduleHealthReference } from "../improvements/scheduleHealthContract.js";
+export type { ScheduleHealthIssueKind, ScheduleHealthProofStatus } from "../improvements/scheduleHealthContract.js";
 
 const REPEATED_PARTIAL_THRESHOLD = 3;
-
-export type ScheduleHealthIssueKind = "run_failed" | "repeated_partial" | "overdue" | "stuck" | "auto_paused";
 
 type PrivateScheduleHealthIssue = {
   kind: ScheduleHealthIssueKind;
@@ -26,7 +32,11 @@ export async function collectScheduleHealthObservation(
   pool: DbPool,
   revision: string,
   hours: number,
-): Promise<{ health: ScheduleHealth; privateIssues: PrivateScheduleHealthIssue[] }> {
+): Promise<{
+  health: ScheduleHealth;
+  privateIssues: PrivateScheduleHealthIssue[];
+  proofStatuses: Record<string, ScheduleHealthProofStatus>;
+}> {
   const [executions, projections] = await Promise.all([
     pool.query(
       `SELECT execution.execution_id, execution.status,
@@ -46,49 +56,48 @@ export async function collectScheduleHealthObservation(
       [hours, revision],
     ),
     pool.query(
-      `SELECT reminder_id, last_run_execution_id, issue
-       FROM (
-         SELECT reminder_id, last_run_execution_id, 'overdue'::text AS issue
-         FROM scheduled_reminders
-         WHERE status = 'scheduled' AND scheduled_for <= now() - interval '5 minutes'
-         UNION ALL
-         SELECT reminder_id, last_run_execution_id, 'stuck'::text AS issue
-         FROM scheduled_reminders
-         WHERE status = 'delivering' AND claimed_at < CASE
-           WHEN delivery_kind = 'agent' THEN now() - interval '15 minutes'
-           ELSE now() - interval '5 minutes'
-         END
-         UNION ALL
-         SELECT reminder_id, last_run_execution_id, 'auto_paused'::text AS issue
-         FROM scheduled_reminders
-         WHERE auto_paused_at >= now() - ($1::text || ' hours')::interval
-       ) health_issue
-       ORDER BY issue, reminder_id`,
-      [hours],
+      `SELECT reminder_id, last_run_execution_id, status,
+              status = 'scheduled' AND scheduled_for <= now() - interval '5 minutes' AS overdue,
+              status = 'delivering' AND claimed_at < CASE
+                WHEN delivery_kind = 'agent' THEN now() - interval '15 minutes'
+                ELSE now() - interval '5 minutes'
+              END AS stuck,
+              auto_paused_at IS NOT NULL AS auto_paused
+       FROM scheduled_reminders
+       WHERE status IN ('scheduled', 'delivering', 'paused')
+       ORDER BY reminder_id`,
     ),
   ]);
 
   const runs = { succeeded: 0, partial: 0, failed: 0 };
   const failed: PrivateScheduleHealthIssue[] = [];
   const partialBySchedule = new Map<string, { count: number; executionId: string }>();
+  const runsBySchedule = new Map<string, typeof runs>();
   for (const row of executions.rows) {
     const outcome = scheduleOutcome(row);
     runs[outcome] += 1;
-    const scheduleId = text(row.schedule_id) ?? `execution:${String(row.execution_id)}`;
+    const scheduleId = text(row.schedule_id);
+    if (!scheduleId) continue;
+    const scheduleRuns = runsBySchedule.get(scheduleId) ?? { succeeded: 0, partial: 0, failed: 0 };
+    scheduleRuns[outcome] += 1;
+    runsBySchedule.set(scheduleId, scheduleRuns);
     if (outcome === "failed") {
       failed.push({ kind: "run_failed", scheduleId, executionId: String(row.execution_id), count: 1 });
-    } else if (outcome === "partial" && row.schedule_id) {
+    } else if (outcome === "partial") {
       const current = partialBySchedule.get(scheduleId) ?? { count: 0, executionId: String(row.execution_id) };
       partialBySchedule.set(scheduleId, { count: current.count + 1, executionId: String(row.execution_id) });
     }
   }
 
-  const projectionIssues = projections.rows.map((row): PrivateScheduleHealthIssue => ({
-    kind: String(row.issue) as Extract<ScheduleHealthIssueKind, "overdue" | "stuck" | "auto_paused">,
-    scheduleId: String(row.reminder_id),
-    executionId: text(row.last_run_execution_id),
-    count: 1,
-  }));
+  const projectionIssues = projections.rows.flatMap((row): PrivateScheduleHealthIssue[] => {
+    const scheduleId = String(row.reminder_id);
+    const executionId = text(row.last_run_execution_id);
+    return [
+      ...(row.overdue ? [{ kind: "overdue" as const, scheduleId, executionId, count: 1 }] : []),
+      ...(row.stuck ? [{ kind: "stuck" as const, scheduleId, executionId, count: 1 }] : []),
+      ...(row.auto_paused ? [{ kind: "auto_paused" as const, scheduleId, executionId, count: 1 }] : []),
+    ];
+  });
   const autoPausedIds = new Set(projectionIssues.filter((issue) => issue.kind === "auto_paused").map((issue) => issue.scheduleId));
   const repeatedPartial = [...partialBySchedule.entries()]
     .filter(([, value]) => value.count >= REPEATED_PARTIAL_THRESHOLD)
@@ -103,6 +112,11 @@ export async function collectScheduleHealthObservation(
     ...repeatedPartial,
     ...projectionIssues,
   ];
+  const proofStatuses = scheduleHealthProofStatuses({
+    privateIssues,
+    runsBySchedule,
+    projectionRows: projections.rows,
+  });
   const issues = {
     repeatedPartial: repeatedPartial.length,
     overdue: projectionIssues.filter((issue) => issue.kind === "overdue").length,
@@ -114,11 +128,12 @@ export async function collectScheduleHealthObservation(
       revision,
       windowHours: hours,
       generatedAt: new Date().toISOString(),
-      status: privateIssues.length > 0 ? "needs_attention" : "healthy",
+      status: privateIssues.length > 0 || runs.failed > 0 ? "needs_attention" : "healthy",
       runs,
       issues,
     },
     privateIssues,
+    proofStatuses,
   };
 }
 
@@ -126,23 +141,58 @@ export function scheduleHealthDetectionInputs(
   health: ScheduleHealth,
   privateIssues: PrivateScheduleHealthIssue[],
 ): AutomatedImprovementDetectionInput[] {
-  return privateIssues.map((issue) => ({
-    source: "runtime_detection",
-    sourceId: `schedule-health:${health.revision}:${issue.kind}:${shortHash(issue.scheduleId)}:${shortHash(issue.executionId ?? issue.scheduleId)}`,
-    summary: issueSummary(issue.kind),
-    stableCode: `schedule-health:${issue.kind}`,
-    executionId: issue.executionId,
-    appRevision: health.revision,
-    scope: "deployment",
-    classification: issue.kind === "run_failed" || issue.kind === "auto_paused" ? "external_incident" : "defect",
-    severity: issue.kind === "repeated_partial" ? "medium" : "high",
-    owningDomain: "schedules",
-    metadata: {
-      scheduleHealthIssue: issue.kind,
-      occurrenceCount: issue.count,
-      windowHours: health.windowHours,
-    },
-  }));
+  return privateIssues.map((issue) => {
+    const reference = scheduleHealthReference(issue.kind, issue.scheduleId);
+    return {
+      source: "runtime_detection",
+      sourceId: `schedule-health:${health.revision}:${issue.kind}:${shortScheduleHealthIdentity(issue.scheduleId)}:${shortScheduleHealthIdentity(issue.executionId ?? issue.scheduleId)}`,
+      summary: issueSummary(issue.kind),
+      stableCode: reference,
+      executionId: issue.executionId,
+      appRevision: health.revision,
+      scope: "deployment",
+      classification: issue.kind === "run_failed" || issue.kind === "auto_paused" ? "external_incident" : "defect",
+      severity: issue.kind === "repeated_partial" ? "medium" : "high",
+      owningDomain: "schedules",
+      metadata: {
+        scheduleHealthIssue: issue.kind,
+        occurrenceCount: issue.count,
+        windowHours: health.windowHours,
+      },
+    };
+  });
+}
+
+function scheduleHealthProofStatuses(input: {
+  privateIssues: PrivateScheduleHealthIssue[];
+  runsBySchedule: Map<string, ScheduleHealth["runs"]>;
+  projectionRows: Array<Record<string, unknown>>;
+}) {
+  const statuses: Record<string, ScheduleHealthProofStatus> = {};
+  const present = new Set(input.privateIssues.map((issue) => scheduleHealthReference(issue.kind, issue.scheduleId)));
+  const projections = new Map(input.projectionRows.map((row) => [String(row.reminder_id), row]));
+  const scheduleIds = new Set([...input.runsBySchedule.keys(), ...projections.keys()]);
+  for (const scheduleId of scheduleIds) {
+    const scheduleRuns = input.runsBySchedule.get(scheduleId) ?? { succeeded: 0, partial: 0, failed: 0 };
+    const projection = projections.get(scheduleId);
+    const terminalRuns = scheduleRuns.succeeded + scheduleRuns.partial + scheduleRuns.failed;
+    const candidates: Array<[ScheduleHealthIssueKind, ScheduleHealthProofStatus]> = [
+      ["run_failed", terminalRuns === 0 ? "inconclusive" : scheduleRuns.failed === 0 ? "passed" : "failed"],
+      ["repeated_partial", terminalRuns < REPEATED_PARTIAL_THRESHOLD
+        ? "inconclusive"
+        : scheduleRuns.partial < REPEATED_PARTIAL_THRESHOLD && scheduleRuns.failed === 0 ? "passed" : "failed"],
+      ["overdue", projection ? projection.overdue ? "failed" : "passed" : "inconclusive"],
+      ["stuck", projection ? projection.stuck ? "failed" : "passed" : "inconclusive"],
+      ["auto_paused", projection?.auto_paused
+        ? scheduleRuns.failed > 0 ? "failed" : "inconclusive"
+        : projection && scheduleRuns.succeeded > 0 ? "passed" : "inconclusive"],
+    ];
+    for (const [kind, status] of candidates) {
+      const reference = scheduleHealthReference(kind, scheduleId);
+      statuses[reference] = kind !== "auto_paused" && present.has(reference) ? "failed" : status;
+    }
+  }
+  return statuses;
 }
 
 function scheduleOutcome(row: Record<string, unknown>): keyof ScheduleHealth["runs"] {
@@ -160,10 +210,6 @@ function issueSummary(kind: ScheduleHealthIssueKind) {
   if (kind === "overdue") return "A scheduled occurrence remained overdue without a delivery claim.";
   if (kind === "stuck") return "A scheduled occurrence exceeded its delivery lease.";
   return "A recurring schedule was automatically paused after repeated failures.";
-}
-
-function shortHash(value: string) {
-  return createHash("sha256").update(value).digest("hex").slice(0, 16);
 }
 
 function text(value: unknown) {

@@ -6,6 +6,7 @@ import {
   improvementTriageApplication,
   type ImprovementRuntimeObservation,
 } from "../../src/improvements/triage.js";
+import { scheduleHealthReference } from "../../src/observability/scheduleHealth.js";
 
 describe("improvement triage", () => {
   it("confirms automated failures with a safe source-owned contract", () => {
@@ -171,6 +172,24 @@ describe("improvement triage", () => {
       verdict: "confirmed",
       proposedContract: {
         checks: [{ kind: "deployment_canary", reference }],
+      },
+      nextAction: "apply",
+    });
+  });
+
+  it("maps a schedule-specific detector to production recovery proof", () => {
+    const reference = scheduleHealthReference("stuck", "private-schedule-id");
+    const dossier = buildImprovementTriageDossier(record(signal({
+      source: "runtime_detection",
+      metadata: { detectionCode: reference },
+      owningDomainHint: "schedules",
+    })), []);
+
+    expect(dossier).toMatchObject({
+      verdict: "confirmed",
+      proposedContract: {
+        expectedBehavior: "The affected schedule recovers without reproducing its observed health failure.",
+        checks: [{ kind: "schedule_health", reference }],
       },
       nextAction: "apply",
     });

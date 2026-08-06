@@ -9,6 +9,7 @@ import {
   isRevisionQualityClusterReference,
   isRevisionQualityToolLatencyReference,
 } from "../improvements/proofAdapters.js";
+import { isScheduleHealthReference, type ScheduleHealthProofStatus } from "../improvements/scheduleHealthContract.js";
 import {
   buildImprovementVerificationDossier,
   improvementVerificationApplicationKey,
@@ -152,6 +153,68 @@ export async function recordImprovementRevisionQualityResult(pool: DbPool, input
            RETURNING proof_id`,
           [String(row.case_id), String(row.contract_id), Number(row.version), revision, deploymentId, status,
             reference, runKey, qualityProofSummary(status, reference, qualityVersion, contributingRevisions.length), qualityMetadata],
+        );
+        recorded += result.rowCount ?? 0;
+      }
+    }
+    await client.query("COMMIT");
+    return { recorded, deploymentId };
+  } catch (error) {
+    await client.query("ROLLBACK").catch(() => undefined);
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+/** Records schedule-specific production proof without treating absent traffic as recovery. */
+export async function recordImprovementScheduleHealthResult(pool: DbPool, input: {
+  revision: string;
+  runKey: string;
+  windowHours: number;
+  proofStatuses: Record<string, ScheduleHealthProofStatus>;
+}) {
+  const revision = bounded(input.revision, "revision", 200);
+  const observations = new Map(Object.entries(input.proofStatuses).map(([reference, status]) => {
+    const normalized = bounded(reference, "scheduleHealthReference", 200);
+    if (!isScheduleHealthReference(normalized)) throw new Error(`Invalid schedule-health reference: ${normalized}.`);
+    return [normalized, status] as const;
+  }));
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const deployment = await client.query(
+      "SELECT deployment_id FROM deployment_verifications WHERE revision = $1 ORDER BY verified_at DESC LIMIT 1",
+      [revision],
+    );
+    if (!deployment.rows[0]) {
+      await client.query("COMMIT");
+      return { recorded: 0, deploymentId: null };
+    }
+    const deploymentId = String(deployment.rows[0].deployment_id);
+    const candidates = await client.query(
+      `SELECT case_row.case_id,contract.contract_id,contract.version,contract.checks
+       FROM improvement_cases case_row
+       JOIN improvement_contracts contract ON contract.case_id = case_row.case_id AND contract.active = true
+       WHERE case_row.status = 'verifying'`,
+    );
+    const runKey = bounded(input.runKey, "runKey", 200);
+    const metadata = JSON.stringify({ windowHours: Math.max(1, Math.trunc(input.windowHours)) });
+    let recorded = 0;
+    for (const row of candidates.rows) {
+      const references = scheduleHealthReferences((row.checks ?? []) as ImprovementContractCheck[]);
+      for (const reference of references) {
+        const status = observations.get(reference) ?? "inconclusive";
+        const result = await client.query(
+          `INSERT INTO improvement_verification_proofs(
+             proof_id,case_id,contract_id,contract_version,revision,deployment_id,source,status,
+             reference_type,reference_id,run_key,summary,metadata
+           ) VALUES ('ivp-' || gen_random_uuid(),$1,$2,$3,$4,$5,'schedule_health',$6,
+                     'schedule_health',$7,$8,$9,$10)
+           ON CONFLICT(source,contract_id,deployment_id,reference_id,run_key) DO NOTHING
+           RETURNING proof_id`,
+          [String(row.case_id), String(row.contract_id), Number(row.version), revision, deploymentId, status,
+            reference, runKey, scheduleHealthProofSummary(status), metadata],
         );
         recorded += result.rowCount ?? 0;
       }
@@ -473,6 +536,18 @@ function revisionQualityReferences(checks: ImprovementContractCheck[]) {
     }
   }
   return [...references];
+}
+
+function scheduleHealthReferences(checks: ImprovementContractCheck[]) {
+  return checks.flatMap((check) => check.kind === "schedule_health" && isScheduleHealthReference(check.reference)
+    ? [check.reference]
+    : []);
+}
+
+function scheduleHealthProofSummary(status: ImprovementVerificationStatus) {
+  if (status === "passed") return "The affected schedule produced enough schedule-specific recovery evidence without reproducing the failure.";
+  if (status === "failed") return "Production observation reproduced the schedule-specific health failure.";
+  return "The affected schedule has not produced enough schedule-specific evidence to prove recovery.";
 }
 
 function receiptSummary(status: ImprovementVerificationStatus, contractVersion: number, revision: string) {

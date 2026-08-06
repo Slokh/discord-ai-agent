@@ -17,6 +17,8 @@ type PrivateScheduleHealthIssue = {
   scheduleId: string;
   executionId: string | null;
   count: number;
+  affectedMemberContext: AutomatedImprovementDetectionInput["affectedMemberContext"];
+  evidence: Record<string, unknown>;
 };
 
 export type ScheduleHealth = {
@@ -56,16 +58,21 @@ export async function collectScheduleHealthObservation(
       [hours, revision],
     ),
     pool.query(
-      `SELECT reminder_id, last_run_execution_id, status,
+      `SELECT reminder_id, guild_id, channel_id, requester_id, source_message_id,
+              last_run_execution_id, status, delivery_kind, recurrence, scheduled_for,
+              delivery_attempts, claimed_at, last_error_code, last_run_at, last_run_status,
+              consecutive_failures, auto_paused_at, updated_at,
               status = 'scheduled' AND scheduled_for <= now() - interval '5 minutes' AS overdue,
               status = 'delivering' AND claimed_at < CASE
                 WHEN delivery_kind = 'agent' THEN now() - interval '15 minutes'
                 ELSE now() - interval '5 minutes'
               END AS stuck,
-              auto_paused_at IS NOT NULL AS auto_paused
+              status = 'paused' AND auto_paused_at IS NOT NULL AS auto_paused
        FROM scheduled_reminders
        WHERE status IN ('scheduled', 'delivering', 'paused')
+          OR updated_at >= now() - ($1::text || ' hours')::interval
        ORDER BY reminder_id`,
+      [hours],
     ),
   ]);
 
@@ -82,7 +89,7 @@ export async function collectScheduleHealthObservation(
     scheduleRuns[outcome] += 1;
     runsBySchedule.set(scheduleId, scheduleRuns);
     if (outcome === "failed") {
-      failed.push({ kind: "run_failed", scheduleId, executionId: String(row.execution_id), count: 1 });
+      failed.push({ kind: "run_failed", scheduleId, executionId: String(row.execution_id), count: 1, affectedMemberContext: null, evidence: {} });
     } else if (outcome === "partial") {
       const current = partialBySchedule.get(scheduleId) ?? { count: 0, executionId: String(row.execution_id) };
       partialBySchedule.set(scheduleId, { count: current.count + 1, executionId: String(row.execution_id) });
@@ -92,10 +99,11 @@ export async function collectScheduleHealthObservation(
   const projectionIssues = projections.rows.flatMap((row): PrivateScheduleHealthIssue[] => {
     const scheduleId = String(row.reminder_id);
     const executionId = text(row.last_run_execution_id);
+    const context = scheduleIssueContext(row);
     return [
-      ...(row.overdue ? [{ kind: "overdue" as const, scheduleId, executionId, count: 1 }] : []),
-      ...(row.stuck ? [{ kind: "stuck" as const, scheduleId, executionId, count: 1 }] : []),
-      ...(row.auto_paused ? [{ kind: "auto_paused" as const, scheduleId, executionId, count: 1 }] : []),
+      ...(row.overdue ? [{ kind: "overdue" as const, scheduleId, executionId, count: 1, ...context }] : []),
+      ...(row.stuck ? [{ kind: "stuck" as const, scheduleId, executionId, count: 1, ...context }] : []),
+      ...(row.auto_paused ? [{ kind: "auto_paused" as const, scheduleId, executionId, count: 1, ...context }] : []),
     ];
   });
   const autoPausedIds = new Set(projectionIssues.filter((issue) => issue.kind === "auto_paused").map((issue) => issue.scheduleId));
@@ -106,9 +114,14 @@ export async function collectScheduleHealthObservation(
       scheduleId,
       executionId: value.executionId,
       count: value.count,
+      ...(scheduleIssueContext(projections.rows.find((row) => String(row.reminder_id) === scheduleId))),
     }));
+  const projectionBySchedule = new Map(projections.rows.map((row) => [String(row.reminder_id), row]));
   const privateIssues = [
-    ...failed.filter((issue) => !autoPausedIds.has(issue.scheduleId)),
+    ...failed.filter((issue) => !autoPausedIds.has(issue.scheduleId)).map((issue) => ({
+      ...issue,
+      ...scheduleIssueContext(projectionBySchedule.get(issue.scheduleId)),
+    })),
     ...repeatedPartial,
     ...projectionIssues,
   ];
@@ -154,13 +167,48 @@ export function scheduleHealthDetectionInputs(
       classification: issue.kind === "run_failed" || issue.kind === "auto_paused" ? "external_incident" : "defect",
       severity: issue.kind === "repeated_partial" ? "medium" : "high",
       owningDomain: "schedules",
+      affectedMemberContext: issue.affectedMemberContext,
       metadata: {
         scheduleHealthIssue: issue.kind,
         occurrenceCount: issue.count,
         windowHours: health.windowHours,
+        operationalEvidence: issue.evidence,
       },
     };
   });
+}
+
+function scheduleIssueContext(row: Record<string, unknown> | undefined) {
+  if (!row) return { affectedMemberContext: null, evidence: {} };
+  const affectedMemberContext = [row.guild_id, row.channel_id, row.source_message_id, row.requester_id].every((value) => text(value))
+    ? {
+        guildId: String(row.guild_id),
+        channelId: String(row.channel_id),
+        messageId: String(row.source_message_id),
+        userId: String(row.requester_id),
+      }
+    : null;
+  return {
+    affectedMemberContext,
+    evidence: {
+      status: text(row.status),
+      deliveryKind: text(row.delivery_kind),
+      recurring: row.recurrence != null,
+      scheduledFor: timestamp(row.scheduled_for),
+      deliveryAttempts: Number(row.delivery_attempts ?? 0),
+      claimedAt: timestamp(row.claimed_at),
+      lastErrorCode: text(row.last_error_code),
+      lastRunAt: timestamp(row.last_run_at),
+      lastRunStatus: text(row.last_run_status),
+      consecutiveFailures: Number(row.consecutive_failures ?? 0),
+      autoPausedAt: timestamp(row.auto_paused_at),
+      updatedAt: timestamp(row.updated_at),
+    },
+  };
+}
+
+function timestamp(value: unknown) {
+  return value instanceof Date ? value.toISOString() : typeof value === "string" ? value : null;
 }
 
 function scheduleHealthProofStatuses(input: {

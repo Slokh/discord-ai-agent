@@ -229,7 +229,11 @@ export async function runCodeUpdate(env: SandboxEnv, timings: TaskTimings, total
       if (triageChangeState.hasChanges) {
         throw new CodegenTaskError("command_failed", "improvement_triage", "Improvement assessment modified the checkout before a defect was confirmed; refusing to continue.");
       }
-      const triageResult = validatedImprovementTriage(await readImprovementAssessmentResult(env.improvementAssessmentResultPath));
+      const trustedDetectorContractAvailable = taskHasTrustedDetectorContract(env.taskRequest);
+      const triageResult = validatedImprovementTriage(
+        await readImprovementAssessmentResult(env.improvementAssessmentResultPath),
+        { trustedDetectorContractAvailable },
+      );
       improvementAssessment = triageResult;
       await recordArtifact(env, {
         kind: "diagnostic",
@@ -296,7 +300,10 @@ export async function runCodeUpdate(env: SandboxEnv, timings: TaskTimings, total
       await progress(env, "improvement_repair_blocked", improvementAssessment.summary, { disposition: improvementAssessment.disposition });
       return noChangeImprovementResult(improvementAssessment, timings, cacheSummary);
     }
-    if (env.taskType === "improvement_report" && (improvementAssessment?.disposition !== "confirmed_fixed" || !improvementAssessment.regression)) {
+    if (env.taskType === "improvement_report" && (
+      improvementAssessment?.disposition !== "confirmed_fixed"
+      || (!improvementAssessment.regression && !(improvementAssessment.usesTrustedDetectorContract && taskHasTrustedDetectorContract(env.taskRequest)))
+    )) {
       throw new Error("Improvement task produced code changes without a confirmed_fixed result and executable regression contract; refusing to push.");
     }
     await progress(env, "diff_detected", "Detected generated code changes.", gitChangeStateMetadata(changeState));
@@ -552,6 +559,16 @@ export async function runCodeUpdate(env: SandboxEnv, timings: TaskTimings, total
     await progress(env, "cleanup", "Cleaning up the ephemeral sandbox checkout.").catch(() => undefined);
     await removeCachedWorktree(cache.mirrorDir, checkoutDir).catch(() => undefined);
     await fs.rm(workRoot, { recursive: true, force: true }).catch(() => undefined);
+  }
+}
+
+function taskHasTrustedDetectorContract(taskRequest: string) {
+  try {
+    const packet = JSON.parse(taskRequest) as Record<string, unknown>;
+    return packet.assessmentMode === "operational_incident"
+      && Boolean(packet.proposedContract && typeof packet.proposedContract === "object");
+  } catch {
+    return false;
   }
 }
 

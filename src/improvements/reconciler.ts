@@ -15,6 +15,7 @@ import {
   renderPrivateAssessmentEvidence,
   type ImprovementAssessmentRuntimeReader,
 } from "./assessmentEvidence.js";
+import { improvementSignalRequiresAutonomousAssessment } from "./assessmentPolicy.js";
 
 const AUTOMATED_SOURCES = new Set<ImprovementSignalSource>([
   "runtime_detection",
@@ -116,14 +117,14 @@ async function reconcileTriage(input: {
         continue;
       }
       const activeSignals = record.signals.filter((signal) => signal.active);
-      const hasReportSource = activeSignals.some((signal) => !AUTOMATED_SOURCES.has(signal.source));
+      const requiresAssessment = activeSignals.some(improvementSignalRequiresAutonomousAssessment);
       const runtime = await collectImprovementRuntimeObservations(activeSignals, {
         runtime: input.runtime,
         deliveries: input.deliveries,
       });
       const dossier = buildImprovementTriageDossier(record, runtime);
-      if (hasReportSource) {
-        const result = await reconcileAutonomousAssessment(input, record, dossier.snapshotKey);
+      if (requiresAssessment) {
+        const result = await reconcileAutonomousAssessment(input, record, dossier);
         results.push({ caseId: candidate.caseId, ...result });
         continue;
       }
@@ -203,7 +204,7 @@ export function improvementRepairTaskId(
 async function reconcileAutonomousAssessment(
   input: Pick<Parameters<typeof runImprovementReconciliationOnce>[0], "repo" | "runtime" | "enqueueImprovementTask">,
   record: NonNullable<Awaited<ReturnType<ImprovementReconciliationRepository["getImprovementCase"]>>>,
-  snapshotKey: string,
+  dossier: ReturnType<typeof buildImprovementTriageDossier>,
 ): Promise<Pick<ImprovementReconciliationResult["triage"][number], "status" | "reason">> {
   if (!input.enqueueImprovementTask) {
     await input.repo.recordImprovementReconciliationDecision({
@@ -215,7 +216,7 @@ async function reconcileAutonomousAssessment(
   }
   let attempt = 1;
   for (; attempt <= MAX_ASSESSMENT_ATTEMPTS; attempt += 1) {
-    const taskId = improvementAssessmentTaskId(record.case.caseId, snapshotKey, attempt);
+    const taskId = improvementAssessmentTaskId(record.case.caseId, dossier.snapshotKey, attempt);
     const existing = await input.repo.getAgentTask(taskId);
     if (!existing) break;
     if (existing.status === "queued" || existing.status === "running") {
@@ -240,9 +241,16 @@ async function reconcileAutonomousAssessment(
     });
     return { status: "deferred", reason: "operator_judgment" };
   }
-  const taskId = improvementAssessmentTaskId(record.case.caseId, snapshotKey, attempt);
+  const taskId = improvementAssessmentTaskId(record.case.caseId, dossier.snapshotKey, attempt);
   const signals = record.signals.filter((signal) => signal.active);
-  const request = await renderPrivateAssessmentEvidence(record.case.caseId, signals, input.runtime, input.repo);
+  const operationalIncident = signals.some((signal) => AUTOMATED_SOURCES.has(signal.source) && improvementSignalRequiresAutonomousAssessment(signal));
+  const request = await renderPrivateAssessmentEvidence(record.case.caseId, signals, input.runtime, input.repo, {
+    assessmentMode: operationalIncident ? "operational_incident" : "reported_friction",
+    proposedContract: operationalIncident && dossier.proposedContract ? {
+      expectedBehavior: dossier.proposedContract.expectedBehavior,
+      checks: dossier.proposedContract.checks,
+    } : null,
+  });
   const first = signals[0];
   await input.enqueueImprovementTask({
     taskId,
@@ -259,8 +267,8 @@ async function reconcileAutonomousAssessment(
   await input.repo.recordImprovementReconciliationDecision({
     caseId: record.case.caseId,
     eventName: "reconciliation.assessment_queued",
-    reason: attempt === 1 ? "report_authorized_autonomous_assessment" : "retry_transient_assessment_failure",
-    metadata: { taskId, snapshotKey, attempt, maxAttempts: MAX_ASSESSMENT_ATTEMPTS, evidenceSchemaVersion: IMPROVEMENT_ASSESSMENT_EVIDENCE_VERSION },
+    reason: attempt === 1 ? (operationalIncident ? "operational_incident_authorized_autonomous_assessment" : "report_authorized_autonomous_assessment") : "retry_transient_assessment_failure",
+    metadata: { taskId, snapshotKey: dossier.snapshotKey, attempt, maxAttempts: MAX_ASSESSMENT_ATTEMPTS, evidenceSchemaVersion: IMPROVEMENT_ASSESSMENT_EVIDENCE_VERSION },
   });
   return { status: "deferred", reason: attempt === 1 ? "assessment_running" : "assessment_retry_queued" };
 }
@@ -435,7 +443,7 @@ async function deriveImprovementCaseHealth(
       };
     }
     const activeSignals = record.signals.filter((signal) => signal.active);
-    if (activeSignals.some((signal) => !AUTOMATED_SOURCES.has(signal.source))) {
+    if (activeSignals.some(improvementSignalRequiresAutonomousAssessment)) {
       return deriveAssessmentHealth(input, record);
     }
     const dossier = buildImprovementTriageDossier(record, []);
@@ -445,7 +453,7 @@ async function deriveImprovementCaseHealth(
     return { ...base, state: "blocked" as const, blocker: "detector_contract_missing", nextAction: "operator_define_detector_contract", retryTrigger: null, retryAt: null, progressKey: `${improvementCase.status}:${improvementCase.version}:unregistered-contract` };
   }
   if (improvementCase.status === "actionable") {
-    if (record.signals.some((signal) => signal.active && !AUTOMATED_SOURCES.has(signal.source))) {
+    if (record.signals.some((signal) => signal.active && improvementSignalRequiresAutonomousAssessment(signal))) {
       return deriveAssessmentHealth(input, record);
     }
     return deriveAutomatedRepairHealth(input, record);

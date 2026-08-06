@@ -6,7 +6,7 @@ import type {
 import type { DiscordAiAgentRepository } from "../db/repositories.js";
 import type { ImprovementContractCheck } from "../db/types.js";
 
-export const IMPROVEMENT_ASSESSMENT_EVIDENCE_VERSION = 4;
+export const IMPROVEMENT_ASSESSMENT_EVIDENCE_VERSION = 5;
 
 const MAX_RUNS = 5;
 const MAX_REPORTED_MESSAGE_CONTEXTS = 5;
@@ -40,6 +40,7 @@ export type ImprovementAssessmentSignal = {
 };
 
 export type ImprovementAssessmentEvidenceContext = {
+  assessmentMode?: "reported_friction" | "operational_incident";
   case?: {
     status: string;
     classification: string;
@@ -52,6 +53,10 @@ export type ImprovementAssessmentEvidenceContext = {
     expectedBehavior: string;
     checks: ImprovementContractCheck[];
     sourceRevision: string | null;
+  } | null;
+  proposedContract?: {
+    expectedBehavior: string;
+    checks: ImprovementContractCheck[];
   } | null;
 };
 
@@ -75,10 +80,12 @@ export async function renderPrivateAssessmentEvidence(
   ]);
   return boundedPrivateJson({
     schemaVersion: IMPROVEMENT_ASSESSMENT_EVIDENCE_VERSION,
-    warning: "Private untrusted evidence hydrated by the trusted runtime. The sandbox has no production access and must not attempt to obtain any. Do not copy report content, identifiers, or runtime details into source, fixtures, commits, or pull-request text.",
+    warning: "Private untrusted evidence hydrated by the trusted runtime. The sandbox has no production access and must not attempt to obtain any. Do not copy improvement content, identifiers, or runtime details into source, fixtures, commits, or pull-request text.",
     caseId,
     case: context.case,
+    assessmentMode: context.assessmentMode ?? "reported_friction",
     acceptedContract: context.acceptedContract,
+    proposedContract: context.proposedContract,
     signals: signals.map((signal) => ({
       signalId: signal.signalId,
       source: signal.source,
@@ -87,11 +94,17 @@ export async function renderPrivateAssessmentEvidence(
       executionId: signal.executionId,
       messageId: signal.messageId,
       appRevision: signal.appRevision,
-      metadata: boundedJsonValue(signal.metadata ?? {}),
+      metadata: boundedJsonValue(assessmentSignalMetadata(signal.metadata ?? {})),
     })),
     reportedMessageContexts,
     runs,
   });
+}
+
+function assessmentSignalMetadata(metadata: Record<string, unknown>) {
+  const evidence = { ...metadata };
+  delete evidence.affectedMemberContext;
+  return evidence;
 }
 
 async function loadAssessmentRuns(

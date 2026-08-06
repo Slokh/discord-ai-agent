@@ -24,6 +24,21 @@ describe("autonomous improvement assessment", () => {
     expect(validatedImprovementTriage({ ...result!, disposition: "confirmed_fixed" }).disposition).toBe("insufficient_evidence");
   });
 
+  it("accepts a trusted detector contract only when the evidence packet registered one", () => {
+    const result = parseImprovementAssessmentResult({
+      disposition: "confirmed_unfixed",
+      summary: "The schedule is stuck because its delivery lease is never recovered.",
+      usesTrustedDetectorContract: true,
+      regression: null,
+    });
+    expect(validatedImprovementTriage(result).disposition).toBe("insufficient_evidence");
+    expect(validatedImprovementTriage(result, { trustedDetectorContractAvailable: true })).toMatchObject({
+      disposition: "confirmed_unfixed",
+      usesTrustedDetectorContract: true,
+      regression: null,
+    });
+  });
+
   it("dismisses expected behavior without human review", async () => {
     const record = improvementRecord();
     const taskId = improvementAssessmentTaskId(record.case.caseId, buildImprovementTriageDossier(record, []).snapshotKey);
@@ -40,6 +55,34 @@ describe("autonomous improvement assessment", () => {
       verdict: "not_reproduced", targetStatus: "dismissed", classification: "expected_behavior", actorKind: "automation",
     }));
     expect(repo.recordImprovementReconciliationDecision).not.toHaveBeenCalled();
+  });
+
+  it("accepts the detector-owned schedule recovery contract after autonomous repair", async () => {
+    const record = scheduleIncidentRecord();
+    const dossier = buildImprovementTriageDossier(record, []);
+    const taskId = improvementAssessmentTaskId(record.case.caseId, dossier.snapshotKey);
+    const repo = assessmentRepo(record);
+    await applyImprovementAssessmentCompletion({
+      repo: repo as never,
+      taskId,
+      caseId: record.case.caseId,
+      taskStatus: "succeeded",
+      prUrl: "https://github.com/example/repo/pull/2",
+      metadata: { improvementAssessment: {
+        disposition: "confirmed_fixed",
+        summary: "Recovered expired schedule delivery leases.",
+        usesTrustedDetectorContract: true,
+        regression: null,
+      } },
+    });
+    expect(repo.applyImprovementTriage).toHaveBeenCalledWith(expect.objectContaining({
+      targetStatus: "actionable",
+      contract: expect.objectContaining({
+        expectedBehavior: dossier.proposedContract?.expectedBehavior,
+        checks: dossier.proposedContract?.checks,
+      }),
+    }));
+    expect(repo.linkImprovementCaseTask).toHaveBeenCalledWith(expect.objectContaining({ taskId }));
   });
 
   it("accepts completion from a bounded retry of the same assessment snapshot", async () => {
@@ -197,4 +240,28 @@ function improvementRecord() {
     withdrawnAt: null, createdAt: now, updatedAt: now,
   };
   return { case: improvementCase, signals: [signal], evidence: [], contracts: [], workAttempts: [], verificationReceipts: [], events: [] };
+}
+
+function scheduleIncidentRecord() {
+  const base = improvementRecord();
+  return {
+    ...base,
+    case: { ...base.case, caseId: "imp-schedule", scope: "deployment" as const, owningDomain: "schedules" },
+    signals: [{
+      ...base.signals[0],
+      signalId: "sig-schedule",
+      caseId: "imp-schedule",
+      source: "runtime_detection" as const,
+      sourceKey: "runtime_detection:schedule-stuck",
+      reporterKind: "automation" as const,
+      reporterId: "automation:runtime_detection",
+      guildId: null,
+      channelId: null,
+      messageId: null,
+      summary: "A scheduled occurrence exceeded its delivery lease.",
+      classificationHint: "defect" as const,
+      owningDomainHint: "schedules",
+      metadata: { detectionCode: "schedule-health:stuck:0123456789abcdef" },
+    }],
+  };
 }

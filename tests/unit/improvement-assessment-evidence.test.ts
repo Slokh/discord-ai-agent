@@ -156,6 +156,42 @@ describe("improvement assessment evidence", () => {
     expect(runtime.getExecution).not.toHaveBeenCalled();
   });
 
+  it("keeps affected-member routing out of the sandbox incident packet", async () => {
+    const incident = {
+      ...signal(null),
+      source: "runtime_detection",
+      guildId: null,
+      channelId: null,
+      messageId: null,
+      metadata: {
+        detectionCode: "schedule-health:stuck:0123456789abcdef",
+        operationalEvidence: { status: "delivering", deliveryAttempts: 2 },
+        affectedMemberContext: { guildId: "private-guild", channelId: "private-channel", messageId: "private-message", userId: "private-user" },
+      },
+    };
+    const rendered = await renderPrivateAssessmentEvidence(
+      "case-incident",
+      [incident],
+      { getExecution: vi.fn(), listMessagesForExecution: vi.fn(), listEvents: vi.fn(), getArtifact: vi.fn() },
+      { messageContext: vi.fn() },
+      {
+        assessmentMode: "operational_incident",
+        proposedContract: {
+          expectedBehavior: "The affected schedule recovers.",
+          checks: [{ kind: "schedule_health", reference: "schedule-health:stuck:0123456789abcdef" }],
+        },
+      },
+    );
+    const evidence = JSON.parse(rendered);
+    expect(evidence).toMatchObject({
+      assessmentMode: "operational_incident",
+      signals: [{ metadata: { operationalEvidence: { status: "delivering", deliveryAttempts: 2 } } }],
+      proposedContract: { checks: [{ kind: "schedule_health" }] },
+    });
+    expect(rendered).not.toContain("private-user");
+    expect(rendered).not.toContain("private-channel");
+  });
+
   it("keeps oversized evidence bounded and parseable while preserving both ends", async () => {
     const executionId = "execution-large";
     const largeText = `beginning-${"x".repeat(130_000)}-ending`;

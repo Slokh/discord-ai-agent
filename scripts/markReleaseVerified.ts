@@ -13,10 +13,15 @@ if (!deploymentId || deploymentId !== config.releaseNotes.verificationId) {
   throw new Error("--deployment-id must exactly match the running deployment verification identifier.");
 }
 const pool = createPool(config);
+const producerRunKey = process.env.GITHUB_RUN_ID
+  ? `github-${process.env.GITHUB_RUN_ID}-${process.env.GITHUB_RUN_ATTEMPT ?? "1"}`
+  : deploymentId;
+const repo = createAppDatabase(pool);
 try {
-  const repo = createAppDatabase(pool);
+  await recordProducer("started");
   const reconciledPullRequests = await reconcileImprovementPullRequestWork(repo, config);
   await repo.markDeploymentVerified({ revision, deploymentId });
+  await recordProducer("succeeded");
   let improvementVerification: Record<string, number>;
   try {
     const results = await repo.verifyImprovementCasesForDeployment({ revision, deploymentId });
@@ -33,8 +38,22 @@ try {
     return counts;
   }, {});
   process.stdout.write(`${JSON.stringify({ status: "promoted", revision, deploymentId, pullRequestReconciliation, improvementVerification })}\n`);
+} catch (error) {
+  await recordProducer("failed", "release_promotion_failed").catch(() => undefined);
+  throw error;
 } finally {
   await pool.end();
+}
+
+async function recordProducer(status: "started" | "succeeded" | "failed", outcomeCode?: string) {
+  return repo.recordImprovementProofProducerRun({
+    trigger: "release_promotion",
+    runKey: producerRunKey!,
+    status,
+    revision,
+    deploymentId,
+    outcomeCode,
+  });
 }
 
 function argument(name: string) {

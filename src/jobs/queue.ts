@@ -662,6 +662,8 @@ function uniqueStrings(values: Array<string | undefined>): string[] {
 function improvementReconciliationLog(result: ImprovementReconciliationResult) {
   return {
     queue: IMPROVEMENT_RECONCILIATION_JOB,
+    proofProducers: countStatuses(result.proofProducers.map(({ state }) => ({ status: state }))),
+    proofProducerDetections: countStatuses(result.proofProducerDetections),
     triage: countStatuses(result.triage),
     pullRequests: countStatuses(result.pullRequests),
     verification: countStatuses(result.verification.cases),

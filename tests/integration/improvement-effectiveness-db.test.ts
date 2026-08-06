@@ -100,6 +100,7 @@ describe.skipIf(!runDbTests)("improvement effectiveness database projection", ()
       retryAttempts: 2,
       retryExhaustedCases: 1,
     });
+    expect(report.automation.proofProducers).toMatchObject({ healthy: 0, unhealthy: 0, unobserved: 3 });
     expect(report.automation.humanIntervention).toMatchObject({
       operatorActionCases: 1,
       operatorActionRate: 1 / 3,
@@ -125,6 +126,7 @@ describe.skipIf(!runDbTests)("improvement effectiveness database projection", ()
       stalledCases: 1,
       retryExhaustedCases: 1,
       recurringClusters: 1,
+      unhealthyProofProducers: 0,
     });
     expect(JSON.stringify(report)).not.toContain("Private case title");
   });

@@ -134,6 +134,28 @@ describe("improvement contract verification", () => {
     });
   });
 
+  it("waits for and accepts an exact proof-producer recovery receipt", () => {
+    const check: ImprovementContractCheck = { kind: "proof_producer_health", reference: "production_observation" };
+    expect(build([check])).toMatchObject({
+      status: "inconclusive",
+      pendingProofs: [{ adapterId: "producer_health", trigger: "production_observation" }],
+    });
+    const proof: ImprovementVerificationProof = {
+      status: "passed",
+      source: "producer_health",
+      referenceType: "proof_producer",
+      referenceId: "production_observation",
+      summary: "The registered proof producer completed successfully.",
+      executionId: null,
+      checkResults: [],
+      createdAt: new Date("2026-08-05T06:00:00Z"),
+    };
+    expect(build([check], { proofs: [proof] })).toMatchObject({
+      status: "passed",
+      checks: [{ adapterId: "producer_health", proofSource: "producer_health", referenceId: "production_observation" }],
+    });
+  });
+
   it("leaves an unregistered adapter visibly inconclusive", () => {
     expect(build([{ kind: "deployment_canary", reference: "unregistered-canary" }]))
       .toMatchObject({

@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import type { DbPool } from "../../src/db/pool.js";
 
 export async function cleanupRepositoryTestRows(pool: DbPool) {
+  await pool.query("DELETE FROM improvement_proof_producer_runs WHERE run_key LIKE 'test-%'");
   await pool.query("DELETE FROM improvement_cases WHERE case_id LIKE 'imp-%'");
   await pool.query("DELETE FROM deployment_verifications WHERE revision LIKE 'test-%'");
   await pool.query("DELETE FROM guild_agent_settings WHERE guild_id LIKE 'guild-%'");

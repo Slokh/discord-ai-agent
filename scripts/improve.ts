@@ -7,6 +7,7 @@ import { DeliveryObligationsRepository } from "../src/db/deliveryObligationsRepo
 import type { ImprovementCase, ImprovementCaseStatus, ImprovementClassification, ImprovementContractCheck, ImprovementSeverity } from "../src/db/types.js";
 import { improvementFingerprint } from "../src/improvements/coalescing.js";
 import {
+  AUTOMATED_IMPROVEMENT_SOURCES,
   recordAutomatedImprovementDetection,
   type AutomatedImprovementSource,
 } from "../src/improvements/detections.js";
@@ -205,7 +206,7 @@ function boundedNumberOption(name: string, fallback: number, min: number, max: n
 function statusValue(value: string): ImprovementCaseStatus { const values: ImprovementCaseStatus[] = ["open", "needs_evidence", "actionable", "in_progress", "verifying", "resolved", "dismissed"]; if (!values.includes(value as ImprovementCaseStatus)) fail(`Invalid status: ${value}`); return value as ImprovementCaseStatus; }
 function classificationValue(value: string): ImprovementClassification { const values: ImprovementClassification[] = ["unknown", "defect", "product_gap", "data_quality", "developer_friction", "external_incident", "expected_behavior"]; if (!values.includes(value as ImprovementClassification)) fail(`Invalid classification: ${value}`); return value as ImprovementClassification; }
 function severityValue(value: string): ImprovementSeverity { const values: ImprovementSeverity[] = ["low", "medium", "high", "critical"]; if (!values.includes(value as ImprovementSeverity)) fail(`Invalid severity: ${value}`); return value as ImprovementSeverity; }
-function automatedDetectionSource(value: string): AutomatedImprovementSource { const values: AutomatedImprovementSource[] = ["runtime_detection", "deployment_detection", "ci_detection", "eval_detection"]; if (!values.includes(value as AutomatedImprovementSource)) fail(`Invalid automated detection source: ${value}`); return value as AutomatedImprovementSource; }
+function automatedDetectionSource(value: string): AutomatedImprovementSource { if (!AUTOMATED_IMPROVEMENT_SOURCES.includes(value as AutomatedImprovementSource)) fail(`Invalid automated detection source: ${value}`); return value as AutomatedImprovementSource; }
 function improvementScope(value: string): ImprovementCase["scope"] { const values: ImprovementCase["scope"][] = ["guild", "repository", "deployment", "global"]; if (!values.includes(value as ImprovementCase["scope"])) fail(`Invalid improvement scope: ${value}`); return value as ImprovementCase["scope"]; }
 function triageVerdict(value: string): ImprovementTriageVerdict { const values: ImprovementTriageVerdict[] = ["confirmed", "not_reproduced", "insufficient_evidence"]; if (!values.includes(value as ImprovementTriageVerdict)) fail(`Invalid triage verdict: ${value}`); return value as ImprovementTriageVerdict; }
 function evidenceDisposition(value: string) { if (value !== "supports" && value !== "contradicts" && value !== "inconclusive") fail(`Invalid evidence disposition: ${value}`); return value; }

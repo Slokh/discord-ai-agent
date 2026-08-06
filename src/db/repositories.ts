@@ -12,6 +12,7 @@ import * as embeddings from "./embeddingRepository.js";
 import * as improvements from "./improvementRepository.js";
 import * as improvementHealth from "./improvementHealthRepository.js";
 import * as improvementEffectiveness from "./improvementEffectivenessRepository.js";
+import * as improvementProofProducers from "./improvementProofProducerRepository.js";
 import * as improvementReporterConversations from "./improvementReporterConversationRepository.js";
 import * as improvementWork from "./improvementWorkRepository.js";
 import * as improvementVerifications from "./improvementVerificationRepository.js";
@@ -57,6 +58,7 @@ export function createAppDatabase(pool: DbPool) {
     ...bindRepository(pool, improvements),
     ...bindRepository(pool, improvementHealth),
     ...bindRepository(pool, improvementEffectiveness),
+    ...bindRepository(pool, improvementProofProducers),
     ...bindRepository(pool, improvementReporterConversations),
     ...bindRepository(pool, improvementWork),
     ...bindRepository(pool, improvementVerifications),

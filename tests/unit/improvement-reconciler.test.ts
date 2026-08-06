@@ -337,6 +337,93 @@ describe("improvement reconciler", () => {
     }));
   });
 
+  it("coalesces an unhealthy proof producer and routes waiting cases through recovery", async () => {
+    const now = new Date("2026-08-05T12:00:00.000Z");
+    const verifying = improvementCase("imp-producer-wait", "verifying", now);
+    const verifyingRecord = {
+      ...record(verifying, signal(verifying.caseId, "runtime_detection", "revision-quality-gate")),
+      verificationReceipts: [{
+        receiptId: "receipt-producer",
+        caseId: verifying.caseId,
+        contractId: "contract-producer",
+        contractVersion: 1,
+        revision: "revision-producer",
+        deploymentId: "deployment-producer",
+        executionId: null,
+        status: "inconclusive",
+        checks: [{
+          index: 0,
+          checkHash: "check-producer",
+          check: { kind: "deployment_canary", reference: "revision-quality-gate" },
+          adapterId: "revision_quality",
+          retryTrigger: "production_observation",
+          status: "inconclusive",
+          proofSource: "unavailable",
+          summary: "Awaiting production observation.",
+          referenceType: null,
+          referenceId: null,
+        }],
+        applicationKey: "application-producer",
+        evidenceId: null,
+        applied: false,
+        actorId: "improvement-reconciler",
+        createdAt: now,
+      }],
+    };
+    const producerHealth = {
+      trigger: "production_observation" as const,
+      state: "unhealthy" as const,
+      reason: "repeated_failures" as const,
+      latestRun: null,
+      latestSuccessAt: null,
+      consecutiveFailures: 2,
+      maxSilenceMs: 8 * 60 * 60 * 1_000,
+      evidenceKey: "production_observation:unhealthy:repeated_failures:run-two",
+    };
+    const recordImprovementSignal = vi.fn(async () => ({ signalCreated: true, caseCreated: true }));
+    const updateImprovementCaseHealth = vi.fn(async (input: any) => ({ health: { ...input, lastProgressAt: now, checkedAt: now }, changed: true, progressed: true }));
+    const repo = {
+      listImprovementCasesForReconciliation: vi.fn(async () => []),
+      getImprovementCase: vi.fn(async () => verifyingRecord),
+      getAgentTask: vi.fn(),
+      applyImprovementTriage: vi.fn(),
+      recordImprovementReconciliationDecision: vi.fn(async () => ({ recorded: true })),
+      getImprovementReporterClarificationState: vi.fn(async () => clarificationState()),
+      ensureImprovementReporterConversationsForCase: vi.fn(async () => 0),
+      listActiveImprovementPullRequestWork: vi.fn(async () => []),
+      linkImprovementCasePullRequest: vi.fn(),
+      latestDeploymentVerification: vi.fn(async () => null),
+      verifyImprovementCasesForDeployment: vi.fn(),
+      listImprovementCaseIdsNeedingHealth: vi.fn(async () => [verifying.caseId]),
+      updateImprovementCaseHealth,
+      listImprovementProofProducerHealth: vi.fn(async () => [producerHealth]),
+      recordImprovementSignal,
+    };
+
+    const result = await runImprovementReconciliationOnce({
+      repo: repo as never,
+      config: { nodeEnv: "production", appRevision: "revision-producer", improvementStalledAfterMs: 60_000 } as unknown as AppConfig,
+      runtime: { getExecution: vi.fn(), listEvents: vi.fn() } as never,
+      deliveries: { getByExecutionId: vi.fn() } as never,
+      now,
+    });
+
+    expect(recordImprovementSignal).toHaveBeenCalledWith(expect.objectContaining({
+      source: "runtime_detection",
+      metadata: expect.objectContaining({
+        detectionCode: "proof-producer:production-observation",
+        livenessReason: "repeated_failures",
+      }),
+    }));
+    expect(result.proofProducerDetections).toEqual([{ trigger: "production_observation", status: "recorded" }]);
+    expect(updateImprovementCaseHealth).toHaveBeenCalledWith(expect.objectContaining({
+      state: "waiting",
+      blocker: "proof_producer_unhealthy",
+      nextAction: "await_proof_producer_recovery",
+      retryTrigger: "improvement_reconciliation",
+    }));
+  });
+
   it("retries a transient autonomous assessment failure with a deterministic bounded task id", async () => {
     const now = new Date("2026-08-05T12:00:00.000Z");
     const reported = improvementCase("imp-retry", "open", now);

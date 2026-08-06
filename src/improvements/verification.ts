@@ -9,7 +9,7 @@ import {
 import type { ImprovementReplayCheckResult } from "../observability/improvementContractReplay.js";
 
 export type ImprovementVerificationStatus = "passed" | "failed" | "inconclusive";
-export type ImprovementVerificationProofSource = "private_eval" | "revision_quality" | "schedule_health" | "release_ci" | "deployment" | "unavailable";
+export type ImprovementVerificationProofSource = "private_eval" | "revision_quality" | "schedule_health" | "producer_health" | "release_ci" | "deployment" | "unavailable";
 
 export type ImprovementVerificationContract = {
   contractId: string;
@@ -23,7 +23,7 @@ export type ImprovementVerificationContract = {
 
 export type ImprovementVerificationProof = {
   status: ImprovementVerificationStatus;
-  source: "private_eval" | "revision_quality" | "schedule_health";
+  source: "private_eval" | "revision_quality" | "schedule_health" | "producer_health";
   referenceType: string;
   referenceId: string;
   summary: string;
@@ -201,6 +201,12 @@ function evaluateCheck(input: {
     const proof = input.proofs.find((candidate) => candidate.source === "schedule_health" && candidate.referenceId === expectedReference) ?? null;
     if (!proof) return result(base, "inconclusive", "unavailable", "Production observation has not produced schedule-specific recovery proof.");
     return result(base, proof.status, "schedule_health", proof.summary, proof.referenceType, proof.referenceId);
+  }
+  if (adapter.id === "producer_health") {
+    const expectedReference = input.check.kind === "proof_producer_health" ? input.check.reference : "";
+    const proof = input.proofs.find((candidate) => candidate.source === "producer_health" && candidate.referenceId === expectedReference) ?? null;
+    if (!proof) return result(base, "inconclusive", "unavailable", "The proof producer has not recorded a successful recovery run.");
+    return result(base, proof.status, "producer_health", proof.summary, proof.referenceType, proof.referenceId);
   }
   if (adapter.id === "release_verify") {
     return result(base, "passed", "release_ci", "The deployed revision passed the trusted repository verification gate.", "deployment_revision", input.revision);

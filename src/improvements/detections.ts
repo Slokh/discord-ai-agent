@@ -3,14 +3,14 @@ import type {
   ImprovementCase,
   ImprovementClassification,
   ImprovementSeverity,
-  ImprovementSignalSource,
 } from "../db/types.js";
 import { improvementFingerprint, normalizeImprovementTitle } from "./coalescing.js";
+import {
+  isAutomatedImprovementSource,
+  type AutomatedImprovementSource,
+} from "./detectorPolicies.js";
 
-export type AutomatedImprovementSource = Extract<
-  ImprovementSignalSource,
-  "runtime_detection" | "deployment_detection" | "ci_detection" | "eval_detection"
->;
+export { AUTOMATED_IMPROVEMENT_SOURCES, type AutomatedImprovementSource } from "./detectorPolicies.js";
 
 export type AutomatedImprovementDetectionInput = {
   source: AutomatedImprovementSource;
@@ -36,19 +36,13 @@ type ImprovementSignalRecorder<Result> = {
   recordImprovementSignal(input: RecordImprovementSignalInput): Promise<Result>;
 };
 
-const AUTOMATED_SOURCES = new Set<ImprovementSignalSource>([
-  "runtime_detection",
-  "deployment_detection",
-  "ci_detection",
-  "eval_detection",
-]);
 const STABLE_IDENTIFIER = /^[A-Za-z0-9._:-]+$/;
 
 /** Builds a content-minimized, private signal for a trusted automated observer. */
 export function automatedImprovementSignalInput(
   input: AutomatedImprovementDetectionInput,
 ): RecordImprovementSignalInput {
-  if (!AUTOMATED_SOURCES.has(input.source)) {
+  if (!isAutomatedImprovementSource(input.source)) {
     throw new Error(`Invalid automated detection source: ${input.source}.`);
   }
   const sourceId = stableIdentifier(input.sourceId, "sourceId", 300);

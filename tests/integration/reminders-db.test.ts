@@ -1,7 +1,8 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { AgentRuntimeRepository } from "../../src/db/agentRuntimeRepository.js";
 import { createAppDatabase } from "../../src/db/repositories.js";
 import { runDataRetentionOnce } from "../../src/observability/dataRetention.js";
-import { collectScheduleHealthObservation } from "../../src/observability/scheduleHealth.js";
+import { collectScheduleHealthObservation, scheduleHealthDetectionInputs } from "../../src/observability/scheduleHealth.js";
 import { createIsolatedTestDatabase, type IsolatedTestDatabase } from "./testDatabase.js";
 
 const runDbTests = process.env.DISCORD_AI_AGENT_DB_TESTS === "true";
@@ -203,13 +204,50 @@ describe.skipIf(!runDbTests)("durable reminder repository", () => {
       autoPausedAt: expect.any(Date),
       deliveryMessageId: "failed-2",
     }));
-    await expect(collectScheduleHealthObservation(database.pool, "test-revision", 48))
-      .resolves.toEqual(expect.objectContaining({
-        health: expect.objectContaining({
-          status: "needs_attention",
-          issues: expect.objectContaining({ autoPaused: 1 }),
-        }),
-      }));
+    const runtime = new AgentRuntimeRepository(database.pool);
+    for (const schedule of ["healthy", "partial", "failed", "r_unhealthy"]) {
+      await runtime.upsertSession({
+        sessionId: `schedule-health-${schedule}`,
+        threadKey: `schedule-health-${schedule}`,
+        request: "schedule health fixture",
+        status: "succeeded",
+        metadata: { appRevision: "test-revision", qualityCohort: "scheduled" },
+      });
+    }
+    const outcomes = [
+      { executionId: "schedule-health-success", scheduleId: "healthy", outcome: "succeeded" },
+      { executionId: "schedule-health-partial-1", scheduleId: "partial", outcome: "partial" },
+      { executionId: "schedule-health-partial-2", scheduleId: "partial", outcome: "partial" },
+      { executionId: "schedule-health-partial-3", scheduleId: "partial", outcome: "partial" },
+      { executionId: "schedule-health-failed", scheduleId: "failed", outcome: "failed" },
+      { executionId: "scheduled-request-execution:r_unhealthy:2", scheduleId: "r_unhealthy", outcome: "failed" },
+    ] as const;
+    for (const outcome of outcomes) {
+      await runtime.createExecution({
+        executionId: outcome.executionId,
+        sessionId: `schedule-health-${outcome.scheduleId}`,
+        harness: "nanocodex",
+        status: "succeeded",
+        metadata: {
+          appRevision: "test-revision",
+          qualityCohort: "scheduled",
+          scheduleId: outcome.scheduleId,
+          scheduledOutcome: outcome.outcome,
+        },
+      });
+    }
+    const observation = await collectScheduleHealthObservation(database.pool, "test-revision", 48);
+    expect(observation.health).toEqual(expect.objectContaining({
+      status: "needs_attention",
+      runs: { succeeded: 1, partial: 3, failed: 2 },
+      issues: expect.objectContaining({ repeatedPartial: 1, autoPaused: 1 }),
+    }));
+    expect(scheduleHealthDetectionInputs(observation.health, observation.privateIssues).map((input) => input.stableCode))
+      .toEqual(expect.arrayContaining([
+        "schedule-health:run_failed",
+        "schedule-health:repeated_partial",
+        "schedule-health:auto_paused",
+      ]));
     await expect(repo.resumeReminderForRequester({
       reminderId: "r_unhealthy",
       guildId: "guild",

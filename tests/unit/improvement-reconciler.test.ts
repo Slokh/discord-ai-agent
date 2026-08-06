@@ -31,7 +31,7 @@ describe("improvement reconciler", () => {
       contract: automatedContract,
     }));
     const recordImprovementReconciliationDecision = vi.fn(async () => ({ recorded: true }));
-    const enqueueImprovementTask = vi.fn(async ({ taskId }: { taskId?: string }) => ({ taskId: taskId! }));
+    const enqueueImprovementTask = vi.fn(async ({ taskId }: { taskId?: string; request?: string }) => ({ taskId: taskId! }));
     const verifyImprovementCasesForDeployment = vi.fn(async () => ([
       { caseId: automatedCase.caseId, status: "passed" as const, recorded: true },
     ]));
@@ -91,6 +91,59 @@ describe("improvement reconciler", () => {
     });
     expect(result.health).toEqual([]);
     expect(result.stalled).toEqual([]);
+  });
+
+  it("assesses observational schedule incidents before authorizing code work", async () => {
+    const now = new Date("2026-08-05T12:00:00.000Z");
+    const detectedCase = improvementCase("imp-schedule", "open", now);
+    const scheduleSignal = signal(detectedCase.caseId, "runtime_detection", "schedule-health:stuck:0123456789abcdef");
+    scheduleSignal.owningDomainHint = "schedules";
+    scheduleSignal.metadata = {
+      ...scheduleSignal.metadata,
+      operationalEvidence: { status: "delivering", deliveryAttempts: 2, lastErrorCode: "lease_expired" },
+      affectedMemberContext: { guildId: "guild", channelId: "channel", messageId: "message", userId: "member" },
+    };
+    const detectedRecord = record(detectedCase, scheduleSignal);
+    const enqueueImprovementTask = vi.fn(async ({ taskId }: { taskId?: string; request?: string }) => ({ taskId: taskId! }));
+    const recordImprovementReconciliationDecision = vi.fn(async () => ({ recorded: true }));
+    const repo = {
+      listImprovementCasesForReconciliation: vi.fn(async ({ statuses }: { statuses?: string[] }) => statuses?.includes("open") ? [detectedCase] : []),
+      getImprovementCase: vi.fn(async () => detectedRecord),
+      getAgentTask: vi.fn(async () => undefined),
+      applyImprovementTriage: vi.fn(),
+      recordImprovementReconciliationDecision,
+      getImprovementReporterClarificationState: vi.fn(async () => clarificationState()),
+      ensureImprovementReporterConversationsForCase: vi.fn(async () => 1),
+      messageContext: vi.fn(async () => []),
+      listActiveImprovementPullRequestWork: vi.fn(async () => []),
+      linkImprovementCasePullRequest: vi.fn(),
+      latestDeploymentVerification: vi.fn(async () => null),
+      verifyImprovementCasesForDeployment: vi.fn(),
+      listImprovementCaseIdsNeedingHealth: vi.fn(async () => []),
+      updateImprovementCaseHealth: vi.fn(),
+    };
+
+    const result = await runImprovementReconciliationOnce({
+      repo: repo as never,
+      config: { improvementStalledAfterMs: 1_000 } as unknown as AppConfig,
+      runtime: { getExecution: vi.fn(), listMessagesForExecution: vi.fn(), listEvents: vi.fn() } as never,
+      deliveries: { getByExecutionId: vi.fn() } as never,
+      enqueueImprovementTask: enqueueImprovementTask as never,
+      now,
+    });
+
+    expect(result.triage).toEqual([{ caseId: detectedCase.caseId, status: "deferred", reason: "assessment_running" }]);
+    expect(repo.applyImprovementTriage).not.toHaveBeenCalled();
+    expect(enqueueImprovementTask).toHaveBeenCalledWith(expect.objectContaining({ taskType: "improvement_report" }));
+    const request = JSON.parse(enqueueImprovementTask.mock.calls[0]![0].request!);
+    expect(request).toMatchObject({
+      assessmentMode: "operational_incident",
+      proposedContract: { checks: [{ kind: "schedule_health" }] },
+      signals: [{ metadata: { operationalEvidence: { status: "delivering" } } }],
+    });
+    expect(recordImprovementReconciliationDecision).toHaveBeenCalledWith(expect.objectContaining({
+      reason: "operational_incident_authorized_autonomous_assessment",
+    }));
   });
 
   it("defers unknown detector codes instead of inventing a contract", async () => {

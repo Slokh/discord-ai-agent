@@ -4,12 +4,12 @@ import type { ImprovementCaseStatus, ImprovementReporterConversation } from "./t
 
 const MAX_DELIVERY_ATTEMPTS = 3;
 
-/** Ensures every originally reported Discord message has one shared follow-up conversation. */
+/** Ensures every reported message or detector-identified affected member has one shared follow-up conversation. */
 export async function ensureImprovementReporterConversationsForCase(pool: DbPool, caseId: string) {
   const result = await pool.query(
-    `WITH candidate_messages AS (
-       SELECT DISTINCT ON (signal.guild_id, signal.message_id)
-              signal.case_id, signal.guild_id, signal.channel_id, signal.message_id
+    `WITH raw_candidates AS (
+       SELECT signal.case_id, signal.signal_id, signal.reporter_id,
+              signal.guild_id, signal.channel_id, signal.message_id, signal.observed_at
        FROM improvement_signals signal
        WHERE signal.case_id = $1
          AND signal.source = 'member_report'
@@ -19,7 +19,28 @@ export async function ensureImprovementReporterConversationsForCase(pool: DbPool
          AND signal.channel_id IS NOT NULL
          AND signal.message_id IS NOT NULL
          AND NOT (signal.metadata ? 'clarificationForConversationId')
-       ORDER BY signal.guild_id, signal.message_id, signal.observed_at
+       UNION ALL
+       SELECT signal.case_id, signal.signal_id,
+              nullif(signal.metadata->'affectedMemberContext'->>'userId', ''),
+              nullif(signal.metadata->'affectedMemberContext'->>'guildId', ''),
+              nullif(signal.metadata->'affectedMemberContext'->>'channelId', ''),
+              nullif(signal.metadata->'affectedMemberContext'->>'messageId', ''),
+              signal.observed_at
+       FROM improvement_signals signal
+       WHERE signal.case_id = $1
+         AND signal.active = true
+         AND signal.source = 'runtime_detection'
+         AND signal.metadata->>'detectionCode' LIKE 'schedule-health:%'
+         AND signal.metadata ? 'affectedMemberContext'
+     ), candidate_messages AS (
+       SELECT DISTINCT ON (candidate.guild_id, candidate.message_id)
+              candidate.case_id, candidate.guild_id, candidate.channel_id, candidate.message_id
+       FROM raw_candidates candidate
+       WHERE candidate.reporter_id IS NOT NULL
+         AND candidate.guild_id IS NOT NULL
+         AND candidate.channel_id IS NOT NULL
+         AND candidate.message_id IS NOT NULL
+       ORDER BY candidate.guild_id, candidate.message_id, candidate.observed_at
      ), upserted AS (
        INSERT INTO improvement_reporter_conversations(
          conversation_id, case_id, guild_id, source_channel_id, source_message_id
@@ -32,15 +53,11 @@ export async function ensureImprovementReporterConversationsForCase(pool: DbPool
        RETURNING conversation_id, guild_id, source_message_id
      )
      INSERT INTO improvement_reporter_conversation_signals(conversation_id, signal_id, reporter_id)
-     SELECT upserted.conversation_id, signal.signal_id, signal.reporter_id
+     SELECT upserted.conversation_id, candidate.signal_id, candidate.reporter_id
      FROM upserted
-     JOIN improvement_signals signal
-       ON signal.guild_id = upserted.guild_id AND signal.message_id = upserted.source_message_id
-     WHERE signal.case_id = $1
-       AND signal.source = 'member_report'
-       AND signal.reporter_kind = 'member'
-       AND signal.reporter_id IS NOT NULL
-       AND NOT (signal.metadata ? 'clarificationForConversationId')
+     JOIN raw_candidates candidate
+       ON candidate.guild_id = upserted.guild_id AND candidate.message_id = upserted.source_message_id
+     WHERE candidate.reporter_id IS NOT NULL
      ON CONFLICT (signal_id) DO UPDATE SET reporter_id = EXCLUDED.reporter_id`,
     [caseId],
   );

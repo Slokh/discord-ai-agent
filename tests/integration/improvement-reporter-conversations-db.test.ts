@@ -183,4 +183,53 @@ describe.skipIf(!runDbTests)("improvement reporter conversation database behavio
       expect.objectContaining({ caseId: first.case.caseId, reporterId: secondReporter, signalActive: true }),
     ]);
   });
+
+  it("routes an operational incident question to the detector-identified affected member", async () => {
+    const guildId = `guild-${randomUUID()}`;
+    const memberId = `user-${randomUUID()}`;
+    await repo.upsertGuild({ id: guildId, name: "schedule incident" });
+    const recorded = await repo.recordImprovementSignal({
+      source: "runtime_detection",
+      sourceKey: `schedule-${randomUUID()}`,
+      reporterKind: "automation",
+      reporterId: "automation:runtime_detection",
+      summary: "A recurring schedule was automatically paused after repeated failures.",
+      classification: "external_incident",
+      owningDomain: "schedules",
+      metadata: {
+        detectionCode: "schedule-health:auto_paused:0123456789abcdef",
+        affectedMemberContext: {
+          guildId,
+          channelId: "schedule-channel",
+          messageId: "schedule-source-message",
+          userId: memberId,
+        },
+      },
+    });
+
+    await expect(repo.ensureImprovementReporterConversationsForCase(recorded.case.caseId)).resolves.toBe(1);
+    const before = await repo.getImprovementCase(recorded.case.caseId);
+    if (!before) throw new Error("Expected schedule improvement case.");
+    await repo.applyImprovementTriage({
+      ...improvementTriageApplication(buildImprovementTriageDossier(before, []), {
+        verdict: "insufficient_evidence",
+        evidenceSummary: "The affected member must choose whether to resume the schedule.",
+      }),
+      actorId: "improvement-assessor",
+      actorKind: "automation",
+    });
+    await expect(repo.requestImprovementReporterClarification({
+      caseId: recorded.case.caseId,
+      taskId: "assessment-schedule",
+      question: "Should I keep this schedule paused, or should it resume?",
+    })).resolves.toBe(1);
+    await expect(repo.listRenderableImprovementReporterConversations(10)).resolves.toEqual([
+      expect.objectContaining({
+        caseId: recorded.case.caseId,
+        reporterId: memberId,
+        sourceChannelId: "schedule-channel",
+        sourceMessageId: "schedule-source-message",
+      }),
+    ]);
+  });
 });

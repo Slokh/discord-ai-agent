@@ -19,7 +19,12 @@ describe("schedule health", () => {
       .mockResolvedValueOnce({ rows: [
         { reminder_id: "schedule-overdue", last_run_execution_id: null, status: "scheduled", overdue: true, stuck: false, auto_paused: false },
         { reminder_id: "schedule-stuck", last_run_execution_id: "stuck-execution", status: "delivering", overdue: false, stuck: true, auto_paused: false },
-        { reminder_id: "schedule-paused", last_run_execution_id: "failed", status: "paused", overdue: false, stuck: false, auto_paused: true },
+        {
+          reminder_id: "schedule-paused", last_run_execution_id: "failed", status: "paused", overdue: false, stuck: false, auto_paused: true,
+          guild_id: "guild-1", channel_id: "channel-1", requester_id: "member-1", source_message_id: "message-1",
+          delivery_kind: "agent", recurrence: { frequency: "daily" }, delivery_attempts: 3, last_error_code: "provider_timeout",
+          last_run_status: "failed", consecutive_failures: 3,
+        },
       ] });
 
     const observation = await collectScheduleHealthObservation(
@@ -53,8 +58,12 @@ describe("schedule health", () => {
     expect(JSON.stringify(detections)).not.toContain("schedule-overdue");
     expect(JSON.stringify(detections)).not.toContain("schedule-stuck");
     expect(JSON.stringify(detections)).not.toContain("schedule-paused");
+    expect(detections.at(-1)).toMatchObject({
+      affectedMemberContext: { guildId: "guild-1", channelId: "channel-1", messageId: "message-1", userId: "member-1" },
+      metadata: { operationalEvidence: { status: "paused", deliveryKind: "agent", recurring: true, consecutiveFailures: 3 } },
+    });
     expect(query.mock.calls[0]?.[1]).toEqual([48, "revision-1"]);
-    expect(query.mock.calls[1]?.[1]).toBeUndefined();
+    expect(query.mock.calls[1]?.[1]).toEqual([48]);
   });
 
   it("falls back to terminal execution state when no explicit response outcome was retained", async () => {

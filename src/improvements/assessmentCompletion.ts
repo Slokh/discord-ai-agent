@@ -43,14 +43,16 @@ export async function applyImprovementAssessmentCompletion(input: {
     return { result: null, applied: false };
   }
 
-  if (record.case.status === "actionable" && result.disposition === "confirmed_fixed" && input.taskStatus === "succeeded" && input.prUrl && result.regression) {
+  const trustedDetectorContract = result.usesTrustedDetectorContract ? dossier.proposedContract : null;
+  const executableAssessmentContract = result.regression || trustedDetectorContract;
+  if (record.case.status === "actionable" && result.disposition === "confirmed_fixed" && input.taskStatus === "succeeded" && input.prUrl && executableAssessmentContract) {
     await linkRepairedTask(input.repo, input.caseId, input.taskId);
     return { result, applied: true };
   }
   if (!["open", "needs_evidence"].includes(record.case.status)) return { result, applied: false };
 
   if (result.disposition === "confirmed_fixed") {
-    if (input.taskStatus !== "succeeded" || !input.prUrl || !result.regression) {
+    if (input.taskStatus !== "succeeded" || !input.prUrl || !executableAssessmentContract) {
       if (input.taskStatus !== "failed" && input.taskStatus !== "cancelled") {
         await awaitingHuman(input.repo, input.caseId, "confirmed_report_repair_did_not_complete", input.taskId);
       }
@@ -59,8 +61,8 @@ export async function applyImprovementAssessmentCompletion(input: {
     const application = improvementTriageApplication(dossier, {
       verdict: "confirmed",
       evidenceSummary: result.summary,
-      expectedBehavior: result.regression.expectedBehavior,
-      checks: improvementContractChecks(result.regression),
+      expectedBehavior: trustedDetectorContract?.expectedBehavior ?? result.regression!.expectedBehavior,
+      checks: trustedDetectorContract?.checks ?? improvementContractChecks(result.regression!),
       assessmentKind: "agent_assessment",
     });
     const outcome = await input.repo.applyImprovementTriage({

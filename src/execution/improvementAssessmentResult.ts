@@ -24,6 +24,7 @@ export type ImprovementAssessmentResult = {
   disposition: ImprovementAssessmentDisposition;
   summary: string;
   regression: ImprovementRegressionContract | null;
+  usesTrustedDetectorContract: boolean;
 };
 
 const DISPOSITIONS = new Set<ImprovementAssessmentDisposition>([
@@ -52,19 +53,26 @@ export function parseImprovementAssessmentResult(value: unknown): ImprovementAss
     disposition,
     summary: summary.slice(0, 1_000),
     regression: improvementRegressionContract(parsed.regression),
+    usesTrustedDetectorContract: parsed.usesTrustedDetectorContract === true,
   };
 }
 
-export function validatedImprovementTriage(result: ImprovementAssessmentResult | null): ImprovementAssessmentResult {
+export function validatedImprovementTriage(
+  result: ImprovementAssessmentResult | null,
+  options: { trustedDetectorContractAvailable?: boolean } = {},
+): ImprovementAssessmentResult {
   if (!result) return insufficient("The assessment did not produce a valid evidence-backed verdict. Clarify the expected and observed behavior.");
   if (result.disposition === "confirmed_fixed") {
     return insufficient("The evidence-only assessment attempted to report a fix before repair was authorized.");
   }
-  if (["confirmed_unfixed", "already_fixed"].includes(result.disposition) && !result.regression) {
+  if (result.usesTrustedDetectorContract && !options.trustedDetectorContractAvailable) {
+    return insufficient("The assessment claimed a trusted detector contract that was not present in its evidence packet.");
+  }
+  if (["confirmed_unfixed", "already_fixed"].includes(result.disposition) && !result.regression && !result.usesTrustedDetectorContract) {
     return insufficient("The assessment could not define an observable, machine-executable regression check.");
   }
-  if (!["confirmed_unfixed", "already_fixed"].includes(result.disposition) && result.regression) {
-    return { ...result, regression: null };
+  if (!["confirmed_unfixed", "already_fixed"].includes(result.disposition) && (result.regression || result.usesTrustedDetectorContract)) {
+    return { ...result, regression: null, usesTrustedDetectorContract: false };
   }
   return result;
 }
@@ -99,7 +107,7 @@ function improvementRegressionContract(value: unknown): ImprovementRegressionCon
 }
 
 function insufficient(summary: string): ImprovementAssessmentResult {
-  return { disposition: "insufficient_evidence", summary, regression: null };
+  return { disposition: "insufficient_evidence", summary, regression: null, usesTrustedDetectorContract: false };
 }
 
 function stringList(value: unknown) {

@@ -23,6 +23,12 @@ export type AutomatedImprovementDetectionInput = {
   classification: ImprovementClassification;
   severity: ImprovementSeverity;
   owningDomain: string;
+  affectedMemberContext?: {
+    guildId: string;
+    channelId: string;
+    messageId: string;
+    userId: string;
+  } | null;
   metadata?: Record<string, unknown>;
 };
 
@@ -51,7 +57,11 @@ export function automatedImprovementSignalInput(
   if (!summary) throw new Error("Automated detection summary is required.");
   const owningDomain = stableIdentifier(input.owningDomain, "owningDomain", 100);
   const scope = input.scope ?? "deployment";
-  const metadata = { ...(input.metadata ?? {}), detectionCode: stableCode };
+  const metadata = {
+    ...(input.metadata ?? {}),
+    detectionCode: stableCode,
+    ...(input.affectedMemberContext ? { affectedMemberContext: input.affectedMemberContext } : {}),
+  };
 
   return {
     source: input.source,

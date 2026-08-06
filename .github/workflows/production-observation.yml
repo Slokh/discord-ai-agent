@@ -12,7 +12,9 @@ permissions:
 
 concurrency:
   group: production-observation
-  cancel-in-progress: true
+  # The watchdog itself is a liveness proof producer.  A later schedule must
+  # not cancel the run that is responsible for recording that receipt.
+  cancel-in-progress: false
 
 jobs:
   improvement-watchdog:

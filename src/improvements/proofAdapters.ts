@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import type { ImprovementContractCheck } from "../db/types.js";
+import { isScheduleHealthReference } from "./scheduleHealthContract.js";
 import { MUTATING_TOOL_NAMES, TOOL_NAMES } from "../tools/toolDefinition.js";
 
 export type ImprovementProofAdapterId =
@@ -8,7 +9,8 @@ export type ImprovementProofAdapterId =
   | "release_db_verify"
   | "private_regression_gate"
   | "deployment_canary"
-  | "revision_quality";
+  | "revision_quality"
+  | "schedule_health";
 
 export type ImprovementProofTrigger =
   | "post_deploy_private_replay"
@@ -18,7 +20,7 @@ export type ImprovementProofTrigger =
 export type ImprovementProofAdapter = {
   id: ImprovementProofAdapterId;
   trigger: ImprovementProofTrigger;
-  proofSource: "private_eval" | "release_ci" | "deployment" | "revision_quality";
+  proofSource: "private_eval" | "release_ci" | "deployment" | "revision_quality" | "schedule_health";
 };
 
 const adapters = Object.freeze({
@@ -28,6 +30,7 @@ const adapters = Object.freeze({
   private_regression_gate: adapter("private_regression_gate", "release_promotion", "deployment"),
   deployment_canary: adapter("deployment_canary", "release_promotion", "deployment"),
   revision_quality: adapter("revision_quality", "production_observation", "revision_quality"),
+  schedule_health: adapter("schedule_health", "production_observation", "schedule_health"),
 } satisfies Record<ImprovementProofAdapterId, ImprovementProofAdapter>);
 
 const postDeployCanaries = new Set([
@@ -67,6 +70,9 @@ export function improvementProofAdapterForCheck(check: ImprovementContractCheck)
   if (check.kind === "deployment_canary") {
     if (check.reference === "revision-quality-gate" || isRevisionQualityClusterReference(check.reference)) return adapters.revision_quality;
     return postDeployCanaries.has(check.reference) ? adapters.deployment_canary : null;
+  }
+  if (check.kind === "schedule_health") {
+    return isScheduleHealthReference(check.reference) ? adapters.schedule_health : null;
   }
   return null;
 }

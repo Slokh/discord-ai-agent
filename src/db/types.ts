@@ -186,6 +186,7 @@ export type ImprovementContractCheck =
   | { kind: "eval"; reference: string }
   | { kind: "database_invariant"; reference: string }
   | { kind: "deployment_canary"; reference: string }
+  | { kind: "schedule_health"; reference: string }
   | { kind: "manual"; description: string };
 
 export type DiscordUserLookupResult = {

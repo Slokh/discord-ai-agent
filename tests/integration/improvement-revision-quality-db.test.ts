@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createAppDatabase, type DiscordAiAgentRepository } from "../../src/db/repositories.js";
 import { createIsolatedTestDatabase, type IsolatedTestDatabase } from "./testDatabase.js";
+import { scheduleHealthReference } from "../../src/observability/scheduleHealth.js";
 
 const runDbTests = process.env.DISCORD_AI_AGENT_DB_TESTS === "true";
 
@@ -111,6 +112,55 @@ describe.skipIf(!runDbTests)("improvement revision-quality proof", () => {
     await expect(repo.verifyImprovementCasesForDeployment({ revision: "latency-revision", deploymentId: "latency-deployment" }))
       .resolves.toContainEqual({ caseId: caseRecord.case.caseId, status: "passed", recorded: true });
     await expect(repo.getImprovementCase(caseRecord.case.caseId)).resolves.toMatchObject({ case: { status: "resolved" } });
+  });
+
+  it("proves recovery only for the exact schedule with sufficient traffic", async () => {
+    const recoveredReference = scheduleHealthReference("run_failed", "recovered-schedule");
+    const idleReference = scheduleHealthReference("run_failed", "idle-schedule");
+    const prepareCase = async (reference: string) => {
+      const caseRecord = await repo.recordImprovementSignal({
+        source: "runtime_detection",
+        sourceKey: `source-${randomUUID()}`,
+        reporterKind: "automation",
+        summary: "A scheduled occurrence failed.",
+        scope: "deployment",
+      });
+      await repo.addImprovementEvidence({
+        caseId: caseRecord.case.caseId,
+        kind: "runtime_gate",
+        disposition: "supports",
+        summary: "Production observation recorded a schedule-specific health failure.",
+      });
+      await repo.acceptImprovementContract({
+        caseId: caseRecord.case.caseId,
+        expectedBehavior: "The affected schedule recovers without reproducing its failure.",
+        checks: [{ kind: "schedule_health", reference }],
+        createdBy: "automation",
+      });
+      await repo.transitionImprovementCase({ caseId: caseRecord.case.caseId, to: "actionable", actorKind: "automation" });
+      await repo.transitionImprovementCase({ caseId: caseRecord.case.caseId, to: "in_progress", actorKind: "operator" });
+      await repo.transitionImprovementCase({ caseId: caseRecord.case.caseId, to: "verifying", actorKind: "system" });
+      return caseRecord.case.caseId;
+    };
+    const recoveredCaseId = await prepareCase(recoveredReference);
+    const idleCaseId = await prepareCase(idleReference);
+    await repo.markDeploymentVerified({ revision: "schedule-recovery-revision", deploymentId: "schedule-recovery-deployment" });
+
+    await expect(repo.recordImprovementScheduleHealthResult({
+      revision: "schedule-recovery-revision",
+      runKey: "schedule-health-run",
+      windowHours: 48,
+      proofStatuses: { [recoveredReference]: "passed" },
+    })).resolves.toEqual({ recorded: 2, deploymentId: "schedule-recovery-deployment" });
+    await expect(repo.verifyImprovementCasesForDeployment({
+      revision: "schedule-recovery-revision",
+      deploymentId: "schedule-recovery-deployment",
+    })).resolves.toEqual(expect.arrayContaining([
+      { caseId: recoveredCaseId, status: "passed", recorded: true },
+      { caseId: idleCaseId, status: "inconclusive", recorded: true },
+    ]));
+    await expect(repo.getImprovementCase(recoveredCaseId)).resolves.toMatchObject({ case: { status: "resolved" } });
+    await expect(repo.getImprovementCase(idleCaseId)).resolves.toMatchObject({ case: { status: "verifying" } });
   });
 
   it("retains the behavior cohort and contributing revisions on aggregate gate proof", async () => {

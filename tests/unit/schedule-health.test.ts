@@ -3,6 +3,7 @@ import type { DbPool } from "../../src/db/pool.js";
 import {
   collectScheduleHealthObservation,
   scheduleHealthDetectionInputs,
+  scheduleHealthReference,
 } from "../../src/observability/scheduleHealth.js";
 
 describe("schedule health", () => {
@@ -16,9 +17,9 @@ describe("schedule health", () => {
         { execution_id: "failed", status: "succeeded", schedule_id: "schedule-paused", scheduled_outcome: "failed" },
       ] })
       .mockResolvedValueOnce({ rows: [
-        { reminder_id: "schedule-overdue", last_run_execution_id: null, issue: "overdue" },
-        { reminder_id: "schedule-stuck", last_run_execution_id: "stuck-execution", issue: "stuck" },
-        { reminder_id: "schedule-paused", last_run_execution_id: "failed", issue: "auto_paused" },
+        { reminder_id: "schedule-overdue", last_run_execution_id: null, status: "scheduled", overdue: true, stuck: false, auto_paused: false },
+        { reminder_id: "schedule-stuck", last_run_execution_id: "stuck-execution", status: "delivering", overdue: false, stuck: true, auto_paused: false },
+        { reminder_id: "schedule-paused", last_run_execution_id: "failed", status: "paused", overdue: false, stuck: false, auto_paused: true },
       ] });
 
     const observation = await collectScheduleHealthObservation(
@@ -37,21 +38,28 @@ describe("schedule health", () => {
     });
     expect(JSON.stringify(observation.health)).not.toContain("schedule-");
     expect(detections.map((detection) => detection.stableCode)).toEqual([
-      "schedule-health:repeated_partial",
-      "schedule-health:overdue",
-      "schedule-health:stuck",
-      "schedule-health:auto_paused",
+      scheduleHealthReference("repeated_partial", "schedule-partial"),
+      scheduleHealthReference("overdue", "schedule-overdue"),
+      scheduleHealthReference("stuck", "schedule-stuck"),
+      scheduleHealthReference("auto_paused", "schedule-paused"),
     ]);
+    expect(observation.proofStatuses).toMatchObject({
+      [scheduleHealthReference("repeated_partial", "schedule-partial")]: "failed",
+      [scheduleHealthReference("overdue", "schedule-overdue")]: "failed",
+      [scheduleHealthReference("stuck", "schedule-stuck")]: "failed",
+      [scheduleHealthReference("auto_paused", "schedule-paused")]: "failed",
+      [scheduleHealthReference("run_failed", "schedule-success")]: "passed",
+    });
     expect(JSON.stringify(detections)).not.toContain("schedule-overdue");
     expect(JSON.stringify(detections)).not.toContain("schedule-stuck");
     expect(JSON.stringify(detections)).not.toContain("schedule-paused");
     expect(query.mock.calls[0]?.[1]).toEqual([48, "revision-1"]);
-    expect(query.mock.calls[1]?.[1]).toEqual([48]);
+    expect(query.mock.calls[1]?.[1]).toBeUndefined();
   });
 
   it("falls back to terminal execution state when no explicit response outcome was retained", async () => {
     const query = vi.fn()
-      .mockResolvedValueOnce({ rows: [{ execution_id: "cancelled", status: "cancelled", schedule_id: null }] })
+      .mockResolvedValueOnce({ rows: [{ execution_id: "cancelled", status: "cancelled", schedule_id: "schedule-cancelled" }] })
       .mockResolvedValueOnce({ rows: [] });
 
     const observation = await collectScheduleHealthObservation(
@@ -62,8 +70,38 @@ describe("schedule health", () => {
 
     expect(observation.health.runs).toEqual({ succeeded: 0, partial: 0, failed: 1 });
     expect(scheduleHealthDetectionInputs(observation.health, observation.privateIssues)[0]).toMatchObject({
-      stableCode: "schedule-health:run_failed",
+      stableCode: scheduleHealthReference("run_failed", "schedule-cancelled"),
       executionId: "cancelled",
+    });
+  });
+
+  it("requires schedule-specific traffic before recovery can pass", async () => {
+    const query = vi.fn()
+      .mockResolvedValueOnce({ rows: [
+        { execution_id: "success-1", status: "succeeded", schedule_id: "recovered", scheduled_outcome: "succeeded" },
+        { execution_id: "success-2", status: "succeeded", schedule_id: "recovered", scheduled_outcome: "succeeded" },
+        { execution_id: "success-3", status: "succeeded", schedule_id: "recovered", scheduled_outcome: "succeeded" },
+      ] })
+      .mockResolvedValueOnce({ rows: [
+        { reminder_id: "recovered", status: "scheduled", overdue: false, stuck: false, auto_paused: false },
+        { reminder_id: "idle", status: "scheduled", overdue: false, stuck: false, auto_paused: false },
+        { reminder_id: "paused-from-prior", status: "paused", overdue: false, stuck: false, auto_paused: true },
+      ] });
+
+    const observation = await collectScheduleHealthObservation(
+      { query } as unknown as DbPool,
+      "revision-2",
+      48,
+    );
+
+    expect(observation.proofStatuses).toMatchObject({
+      [scheduleHealthReference("run_failed", "recovered")]: "passed",
+      [scheduleHealthReference("repeated_partial", "recovered")]: "passed",
+      [scheduleHealthReference("auto_paused", "recovered")]: "passed",
+      [scheduleHealthReference("run_failed", "idle")]: "inconclusive",
+      [scheduleHealthReference("repeated_partial", "idle")]: "inconclusive",
+      [scheduleHealthReference("auto_paused", "idle")]: "inconclusive",
+      [scheduleHealthReference("auto_paused", "paused-from-prior")]: "inconclusive",
     });
   });
 });

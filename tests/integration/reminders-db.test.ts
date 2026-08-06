@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { AgentRuntimeRepository } from "../../src/db/agentRuntimeRepository.js";
 import { createAppDatabase } from "../../src/db/repositories.js";
 import { runDataRetentionOnce } from "../../src/observability/dataRetention.js";
-import { collectScheduleHealthObservation, scheduleHealthDetectionInputs } from "../../src/observability/scheduleHealth.js";
+import { collectScheduleHealthObservation, scheduleHealthDetectionInputs, scheduleHealthReference } from "../../src/observability/scheduleHealth.js";
 import { createIsolatedTestDatabase, type IsolatedTestDatabase } from "./testDatabase.js";
 
 const runDbTests = process.env.DISCORD_AI_AGENT_DB_TESTS === "true";
@@ -244,9 +244,9 @@ describe.skipIf(!runDbTests)("durable reminder repository", () => {
     }));
     expect(scheduleHealthDetectionInputs(observation.health, observation.privateIssues).map((input) => input.stableCode))
       .toEqual(expect.arrayContaining([
-        "schedule-health:run_failed",
-        "schedule-health:repeated_partial",
-        "schedule-health:auto_paused",
+        scheduleHealthReference("run_failed", "failed"),
+        scheduleHealthReference("repeated_partial", "partial"),
+        scheduleHealthReference("auto_paused", "r_unhealthy"),
       ]));
     await expect(repo.resumeReminderForRequester({
       reminderId: "r_unhealthy",

@@ -73,12 +73,22 @@ try {
           : "inconclusive",
         clusterAbsenceStatuses: revisionQualityClusterAbsenceStatuses(quality),
       });
-      const receipts = proof.deploymentId
-        ? await repo.verifyImprovementCasesForDeployment({ revision, deploymentId: proof.deploymentId, actorId: "revision-quality" })
+      const scheduleProof = await repo.recordImprovementScheduleHealthResult({
+        revision,
+        runKey: scheduleObservation.health.generatedAt,
+        windowHours: scheduleObservation.health.windowHours,
+        proofStatuses: scheduleObservation.proofStatuses,
+      });
+      const deploymentId = proof.deploymentId ?? scheduleProof.deploymentId;
+      const receipts = deploymentId
+        ? await repo.verifyImprovementCasesForDeployment({ revision, deploymentId, actorId: "production-observation" })
         : [];
       verification = {
         status: "recorded",
-        proofs: proof.recorded,
+        proofs: {
+          revisionQuality: proof.recorded,
+          scheduleHealth: scheduleProof.recorded,
+        },
         receipts: receipts.reduce<Record<string, number>>((counts, receipt) => {
           counts[receipt.status] = (counts[receipt.status] ?? 0) + 1;
           if (receipt.recorded) counts.recorded = (counts.recorded ?? 0) + 1;

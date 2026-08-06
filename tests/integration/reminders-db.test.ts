@@ -17,7 +17,7 @@ describe.skipIf(!runDbTests)("durable reminder repository", () => {
     const duplicate = await repo.createReminder(reminderInput("r_duplicate", "request-key", scheduledFor));
     await repo.createReminder({ ...reminderInput("r_other", "other-key", scheduledFor), requesterId: "other" });
 
-    expect(first.reminderId).toBe("r_one");
+    expect(first).toEqual(expect.objectContaining({ reminderId: "r_one", deliveryKind: "notification" }));
     expect(duplicate.reminderId).toBe("r_one");
     await expect(repo.listScheduledRemindersForRequester({ guildId: "guild", requesterId: "user" }))
       .resolves.toEqual([expect.objectContaining({ reminderId: "r_one" })]);
@@ -42,6 +42,16 @@ describe.skipIf(!runDbTests)("durable reminder repository", () => {
       .resolves.toEqual(expect.objectContaining({ deliveryAttempts: 2 }));
     await expect(repo.markReminderDelivered({ reminderId: "r_due", channelId: "channel", messageId: "message" }))
       .resolves.toEqual(expect.objectContaining({ status: "delivered" }));
+
+    await repo.createReminder({
+      ...reminderInput("r_agent_due", "agent-due-key", new Date(now.getTime() - 1_000)),
+      deliveryKind: "agent",
+    });
+    await repo.claimReminderForDelivery({ reminderId: "r_agent_due", now });
+    await expect(repo.listDueReminderWakeups({ now: new Date(now.getTime() + 6 * 60_000) }))
+      .resolves.not.toContainEqual(expect.objectContaining({ reminderId: "r_agent_due" }));
+    await expect(repo.listDueReminderWakeups({ now: new Date(now.getTime() + 16 * 60_000) }))
+      .resolves.toContainEqual(expect.objectContaining({ reminderId: "r_agent_due" }));
   });
 
   it("advances, pauses, resumes, and cancels one durable recurring series", async () => {
@@ -108,10 +118,12 @@ describe.skipIf(!runDbTests)("durable reminder repository", () => {
       timezone: "America/New_York",
       scheduledFor: newTime,
       recurrence: { frequency: "daily", interval: 1, localTime: "06:00", anchorDate: "2026-08-06" },
+      deliveryKind: "agent",
     });
 
     expect(updated).toEqual(expect.objectContaining({
       reminderText: "updated text",
+      deliveryKind: "agent",
       timezone: "America/New_York",
       scheduledFor: newTime,
       recurrence: expect.objectContaining({ frequency: "daily", localTime: "06:00" }),
@@ -126,6 +138,7 @@ describe.skipIf(!runDbTests)("durable reminder repository", () => {
       timezone: "UTC",
       scheduledFor: newTime,
       recurrence: null,
+      deliveryKind: "notification",
     })).resolves.toBeUndefined();
 
     await repo.createReminder({
@@ -141,6 +154,7 @@ describe.skipIf(!runDbTests)("durable reminder repository", () => {
       timezone: "UTC",
       scheduledFor: newTime,
       recurrence: null,
+      deliveryKind: "notification",
     })).resolves.toEqual(expect.objectContaining({ status: "scheduled", pausedAt: null, recurrence: null }));
   });
 

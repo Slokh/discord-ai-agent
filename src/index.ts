@@ -15,6 +15,7 @@ import { createAgentRuntimeRunner } from "./discord/agentRuntimeRunner.js";
 import { startPaymentReconciler } from "./payments/reconciler.js";
 import { createApplicationServices } from "./runtime/applicationServices.js";
 import { createReminderDeliveryRunner } from "./reminders/reminderDelivery.js";
+import { createScheduledAgentRequestRunner } from "./reminders/scheduledAgentExecution.js";
 
 async function main() {
   const config = loadConfig();
@@ -155,7 +156,23 @@ async function main() {
     improvementWorker: startsImprovementWorker,
     reminderWorker: startsReminderWorker,
     reminders: client && startsReminderWorker
-      ? createReminderDeliveryRunner({ client, config, repo, agentRuntime: agentRuntimeRepo })
+      ? createReminderDeliveryRunner({
+          client,
+          config,
+          repo,
+          agentRuntime: agentRuntimeRepo,
+          scheduledAgent: createScheduledAgentRequestRunner({
+            client,
+            config,
+            repo,
+            agentRuntime: agentRuntimeRepo,
+            deliveryObligations: deliveryObligationsRepo,
+            budgetRepo,
+            rngRepo,
+            walletService,
+            openRouter,
+          }),
+        })
       : undefined,
     repo,
     agentRuntimeRepo,

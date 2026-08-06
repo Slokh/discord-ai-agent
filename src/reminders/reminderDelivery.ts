@@ -11,6 +11,7 @@ import {
 } from "../observability/backgroundJobRuntime.js";
 import { durationMs, logger } from "../util/logger.js";
 import { nextReminderOccurrence } from "./recurrence.js";
+import type { ScheduledAgentRequestRunner } from "./scheduledAgentExecution.js";
 
 export type ReminderDeliveryRunner = {
   deliver: (reminderId: string) => Promise<ReminderWakeup | null>;
@@ -22,6 +23,7 @@ export function createReminderDeliveryRunner(input: {
   config: AppConfig;
   repo: DiscordAiAgentRepository;
   agentRuntime?: AgentRuntimeRepository;
+  scheduledAgent?: ScheduledAgentRequestRunner;
 }): ReminderDeliveryRunner {
   return {
     listDueReminderWakeups: () => input.repo.listDueReminderWakeups(),
@@ -34,6 +36,7 @@ async function deliverReminder(input: {
   config: AppConfig;
   repo: DiscordAiAgentRepository;
   agentRuntime?: AgentRuntimeRepository;
+  scheduledAgent?: ScheduledAgentRequestRunner;
   reminderId: string;
 }) {
   const reminder = await input.repo.claimReminderForDelivery({ reminderId: input.reminderId });
@@ -44,19 +47,19 @@ async function deliverReminder(input: {
     executionId: `reminder-delivery-${reminder.reminderId}-${reminder.occurrenceSequence}-${reminder.deliveryAttempts}`,
     traceId: reminder.reminderId,
     kind: "reminder_delivery",
-    title: "Scheduled reminder delivery",
-    request: `Deliver scheduled reminder ${reminder.reminderId}.`,
+    title: reminder.deliveryKind === "agent" ? "Scheduled agent request" : "Scheduled reminder delivery",
+    request: `Deliver scheduled ${reminder.deliveryKind} ${reminder.reminderId}.`,
     source: "pgboss.reminder",
     guildId: reminder.guildId,
     channelId: reminder.channelId,
-    metadata: { reminderId: reminder.reminderId, occurrence: reminder.occurrenceSequence, attempt: reminder.deliveryAttempts },
+    metadata: { reminderId: reminder.reminderId, occurrence: reminder.occurrenceSequence, attempt: reminder.deliveryAttempts, deliveryKind: reminder.deliveryKind },
   }).catch((error) => {
     logger.warn({ err: error, reminderId: reminder.reminderId }, "Failed to create reminder delivery runtime");
     return null;
   });
 
   try {
-    const message = await sendReminder(input.client, input.config, reminder);
+    const message = await sendReminder(input.client, input.config, reminder, input.scheduledAgent);
     const nextScheduledFor = reminder.recurrence
       ? nextReminderOccurrence(reminder.recurrence, reminder.timezone, new Date(), reminder.scheduledFor)
       : undefined;
@@ -69,13 +72,13 @@ async function deliverReminder(input: {
     await recordBackgroundJobEvent(runtime, {
       eventName: "reminder.delivery.sent",
       summary: "Scheduled reminder delivered",
-      metadata: { reminderId: reminder.reminderId, channelId: message.channelId, messageId: message.id },
+      metadata: { reminderId: reminder.reminderId, channelId: message.channelId, messageId: message.id, deliveryKind: reminder.deliveryKind },
       durationMs: durationMs(startedAt),
     });
     await finishBackgroundJobRuntime(runtime, {
       status: "succeeded",
       summary: "Scheduled reminder delivered.",
-      metadata: { reminderId: reminder.reminderId, messageId: message.id },
+      metadata: { reminderId: reminder.reminderId, messageId: message.id, deliveryKind: reminder.deliveryKind },
       durationMs: durationMs(startedAt),
     });
     return saved?.status === "scheduled"
@@ -108,7 +111,12 @@ async function deliverReminder(input: {
   }
 }
 
-async function sendReminder(client: Client, config: AppConfig, reminder: ScheduledReminder): Promise<Message> {
+async function sendReminder(
+  client: Client,
+  config: AppConfig,
+  reminder: ScheduledReminder,
+  scheduledAgent?: ScheduledAgentRequestRunner,
+): Promise<Message> {
   if (!client.isReady()) throw new Error("discord_client_not_ready");
   let channel;
   try {
@@ -140,6 +148,14 @@ async function sendReminder(client: Client, config: AppConfig, reminder: Schedul
       }
     }
     if (channel.archived) await channel.setArchived(false, "Delivering a scheduled reminder");
+  }
+  if (reminder.deliveryKind === "agent") {
+    if (!scheduledAgent) throw new Error("scheduled_agent_unavailable");
+    return scheduledAgent.execute(
+      reminder,
+      channel as unknown as { send: (payload: MessageCreateOptions) => Promise<Message> },
+      requester.displayName ?? requester.user.username,
+    );
   }
   return sendDiscordNotification({
     channel: channel as unknown as { send: (payload: MessageCreateOptions) => Promise<Message> },

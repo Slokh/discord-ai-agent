@@ -37,7 +37,7 @@ export type DiscordAgentExecutionRequest = {
   botRoleIds: string[];
   messageStartedAt: number;
   turnEnvelope?: AgentRuntimeTurnEnvelope | null;
-  requestKind?: "message" | "component" | "modal";
+  requestKind?: "message" | "component" | "modal" | "scheduled";
   userId?: string;
   userDisplayName?: string;
   interaction?: AgentRuntimeTurnEnvelope["interaction"];

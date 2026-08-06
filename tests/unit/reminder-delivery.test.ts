@@ -36,6 +36,29 @@ describe("reminder delivery", () => {
     expect(wakeup).toEqual({ reminderId: "r_1", scheduledFor: new Date("2026-08-06T09:00:00Z"), occurrenceSequence: 1 });
   });
 
+  it("runs agent schedules through the scheduled execution adapter before committing delivery", async () => {
+    const repo = deliveryRepo({ deliveryKind: "agent" });
+    const send = vi.fn();
+    const delivered = { id: "agent-result", channelId: "channel" };
+    const scheduledAgent = { execute: vi.fn(async () => delivered) };
+    const runner = createReminderDeliveryRunner({
+      client: discordClient({ canView: true, send }) as never,
+      config: { maxReplyChars: 1800 } as never,
+      repo: repo as never,
+      scheduledAgent: scheduledAgent as never,
+    });
+
+    await runner.deliver("r_1");
+
+    expect(scheduledAgent.execute).toHaveBeenCalledWith(
+      expect.objectContaining({ reminderId: "r_1", deliveryKind: "agent" }),
+      expect.objectContaining({ send }),
+      "User",
+    );
+    expect(send).not.toHaveBeenCalled();
+    expect(repo.markReminderDelivered).toHaveBeenCalledWith(expect.objectContaining({ messageId: "agent-result" }));
+  });
+
   it("fails terminally instead of leaking into another channel when visibility is lost", async () => {
     const repo = deliveryRepo();
     const send = vi.fn();
@@ -50,7 +73,7 @@ describe("reminder delivery", () => {
   });
 });
 
-function deliveryRepo(input: { recurring?: boolean } = {}) {
+function deliveryRepo(input: { recurring?: boolean; deliveryKind?: "notification" | "agent" } = {}) {
   const reminder = {
     reminderId: "r_1",
     requestKey: "key",
@@ -59,6 +82,7 @@ function deliveryRepo(input: { recurring?: boolean } = {}) {
     requesterId: "user",
     sourceMessageId: "source",
     reminderText: "check the oven",
+    deliveryKind: input.deliveryKind ?? "notification",
     timezone: "UTC",
     scheduledFor: new Date("2026-08-05T09:00:00Z"),
     recurrence: input.recurring ? { frequency: "daily" as const, interval: 1, localTime: "09:00", anchorDate: "2026-08-05" } : null,
@@ -87,7 +111,7 @@ function deliveryRepo(input: { recurring?: boolean } = {}) {
 }
 
 function discordClient(input: { canView: boolean; send: (payload: unknown) => Promise<unknown> }) {
-  const guild = { members: { fetch: vi.fn(async () => ({ id: "user" })) } };
+  const guild = { members: { fetch: vi.fn(async () => ({ id: "user", displayName: "User", user: { username: "user" } })) } };
   const channel = {
     guild,
     guildId: "guild",

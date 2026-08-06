@@ -26,6 +26,7 @@ import { prepareDiscordEmojiCapability } from "./discordEmoji.js";
 import { prepareUserTimezoneCapability } from "./userTimezone.js";
 import { imageContextPromptContribution } from "./imageContext.js";
 import { prepareRandomGameCapability } from "./randomGames.js";
+import { prepareScheduledRequestCapability } from "./scheduledRequests.js";
 
 export type CapabilityId = keyof typeof TOOL_NAMES_BY_CAPABILITY;
 
@@ -63,6 +64,7 @@ const declarations: readonly CapabilityDeclaration[] = ([
     id: "reminders",
     summary: "Durable requester-owned one-shot and recurring reminder creation, management, and delivery.",
     toolNames: TOOL_NAMES_BY_CAPABILITY.reminders,
+    prepareTurn: (ctx) => prepareScheduledRequestCapability(ctx),
   },
   {
     id: "discordContext",

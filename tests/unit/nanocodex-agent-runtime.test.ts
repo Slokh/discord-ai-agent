@@ -91,6 +91,29 @@ describe("NanoCodex agent runtime executor", () => {
     }));
   });
 
+  it("advertises only non-mutating tools to scheduled executions", async () => {
+    const runtime = agentRuntime();
+    const ctx = toolContext(runtime);
+    ctx.readOnlyExecution = true;
+    ctx.mutationAuthorizedByCurrentInput = false;
+    const runRuntime = vi.fn(async (input: any) => {
+      const names = input.tools.map((tool: any) => tool.function.name);
+      expect(names).toContain("web__run");
+      expect(names).toContain("searchDiscordHistory");
+      expect(names).not.toContain("setReminder");
+      expect(names).not.toContain("transferWalletFunds");
+      expect(input.prompt).toContain("strictly read-only");
+      return result("scheduled answer");
+    });
+
+    await expect(executeNanoCodexAgentRuntime({
+      toolContext: ctx,
+      text: "summarize yesterday",
+      timeoutMs: 1_000,
+      runRuntime: runRuntime as never,
+    })).resolves.toMatchObject({ content: "scheduled answer" });
+  });
+
   it("continues final synthesis when a non-mutating tool implementation throws", async () => {
     const runtime = agentRuntime();
     const ctx = toolContext(runtime);

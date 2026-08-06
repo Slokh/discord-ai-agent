@@ -19,7 +19,7 @@ export type AgentRuntimeConversationMessageSnapshot = {
 export type AgentRuntimeTurnEnvelope = {
   schemaVersion: 2;
   source: "discord";
-  requestKind?: "message" | "component" | "modal";
+  requestKind?: "message" | "component" | "modal" | "scheduled";
   requestId: string;
   sourceMessageId?: string;
   threadKey: string;
@@ -51,7 +51,7 @@ export type AgentRuntimeTurnEnvelope = {
 
 export function buildAgentRuntimeTurnEnvelope(input: {
   requestId: string;
-  requestKind?: "message" | "component" | "modal";
+  requestKind?: "message" | "component" | "modal" | "scheduled";
   sourceMessageId?: string;
   threadKey: string;
   guildId: string;

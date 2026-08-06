@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import type { ScheduledReminder } from "../db/repositories.js";
+import type { ReminderDeliveryKind, ScheduledReminder } from "../db/repositories.js";
 import { summarizeForAudit } from "../util/text.js";
 import { DEFAULT_USER_TIMEZONE, formatTimezoneDateTime, normalizeIanaTimezone, USER_TIMEZONE_PREFERENCE_KEY } from "../util/timezone.js";
 import {
@@ -17,6 +17,7 @@ type SetReminderInput = {
   action?: string;
   reminderId?: string;
   reminder?: string;
+  deliveryKind?: string;
   scheduledFor?: string;
   timezone?: string;
   recurrence?: ReminderRecurrenceInput;
@@ -34,7 +35,7 @@ export async function setReminder(ctx: ToolContext, input: SetReminderInput): Pr
 
 export async function createReminder(
   ctx: ToolContext,
-  input: { reminder?: string; scheduledFor?: string; timezone?: string; recurrence?: ReminderRecurrenceInput },
+  input: { reminder?: string; deliveryKind?: string; scheduledFor?: string; timezone?: string; recurrence?: ReminderRecurrenceInput },
 ): Promise<AgentResponse> {
   const reminderText = input.reminder?.trim();
   if (!reminderText || reminderText.length > 1500) return failure(ctx, "createReminder", input, "reminder_text_invalid", "Tell me what to remind you about (up to 1,500 characters).");
@@ -46,6 +47,10 @@ export async function createReminder(
     ? normalizeIanaTimezone(input.timezone)
     : await storedTimezone(ctx);
   if (!timezone) return failure(ctx, "createReminder", input, "reminder_timezone_invalid", "I couldn’t validate the timezone for that reminder.");
+  const deliveryKind = input.deliveryKind === undefined ? "notification" : normalizeDeliveryKind(input.deliveryKind);
+  if (!deliveryKind) {
+    return failure(ctx, "createReminder", input, "reminder_delivery_mode_invalid", "Choose notification for a literal reminder or agent for fresh read-only work at delivery time.");
+  }
   let recurrence;
   try {
     recurrence = input.recurrence ? buildReminderRecurrence(input.recurrence, timezone, scheduledFor) : null;
@@ -57,7 +62,7 @@ export async function createReminder(
   if (!sourceMessageId) return failure(ctx, "createReminder", input, "reminder_source_missing", "I couldn’t bind this reminder to the current Discord request, so nothing was scheduled.");
 
   const requestKey = createHash("sha256")
-    .update([ctx.guildId, ctx.channelId, ctx.userId, sourceMessageId, reminderText, scheduledFor.toISOString(), JSON.stringify(recurrence)].join("\0"))
+    .update([ctx.guildId, ctx.channelId, ctx.userId, sourceMessageId, reminderText, deliveryKind, scheduledFor.toISOString(), JSON.stringify(recurrence)].join("\0"))
     .digest("hex");
   const reminder = await ctx.repo.createReminder({
     reminderId: `r_${randomUUID()}`,
@@ -67,6 +72,7 @@ export async function createReminder(
     requesterId: ctx.userId,
     sourceMessageId,
     reminderText,
+    deliveryKind,
     timezone,
     scheduledFor,
     recurrence,
@@ -74,8 +80,9 @@ export async function createReminder(
   await ctx.jobs?.enqueueReminderDelivery(reminder.reminderId, reminder.scheduledFor).catch(() => null);
   await audit(ctx, "setReminder", input, { reminderId: reminder.reminderId, scheduledFor: reminder.scheduledFor.toISOString() }).catch(() => undefined);
   const recurrenceText = reminder.recurrence ? `, recurring ${formatReminderRecurrence(reminder.recurrence)}` : "";
+  const label = reminder.deliveryKind === "agent" ? "Scheduled request" : "Reminder";
   return success(
-    `Reminder \`${reminder.reminderId}\` is set for ${formatTimezoneDateTime(reminder.scheduledFor, reminder.timezone)}${recurrenceText}: ${reminder.reminderText}`,
+    `${label} \`${reminder.reminderId}\` is set for ${formatTimezoneDateTime(reminder.scheduledFor, reminder.timezone)}${recurrenceText}: ${reminder.reminderText}`,
     "reminder_created",
   );
 }
@@ -83,13 +90,14 @@ export async function createReminder(
 export async function listMyReminders(ctx: ToolContext): Promise<AgentResponse> {
   const reminders = await ctx.repo.listScheduledRemindersForRequester({ guildId: ctx.guildId, requesterId: ctx.userId, limit: 25 });
   await audit(ctx, "listMyReminders", {}, { count: reminders.length }).catch(() => undefined);
-  if (reminders.length === 0) return success("You don’t have any upcoming reminders in this server.", "reminder_list");
+  if (reminders.length === 0) return success("You don’t have any upcoming schedules in this server.", "reminder_list");
   const lines = reminders.map((reminder) => {
     const status = reminder.status === "paused" ? "paused" : formatTimezoneDateTime(reminder.scheduledFor, reminder.timezone);
     const recurrence = reminder.recurrence ? `; ${formatReminderRecurrence(reminder.recurrence)}` : "";
-    return `- \`${reminder.reminderId}\` — ${status}${recurrence} — ${reminder.reminderText}`;
+    const mode = reminder.deliveryKind === "agent" ? "agent" : "notification";
+    return `- \`${reminder.reminderId}\` — ${mode}; ${status}${recurrence} — ${reminder.reminderText}`;
   });
-  return success(`Your upcoming reminders:\n${lines.join("\n")}`, "reminder_list");
+  return success(`Your upcoming schedules:\n${lines.join("\n")}`, "reminder_list");
 }
 
 export async function manageReminder(ctx: ToolContext, input: SetReminderInput): Promise<AgentResponse> {
@@ -148,11 +156,12 @@ async function updateReminder(ctx: ToolContext, input: SetReminderInput, existin
   const hasText = input.reminder !== undefined;
   const hasSchedule = input.scheduledFor !== undefined;
   const hasTimezone = input.timezone !== undefined;
+  const hasDeliveryKind = input.deliveryKind !== undefined;
   const hasRecurrence = input.recurrence !== undefined;
   const removeRecurrence = input.removeRecurrence === true;
   const updateScope = normalizeUpdateScope(input.updateScope);
-  if (!hasText && !hasSchedule && !hasTimezone && !hasRecurrence && !removeRecurrence) {
-    return failure(ctx, "manageReminder", input, "reminder_update_empty", "Tell me what to change: its text, time, timezone, or recurrence.");
+  if (!hasText && !hasSchedule && !hasTimezone && !hasDeliveryKind && !hasRecurrence && !removeRecurrence) {
+    return failure(ctx, "manageReminder", input, "reminder_update_empty", "Tell me what to change: its request, delivery mode, time, timezone, or recurrence.");
   }
   if (input.updateScope && !updateScope) {
     return failure(ctx, "manageReminder", input, "reminder_update_scope_invalid", "Use series or next_occurrence as the update scope.");
@@ -160,13 +169,17 @@ async function updateReminder(ctx: ToolContext, input: SetReminderInput, existin
   if (hasRecurrence && removeRecurrence) {
     return failure(ctx, "manageReminder", input, "reminder_recurrence_update_conflict", "Choose either a replacement recurrence or removal of recurrence, not both.");
   }
-  if (updateScope === "next_occurrence" && (hasText || hasRecurrence || removeRecurrence || hasTimezone)) {
-    return failure(ctx, "manageReminder", input, "reminder_next_update_invalid", "A next-occurrence update can change only its delivery time. Recurrence, timezone, and text changes apply to the whole series.");
+  if (updateScope === "next_occurrence" && (hasText || hasDeliveryKind || hasRecurrence || removeRecurrence || hasTimezone)) {
+    return failure(ctx, "manageReminder", input, "reminder_next_update_invalid", "A next-occurrence update can change only its delivery time. Request, mode, recurrence, and timezone changes apply to the whole series.");
   }
 
   const reminderText = hasText ? input.reminder?.trim() : existing.reminderText;
   if (!reminderText || reminderText.length > 1500) {
     return failure(ctx, "manageReminder", input, "reminder_text_invalid", "Reminder text must contain 1 to 1,500 characters.");
+  }
+  const deliveryKind = hasDeliveryKind ? normalizeDeliveryKind(input.deliveryKind) : existing.deliveryKind;
+  if (!deliveryKind) {
+    return failure(ctx, "manageReminder", input, "reminder_delivery_mode_invalid", "Choose notification for a literal reminder or agent for fresh read-only work at delivery time.");
   }
   const timezone = hasTimezone ? normalizeIanaTimezone(input.timezone) : existing.timezone;
   if (!timezone) return failure(ctx, "manageReminder", input, "reminder_timezone_invalid", "I couldn’t validate that timezone.");
@@ -210,6 +223,7 @@ async function updateReminder(ctx: ToolContext, input: SetReminderInput, existin
     guildId: ctx.guildId,
     requesterId: ctx.userId,
     reminderText,
+    deliveryKind,
     timezone,
     scheduledFor,
     recurrence,
@@ -221,10 +235,11 @@ async function updateReminder(ctx: ToolContext, input: SetReminderInput, existin
   }
   await audit(ctx, "setReminder", input, { reminderId: updated.reminderId, action: "update", updateScope, scheduledFor: updated.scheduledFor.toISOString() }).catch(() => undefined);
   const recurrenceText = updated.recurrence ? `; ${formatReminderRecurrence(updated.recurrence)}` : "";
+  const modeText = updated.deliveryKind === "agent" ? "agent" : "notification";
   const status = updated.status === "paused" ? "paused; next retained for" : "next delivery";
   const scopeText = updateScope === "next_occurrence" ? " The recurring series rule is unchanged." : "";
   return success(
-    `Updated reminder \`${updated.reminderId}\`: ${updated.reminderText} — ${status} ${formatTimezoneDateTime(updated.scheduledFor, updated.timezone)}${recurrenceText}.${scopeText}`,
+    `Updated schedule \`${updated.reminderId}\` (${modeText}): ${updated.reminderText} — ${status} ${formatTimezoneDateTime(updated.scheduledFor, updated.timezone)}${recurrenceText}.${scopeText}`,
     "reminder_updated",
   );
 }
@@ -237,6 +252,11 @@ function normalizeManagementAction(value: string | undefined): "cancel" | "pause
 function normalizeUpdateScope(value: string | undefined): "series" | "next_occurrence" | null {
   const scope = value?.trim().toLowerCase();
   return scope === "series" || scope === "next_occurrence" ? scope : null;
+}
+
+function normalizeDeliveryKind(value: string | undefined): ReminderDeliveryKind | null {
+  const kind = value?.trim().toLowerCase();
+  return kind === "notification" || kind === "agent" ? kind : null;
 }
 
 function parseScheduledInstant(value: string | undefined): Date | null {

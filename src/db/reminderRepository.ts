@@ -2,6 +2,8 @@ import type { DbPool } from "./pool.js";
 import { parseReminderRecurrence, type ReminderRecurrence } from "../reminders/recurrence.js";
 
 export type ReminderStatus = "scheduled" | "delivering" | "delivered" | "paused" | "cancelled" | "failed";
+export type ReminderDeliveryKind = "notification" | "agent";
+export const SCHEDULED_AGENT_STALE_AFTER_MS = 15 * 60_000;
 
 export type ScheduledReminder = {
   reminderId: string;
@@ -11,6 +13,7 @@ export type ScheduledReminder = {
   requesterId: string;
   sourceMessageId: string;
   reminderText: string;
+  deliveryKind: ReminderDeliveryKind;
   timezone: string;
   scheduledFor: Date;
   recurrence: ReminderRecurrence | null;
@@ -30,14 +33,14 @@ export type ScheduledReminder = {
 
 export async function createReminder(
   pool: DbPool,
-  input: Pick<ScheduledReminder, "reminderId" | "requestKey" | "guildId" | "channelId" | "requesterId" | "sourceMessageId" | "reminderText" | "timezone" | "scheduledFor"> & { recurrence?: ReminderRecurrence | null },
+  input: Pick<ScheduledReminder, "reminderId" | "requestKey" | "guildId" | "channelId" | "requesterId" | "sourceMessageId" | "reminderText" | "timezone" | "scheduledFor"> & { recurrence?: ReminderRecurrence | null; deliveryKind?: ReminderDeliveryKind },
 ): Promise<ScheduledReminder> {
   const result = await pool.query(
     `
       INSERT INTO scheduled_reminders(
         reminder_id, request_key, guild_id, channel_id, requester_id,
-        source_message_id, reminder_text, timezone, scheduled_for, recurrence
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb)
+        source_message_id, reminder_text, timezone, scheduled_for, recurrence, delivery_kind
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11)
       ON CONFLICT(request_key) DO UPDATE SET request_key = EXCLUDED.request_key
       RETURNING *
     `,
@@ -52,6 +55,7 @@ export async function createReminder(
       input.timezone,
       input.scheduledFor,
       input.recurrence ? JSON.stringify(input.recurrence) : null,
+      input.deliveryKind ?? "notification",
     ],
   );
   return rowToReminder(result.rows[0]);
@@ -108,12 +112,14 @@ export async function updateReminderForRequester(
     timezone: string;
     scheduledFor: Date;
     recurrence: ReminderRecurrence | null;
+    deliveryKind: ReminderDeliveryKind;
   },
 ): Promise<ScheduledReminder | undefined> {
   const result = await pool.query(
     `
       UPDATE scheduled_reminders SET
         reminder_text = $4, timezone = $5, scheduled_for = $6, recurrence = $7::jsonb,
+        delivery_kind = $8,
         status = CASE WHEN status = 'paused' AND $7::jsonb IS NULL THEN 'scheduled' ELSE status END,
         paused_at = CASE WHEN status = 'paused' AND $7::jsonb IS NULL THEN NULL ELSE paused_at END,
         delivery_attempts = 0, claimed_at = NULL, last_error_code = NULL, updated_at = now()
@@ -129,6 +135,7 @@ export async function updateReminderForRequester(
       input.timezone,
       input.scheduledFor,
       input.recurrence ? JSON.stringify(input.recurrence) : null,
+      input.deliveryKind,
     ],
   );
   return result.rows[0] ? rowToReminder(result.rows[0]) : undefined;
@@ -187,10 +194,11 @@ export async function resumeReminderForRequester(
 
 export async function claimReminderForDelivery(
   pool: DbPool,
-  input: { reminderId: string; now?: Date; staleBefore?: Date },
+  input: { reminderId: string; now?: Date; staleBefore?: Date; agentStaleBefore?: Date },
 ): Promise<ScheduledReminder | undefined> {
   const now = input.now ?? new Date();
   const staleBefore = input.staleBefore ?? new Date(now.getTime() - 5 * 60_000);
+  const agentStaleBefore = input.agentStaleBefore ?? new Date(now.getTime() - SCHEDULED_AGENT_STALE_AFTER_MS);
   const result = await pool.query(
     `
       UPDATE scheduled_reminders SET
@@ -198,11 +206,14 @@ export async function claimReminderForDelivery(
         last_error_code = NULL, updated_at = $2
       WHERE reminder_id = $1 AND (
         (status = 'scheduled' AND scheduled_for <= $2)
-        OR (status = 'delivering' AND claimed_at < $3)
+        OR (status = 'delivering' AND claimed_at < CASE
+          WHEN delivery_kind = 'agent' THEN $4::timestamptz
+          ELSE $3::timestamptz
+        END)
       )
       RETURNING *
     `,
-    [input.reminderId, now, staleBefore],
+    [input.reminderId, now, staleBefore, agentStaleBefore],
   );
   return result.rows[0] ? rowToReminder(result.rows[0]) : undefined;
 }
@@ -211,19 +222,23 @@ export type ReminderWakeup = Pick<ScheduledReminder, "reminderId" | "scheduledFo
 
 export async function listDueReminderWakeups(
   pool: DbPool,
-  input: { now?: Date; staleBefore?: Date; limit?: number } = {},
+  input: { now?: Date; staleBefore?: Date; agentStaleBefore?: Date; limit?: number } = {},
 ): Promise<ReminderWakeup[]> {
   const now = input.now ?? new Date();
   const staleBefore = input.staleBefore ?? new Date(now.getTime() - 5 * 60_000);
+  const agentStaleBefore = input.agentStaleBefore ?? new Date(now.getTime() - SCHEDULED_AGENT_STALE_AFTER_MS);
   const result = await pool.query(
     `
       SELECT reminder_id, scheduled_for, occurrence_sequence FROM scheduled_reminders
       WHERE (status = 'scheduled' AND scheduled_for <= $1)
-         OR (status = 'delivering' AND claimed_at < $2)
+         OR (status = 'delivering' AND claimed_at < CASE
+           WHEN delivery_kind = 'agent' THEN $3::timestamptz
+           ELSE $2::timestamptz
+         END)
       ORDER BY scheduled_for, reminder_id
-      LIMIT $3
+      LIMIT $4
     `,
-    [now, staleBefore, Math.max(1, Math.min(input.limit ?? 500, 2_000))],
+    [now, staleBefore, agentStaleBefore, Math.max(1, Math.min(input.limit ?? 500, 2_000))],
   );
   return result.rows.map((row) => ({
     reminderId: String(row.reminder_id),
@@ -306,6 +321,7 @@ function rowToReminder(row: Record<string, unknown>): ScheduledReminder {
     requesterId: String(row.requester_id),
     sourceMessageId: String(row.source_message_id),
     reminderText: String(row.reminder_text),
+    deliveryKind: row.delivery_kind === "agent" ? "agent" : "notification",
     timezone: String(row.timezone),
     scheduledFor: new Date(String(row.scheduled_for)),
     recurrence: parseReminderRecurrence(row.recurrence),

@@ -85,6 +85,55 @@ export async function getReminderForRequester(
   return result.rows[0] ? rowToReminder(result.rows[0]) : undefined;
 }
 
+export async function getReminderForDeliveryMessage(
+  pool: DbPool,
+  input: { messageId: string; channelId: string; guildId: string; requesterId: string },
+): Promise<ScheduledReminder | undefined> {
+  const result = await pool.query(
+    `SELECT * FROM scheduled_reminders
+     WHERE delivery_message_id = $1 AND delivery_channel_id = $2
+       AND guild_id = $3 AND requester_id = $4`,
+    [input.messageId, input.channelId, input.guildId, input.requesterId],
+  );
+  return result.rows[0] ? rowToReminder(result.rows[0]) : undefined;
+}
+
+export async function updateReminderForRequester(
+  pool: DbPool,
+  input: {
+    reminderId: string;
+    guildId: string;
+    requesterId: string;
+    reminderText: string;
+    timezone: string;
+    scheduledFor: Date;
+    recurrence: ReminderRecurrence | null;
+  },
+): Promise<ScheduledReminder | undefined> {
+  const result = await pool.query(
+    `
+      UPDATE scheduled_reminders SET
+        reminder_text = $4, timezone = $5, scheduled_for = $6, recurrence = $7::jsonb,
+        status = CASE WHEN status = 'paused' AND $7::jsonb IS NULL THEN 'scheduled' ELSE status END,
+        paused_at = CASE WHEN status = 'paused' AND $7::jsonb IS NULL THEN NULL ELSE paused_at END,
+        delivery_attempts = 0, claimed_at = NULL, last_error_code = NULL, updated_at = now()
+      WHERE reminder_id = $1 AND guild_id = $2 AND requester_id = $3
+        AND status IN ('scheduled', 'paused')
+      RETURNING *
+    `,
+    [
+      input.reminderId,
+      input.guildId,
+      input.requesterId,
+      input.reminderText,
+      input.timezone,
+      input.scheduledFor,
+      input.recurrence ? JSON.stringify(input.recurrence) : null,
+    ],
+  );
+  return result.rows[0] ? rowToReminder(result.rows[0]) : undefined;
+}
+
 export async function cancelReminderForRequester(
   pool: DbPool,
   input: { reminderId: string; guildId: string; requesterId: string },

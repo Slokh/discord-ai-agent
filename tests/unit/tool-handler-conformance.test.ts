@@ -35,7 +35,7 @@ const handlerFamilies = {
 const expectedFamilyTools = {
   core: ["loadSkillContext"],
   userSettings: ["setMyTimezone"],
-  reminders: ["createReminder", "listMyReminders", "manageReminder"],
+  reminders: ["setReminder", "listMyReminders"],
   discordRetrieval: [
     "findDiscordUsers", "findDiscordChannels", "listMyImprovementSignals", "inspectDiscordFile",
     "summarizeDiscordThread", "getRecentDiscordMessages", "getRecentAgentMemory", "getAgentMemoryStats",

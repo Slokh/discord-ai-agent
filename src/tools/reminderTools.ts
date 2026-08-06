@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
+import type { ScheduledReminder } from "../db/repositories.js";
 import { summarizeForAudit } from "../util/text.js";
 import { DEFAULT_USER_TIMEZONE, formatTimezoneDateTime, normalizeIanaTimezone, USER_TIMEZONE_PREFERENCE_KEY } from "../util/timezone.js";
 import {
@@ -11,6 +12,25 @@ import {
 import type { AgentResponse, ToolContext } from "./types.js";
 
 const RFC3339_WITH_ZONE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d{1,3})?)?(?:Z|[+-]\d{2}:\d{2})$/i;
+
+type SetReminderInput = {
+  action?: string;
+  reminderId?: string;
+  reminder?: string;
+  scheduledFor?: string;
+  timezone?: string;
+  recurrence?: ReminderRecurrenceInput;
+  removeRecurrence?: boolean;
+  updateScope?: string;
+};
+
+export async function setReminder(ctx: ToolContext, input: SetReminderInput): Promise<AgentResponse> {
+  if (input.action?.trim().toLowerCase() !== "create") return manageReminder(ctx, input);
+  if (input.reminderId || input.removeRecurrence || input.updateScope) {
+    return failure(ctx, "createReminder", input, "reminder_create_fields_invalid", "Creation cannot target or modify an existing reminder. Use a management action instead.");
+  }
+  return createReminder(ctx, input);
+}
 
 export async function createReminder(
   ctx: ToolContext,
@@ -52,7 +72,7 @@ export async function createReminder(
     recurrence,
   });
   await ctx.jobs?.enqueueReminderDelivery(reminder.reminderId, reminder.scheduledFor).catch(() => null);
-  await audit(ctx, "createReminder", input, { reminderId: reminder.reminderId, scheduledFor: reminder.scheduledFor.toISOString() }).catch(() => undefined);
+  await audit(ctx, "setReminder", input, { reminderId: reminder.reminderId, scheduledFor: reminder.scheduledFor.toISOString() }).catch(() => undefined);
   const recurrenceText = reminder.recurrence ? `, recurring ${formatReminderRecurrence(reminder.recurrence)}` : "";
   return success(
     `Reminder \`${reminder.reminderId}\` is set for ${formatTimezoneDateTime(reminder.scheduledFor, reminder.timezone)}${recurrenceText}: ${reminder.reminderText}`,
@@ -72,27 +92,32 @@ export async function listMyReminders(ctx: ToolContext): Promise<AgentResponse> 
   return success(`Your upcoming reminders:\n${lines.join("\n")}`, "reminder_list");
 }
 
-export async function manageReminder(ctx: ToolContext, input: { action?: string; reminderId?: string }): Promise<AgentResponse> {
-  const reminderId = input.reminderId?.trim();
+export async function manageReminder(ctx: ToolContext, input: SetReminderInput): Promise<AgentResponse> {
   const action = normalizeManagementAction(input.action);
-  if (!reminderId || !action) return failure(ctx, "manageReminder", input, "reminder_management_invalid", "Choose a reminder ID and whether to cancel, pause, or resume it.");
+  if (!action) return failure(ctx, "manageReminder", input, "reminder_management_invalid", "Choose whether to cancel, pause, resume, or update the reminder.");
+  const existing = await resolveManagedReminder(ctx, input.reminderId);
+  if (!existing) {
+    return failure(ctx, "manageReminder", input, "reminder_target_missing", "Reply directly to a reminder notification or tell me its reminder ID. I can list your upcoming reminders first.");
+  }
+  const reminderId = existing.reminderId;
   const scope = { reminderId, guildId: ctx.guildId, requesterId: ctx.userId };
 
   if (action === "cancel") {
     const reminder = await ctx.repo.cancelReminderForRequester(scope);
     if (!reminder) return failure(ctx, "manageReminder", input, "reminder_not_found", "I couldn’t find that active reminder among your reminders in this server.");
-    await audit(ctx, "manageReminder", input, { reminderId, action }).catch(() => undefined);
+    await audit(ctx, "setReminder", input, { reminderId, action }).catch(() => undefined);
     return success(`Cancelled reminder \`${reminderId}\`: ${reminder.reminderText}`, "reminder_cancelled");
   }
   if (action === "pause") {
     const reminder = await ctx.repo.pauseReminderForRequester(scope);
     if (!reminder) return failure(ctx, "manageReminder", input, "reminder_not_recurring_or_active", "Only an active recurring reminder can be paused.");
-    await audit(ctx, "manageReminder", input, { reminderId, action }).catch(() => undefined);
+    await audit(ctx, "setReminder", input, { reminderId, action }).catch(() => undefined);
     return success(`Paused recurring reminder \`${reminderId}\`.`, "reminder_paused");
   }
 
-  const existing = await ctx.repo.getReminderForRequester(scope);
-  if (!existing?.recurrence || existing.status !== "paused") {
+  if (action === "update") return updateReminder(ctx, input, existing);
+
+  if (!existing.recurrence || existing.status !== "paused") {
     return failure(ctx, "manageReminder", input, "reminder_not_paused", "Only a paused recurring reminder can be resumed.");
   }
   const now = new Date();
@@ -102,13 +127,116 @@ export async function manageReminder(ctx: ToolContext, input: { action?: string;
   const reminder = await ctx.repo.resumeReminderForRequester({ ...scope, scheduledFor });
   if (!reminder) return failure(ctx, "manageReminder", input, "reminder_resume_conflict", "That reminder changed before it could be resumed. List your reminders and try again.");
   await ctx.jobs?.enqueueReminderDelivery(reminder.reminderId, reminder.scheduledFor).catch(() => null);
-  await audit(ctx, "manageReminder", input, { reminderId, action, scheduledFor: reminder.scheduledFor.toISOString() }).catch(() => undefined);
+  await audit(ctx, "setReminder", input, { reminderId, action, scheduledFor: reminder.scheduledFor.toISOString() }).catch(() => undefined);
   return success(`Resumed reminder \`${reminderId}\`; next delivery is ${formatTimezoneDateTime(reminder.scheduledFor, reminder.timezone)}.`, "reminder_resumed");
 }
 
-function normalizeManagementAction(value: string | undefined): "cancel" | "pause" | "resume" | null {
+async function resolveManagedReminder(ctx: ToolContext, reminderIdValue: string | undefined) {
+  const reminderId = reminderIdValue?.trim();
+  if (reminderId) return ctx.repo.getReminderForRequester({ reminderId, guildId: ctx.guildId, requesterId: ctx.userId });
+  const reply = ctx.replyContext;
+  if (!reply?.authorIsBot || reply.guildId !== ctx.guildId || reply.channelId !== ctx.channelId) return undefined;
+  return ctx.repo.getReminderForDeliveryMessage({
+    messageId: reply.messageId,
+    channelId: ctx.channelId,
+    guildId: ctx.guildId,
+    requesterId: ctx.userId,
+  });
+}
+
+async function updateReminder(ctx: ToolContext, input: SetReminderInput, existing: ScheduledReminder): Promise<AgentResponse> {
+  const hasText = input.reminder !== undefined;
+  const hasSchedule = input.scheduledFor !== undefined;
+  const hasTimezone = input.timezone !== undefined;
+  const hasRecurrence = input.recurrence !== undefined;
+  const removeRecurrence = input.removeRecurrence === true;
+  const updateScope = normalizeUpdateScope(input.updateScope);
+  if (!hasText && !hasSchedule && !hasTimezone && !hasRecurrence && !removeRecurrence) {
+    return failure(ctx, "manageReminder", input, "reminder_update_empty", "Tell me what to change: its text, time, timezone, or recurrence.");
+  }
+  if (input.updateScope && !updateScope) {
+    return failure(ctx, "manageReminder", input, "reminder_update_scope_invalid", "Use series or next_occurrence as the update scope.");
+  }
+  if (hasRecurrence && removeRecurrence) {
+    return failure(ctx, "manageReminder", input, "reminder_recurrence_update_conflict", "Choose either a replacement recurrence or removal of recurrence, not both.");
+  }
+  if (updateScope === "next_occurrence" && (hasText || hasRecurrence || removeRecurrence || hasTimezone)) {
+    return failure(ctx, "manageReminder", input, "reminder_next_update_invalid", "A next-occurrence update can change only its delivery time. Recurrence, timezone, and text changes apply to the whole series.");
+  }
+
+  const reminderText = hasText ? input.reminder?.trim() : existing.reminderText;
+  if (!reminderText || reminderText.length > 1500) {
+    return failure(ctx, "manageReminder", input, "reminder_text_invalid", "Reminder text must contain 1 to 1,500 characters.");
+  }
+  const timezone = hasTimezone ? normalizeIanaTimezone(input.timezone) : existing.timezone;
+  if (!timezone) return failure(ctx, "manageReminder", input, "reminder_timezone_invalid", "I couldn’t validate that timezone.");
+  const scheduledFor = hasSchedule ? parseScheduledInstant(input.scheduledFor) : existing.scheduledFor;
+  if (!scheduledFor) return failure(ctx, "manageReminder", input, "reminder_time_invalid", "I need an exact future date and time for that update.");
+  if (hasSchedule && scheduledFor.getTime() <= Date.now()) {
+    return failure(ctx, "manageReminder", input, "reminder_time_not_future", "That reminder time has already passed. Give me a future date and time.");
+  }
+
+  let recurrence = existing.recurrence;
+  if (hasRecurrence) {
+    if (!hasSchedule) return failure(ctx, "manageReminder", input, "reminder_recurrence_first_time_missing", "A changed recurrence needs its exact future first delivery time.");
+    if (updateScope === "next_occurrence") return failure(ctx, "manageReminder", input, "reminder_next_update_invalid", "A recurrence change applies to the whole series.");
+    try {
+      recurrence = buildReminderRecurrence(input.recurrence!, timezone, scheduledFor);
+    } catch (error) {
+      if (error instanceof ReminderRecurrenceValidationError) return failure(ctx, "manageReminder", input, error.code, error.message);
+      throw error;
+    }
+  } else if (removeRecurrence) {
+    recurrence = null;
+    if (scheduledFor.getTime() <= Date.now()) {
+      return failure(ctx, "manageReminder", input, "reminder_time_not_future", "Converting this to a one-shot reminder needs a future delivery time.");
+    }
+  } else if (existing.recurrence && hasTimezone) {
+    return failure(ctx, "manageReminder", input, "reminder_recurrence_timezone_requires_rule", "Changing a recurring reminder’s timezone also needs its complete recurrence and first delivery time.");
+  } else if (existing.recurrence && hasSchedule) {
+    if (!updateScope) {
+      return failure(ctx, "manageReminder", input, "reminder_update_scope_required", "Should that new time apply only to the next occurrence, or to the whole recurring series?");
+    }
+    if (updateScope === "series") {
+      return failure(ctx, "manageReminder", input, "reminder_series_rule_required", "A whole-series time change needs the updated recurrence rule and its first delivery time.");
+    }
+  }
+  if (updateScope === "next_occurrence" && !existing.recurrence) {
+    return failure(ctx, "manageReminder", input, "reminder_next_scope_not_recurring", "Next-occurrence scope is only for recurring reminders.");
+  }
+
+  const updated = await ctx.repo.updateReminderForRequester({
+    reminderId: existing.reminderId,
+    guildId: ctx.guildId,
+    requesterId: ctx.userId,
+    reminderText,
+    timezone,
+    scheduledFor,
+    recurrence,
+  });
+  if (!updated) return failure(ctx, "manageReminder", input, "reminder_update_conflict", "That reminder started delivering or changed before I could update it. List your reminders and try again.");
+  const scheduleChanged = hasSchedule || hasRecurrence || removeRecurrence;
+  if (updated.status === "scheduled" && scheduleChanged) {
+    await ctx.jobs?.enqueueReminderDelivery(updated.reminderId, updated.scheduledFor).catch(() => null);
+  }
+  await audit(ctx, "setReminder", input, { reminderId: updated.reminderId, action: "update", updateScope, scheduledFor: updated.scheduledFor.toISOString() }).catch(() => undefined);
+  const recurrenceText = updated.recurrence ? `; ${formatReminderRecurrence(updated.recurrence)}` : "";
+  const status = updated.status === "paused" ? "paused; next retained for" : "next delivery";
+  const scopeText = updateScope === "next_occurrence" ? " The recurring series rule is unchanged." : "";
+  return success(
+    `Updated reminder \`${updated.reminderId}\`: ${updated.reminderText} — ${status} ${formatTimezoneDateTime(updated.scheduledFor, updated.timezone)}${recurrenceText}.${scopeText}`,
+    "reminder_updated",
+  );
+}
+
+function normalizeManagementAction(value: string | undefined): "cancel" | "pause" | "resume" | "update" | null {
   const action = value?.trim().toLowerCase();
-  return action === "cancel" || action === "pause" || action === "resume" ? action : null;
+  return action === "cancel" || action === "pause" || action === "resume" || action === "update" ? action : null;
+}
+
+function normalizeUpdateScope(value: string | undefined): "series" | "next_occurrence" | null {
+  const scope = value?.trim().toLowerCase();
+  return scope === "series" || scope === "next_occurrence" ? scope : null;
 }
 
 function parseScheduledInstant(value: string | undefined): Date | null {
@@ -136,8 +264,8 @@ function success(content: string, kind: string): AgentResponse {
   return { content, status: "ok", retryable: false, outcome: { kind, state: "succeeded", terminal: true } };
 }
 
-async function failure(ctx: ToolContext, toolName: "createReminder" | "manageReminder", input: unknown, errorCode: string, content: string): Promise<AgentResponse> {
-  await audit(ctx, toolName, input, undefined, errorCode).catch(() => undefined);
+async function failure(ctx: ToolContext, _toolName: "createReminder" | "manageReminder", input: unknown, errorCode: string, content: string): Promise<AgentResponse> {
+  await audit(ctx, "setReminder", input, undefined, errorCode).catch(() => undefined);
   return { content, status: "error", errorCode, retryable: false, outcome: { kind: "reminder", state: "failed", terminal: true } };
 }
 

@@ -203,11 +203,13 @@ describe.skipIf(!runDbTests)("forward migration upgrades", () => {
         .resolves.toEqual(expect.objectContaining({ rows: [expect.objectContaining({
           case_id: "linked-case", source: "agent_task", source_key: "agent_task:linked-task", status: "in_progress", task_id: "linked-task",
         })] }));
-      for (const version of ["044_improvement_reporter_conversations", "045_improvement_lifecycle_health", "046_scheduled_reminders", "047_recurring_reminders"]) {
+      for (const version of ["044_improvement_reporter_conversations", "045_improvement_lifecycle_health", "046_scheduled_reminders", "047_recurring_reminders", "048_reminder_reply_lookup"]) {
         await client.query(await readFile(path.resolve(`migrations/${version}.sql`), "utf8"));
       }
       await expect(client.query("SELECT reminder_id, requester_id, scheduled_for, status, recurrence, occurrence_sequence, paused_at FROM scheduled_reminders LIMIT 0"))
         .resolves.toEqual(expect.objectContaining({ rows: [] }));
+      await expect(client.query("SELECT to_regclass('scheduled_reminders_delivery_message_idx') AS relation"))
+        .resolves.toEqual(expect.objectContaining({ rows: [{ relation: "scheduled_reminders_delivery_message_idx" }] }));
     } finally {
       await client.query("RESET search_path").catch(() => undefined);
       await client.query(`DROP SCHEMA IF EXISTS ${schema} CASCADE`).catch(() => undefined);

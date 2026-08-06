@@ -18,8 +18,23 @@ const config = loadConfig();
 const revision = argument("--revision") ?? config.appRevision;
 const hours = boundedNumber(argument("--hours") ?? "48", 1, 168);
 const pool = createPool(config);
+const recordsProductionEvidence = process.argv.includes("--record-detection");
+if (recordsProductionEvidence && revision !== config.appRevision) {
+  throw new Error("Recorded production observation must target the running application revision.");
+}
+const producerRunKey = process.env.GITHUB_RUN_ID
+  ? `github-${process.env.GITHUB_RUN_ID}-${process.env.GITHUB_RUN_ATTEMPT ?? "1"}`
+  : `observation-${new Date().toISOString()}`;
+const repo = createAppDatabase(pool);
+let producerOutcome: "succeeded" | "failed" = "succeeded";
 
 try {
+  if (recordsProductionEvidence) await repo.recordImprovementProofProducerRun({
+    trigger: "production_observation",
+    runKey: producerRunKey,
+    status: "started",
+    revision,
+  });
   const currentCohort = revision === config.appRevision
     ? qualityCohortIdentityFromMetadata(runtimeVersionMetadata(config))
     : await findRevisionQualityCohort(pool, revision);
@@ -40,8 +55,7 @@ try {
   ];
   let detection: Record<string, unknown> | null = null;
   let verification: Record<string, unknown> | null = null;
-  const repo = createAppDatabase(pool);
-  if (process.argv.includes("--record-detection")) {
+  if (recordsProductionEvidence) {
     const counts = { clusters: new Set(detectionInputs.map((input) => input.stableCode)).size, total: detectionInputs.length, recorded: 0, casesCreated: 0, failed: 0 };
     for (const detectionInput of detectionInputs) {
       try {
@@ -55,7 +69,7 @@ try {
     detection = { status: counts.failed === 0 ? "recorded" : counts.recorded > 0 ? "partial" : "failed", ...counts };
     if (counts.failed > 0) process.stderr.write("Failed to record one or more revision quality root-cause detections.\n");
   }
-  if (process.argv.includes("--record-detection")) {
+  if (recordsProductionEvidence) {
     try {
       const proofStatus = assessment.status === "pass" ? "passed" : assessment.status === "fail" ? "failed" : "inconclusive";
       const proof = await repo.recordImprovementRevisionQualityResult({
@@ -96,6 +110,7 @@ try {
         }, {}),
       };
     } catch {
+      producerOutcome = "failed";
       verification = { status: "failed" };
       process.stderr.write("Failed to record revision quality contract proof.\n");
     }
@@ -108,7 +123,27 @@ try {
     detection,
     verification,
   }, null, 2)}\n`);
+  if (recordsProductionEvidence) {
+    const deployment = await repo.latestDeploymentVerification();
+    await repo.recordImprovementProofProducerRun({
+      trigger: "production_observation",
+      runKey: producerRunKey,
+      status: producerOutcome,
+      revision,
+      deploymentId: deployment?.revision === revision ? deployment.deploymentId : null,
+      outcomeCode: producerOutcome === "failed" ? "proof_recording_failed" : null,
+    });
+  }
   if (process.argv.includes("--enforce") && assessment.status === "fail") process.exitCode = 1;
+} catch (error) {
+  if (recordsProductionEvidence) await repo.recordImprovementProofProducerRun({
+    trigger: "production_observation",
+    runKey: producerRunKey,
+    status: "failed",
+    revision,
+    outcomeCode: "producer_execution_failed",
+  }).catch(() => undefined);
+  throw error;
 } finally {
   await pool.end();
 }

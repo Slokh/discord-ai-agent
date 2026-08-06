@@ -35,6 +35,10 @@ export function improvementProofAdapterForCheck(check: ImprovementContractCheck)
   if (check.kind === "delivery_state") {
     return check.state === "delivered" ? improvementDetectorProofAdapter("revision_quality") : null;
   }
+  if (check.kind === "proof_producer_health") {
+    const policy = improvementDetectorPolicyForCheck(check);
+    return policy?.proofAdapter ?? null;
+  }
   return improvementDetectorPolicyForCheck(check)?.proofAdapter ?? null;
 }
 

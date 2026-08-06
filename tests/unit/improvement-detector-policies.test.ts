@@ -8,6 +8,7 @@ import {
   improvementSignalRequiresAutonomousAssessment,
 } from "../../src/improvements/detectorPolicies.js";
 import { improvementProofAdapterForCheck } from "../../src/improvements/proofAdapters.js";
+import { IMPROVEMENT_PROOF_PRODUCERS } from "../../src/improvements/proofProducerRegistry.js";
 
 describe("improvement detector policies", () => {
   it("registers one unambiguous policy for every declared detector sample", () => {
@@ -27,6 +28,20 @@ describe("improvement detector policies", () => {
       const { check } = policy.contract(policy.sampleReference);
       expect(improvementDetectorPolicyForCheck(check)).toBe(policy);
       expect(improvementProofAdapterForCheck(check)).toEqual(policy.proofAdapter);
+    }
+  });
+
+  it("registers every boundary proof producer as a recoverable detector", () => {
+    for (const producer of IMPROVEMENT_PROOF_PRODUCERS) {
+      const policy = improvementDetectorPolicy(producer.detector.source, producer.detector.reference);
+      expect(policy).toMatchObject({
+        authority: "autonomous_assessment",
+        proofAdapter: { id: "producer_health", trigger: producer.trigger, proofSource: "producer_health" },
+      });
+      expect(policy?.contract(producer.detector.reference).check).toEqual({
+        kind: "proof_producer_health",
+        reference: producer.trigger,
+      });
     }
   });
 

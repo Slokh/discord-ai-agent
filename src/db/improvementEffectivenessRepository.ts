@@ -1,4 +1,5 @@
 import type { DbPool } from "./pool.js";
+import { listImprovementProofProducerHealth } from "./improvementProofProducerRepository.js";
 
 const DEFAULT_WINDOW_HOURS = 30 * 24;
 const MAX_WINDOW_HOURS = 365 * 24;
@@ -37,6 +38,18 @@ export type ImprovementEffectivenessReport = {
     bySignalSource: ImprovementMetricCount[];
   };
   automation: {
+    proofProducers: {
+      healthy: number;
+      unhealthy: number;
+      unobserved: number;
+      producers: Array<{
+        trigger: string;
+        state: "healthy" | "unhealthy" | "unobserved";
+        reason: string;
+        consecutiveFailures: number;
+        latestSuccessAt: Date | null;
+      }>;
+    };
     repairTasks: {
       total: number;
       queued: number;
@@ -76,6 +89,7 @@ export type ImprovementEffectivenessReport = {
     stalledCases: number;
     retryExhaustedCases: number;
     recurringClusters: number;
+    unhealthyProofProducers: number;
   };
 };
 
@@ -91,7 +105,7 @@ export async function getImprovementEffectiveness(pool: DbPool, input: {
   const stalledAfterMs = boundedInteger(input.stalledAfterMs ?? 24 * 60 * 60 * 1_000, 1, 365 * 24 * 60 * 60 * 1_000, "stalledAfterMs");
   const parameters = [since, now];
 
-  const [currentResult, flowResult, latencyResult, sourceResult, automationResult, interventionResult, recurrenceResult, economicsResult] = await Promise.all([
+  const [currentResult, flowResult, latencyResult, sourceResult, automationResult, interventionResult, recurrenceResult, economicsResult, proofProducers] = await Promise.all([
     pool.query(
       `SELECT status, automation_state, automation_blocker, automation_retry_trigger,
               count(*)::int AS cases,
@@ -252,6 +266,7 @@ export async function getImprovementEffectiveness(pool: DbPool, input: {
        FROM case_metrics`,
       parameters,
     ),
+    listImprovementProofProducerHealth(pool, { now }),
   ]);
 
   const currentRows = currentResult.rows;
@@ -271,6 +286,7 @@ export async function getImprovementEffectiveness(pool: DbPool, input: {
   const economics = economicsResult.rows[0] ?? {};
   const blockedCases = currentRows.filter((row) => String(row.automation_state) === "blocked").reduce((sum, row) => sum + integer(row.cases), 0);
   const retryExhaustedCases = integer(repair.retry_exhausted_cases);
+  const unhealthyProofProducers = proofProducers.filter((producer) => producer.state === "unhealthy").length;
 
   return {
     generatedAt: now,
@@ -296,6 +312,18 @@ export async function getImprovementEffectiveness(pool: DbPool, input: {
       bySignalSource: sourceResult.rows.map(countRow),
     },
     automation: {
+      proofProducers: {
+        healthy: proofProducers.filter((producer) => producer.state === "healthy").length,
+        unhealthy: unhealthyProofProducers,
+        unobserved: proofProducers.filter((producer) => producer.state === "unobserved").length,
+        producers: proofProducers.map((producer) => ({
+          trigger: producer.trigger,
+          state: producer.state,
+          reason: producer.reason,
+          consecutiveFailures: producer.consecutiveFailures,
+          latestSuccessAt: producer.latestSuccessAt,
+        })),
+      },
       repairTasks: {
         total: integer(repair.total),
         queued: integer(repair.queued),
@@ -338,11 +366,12 @@ export async function getImprovementEffectiveness(pool: DbPool, input: {
       },
     },
     attention: {
-      status: blockedCases > 0 || stalledCases > 0 || retryExhaustedCases > 0 || recurringClusters > 0 ? "needs_attention" : "ok",
+      status: blockedCases > 0 || stalledCases > 0 || retryExhaustedCases > 0 || recurringClusters > 0 || unhealthyProofProducers > 0 ? "needs_attention" : "ok",
       blockedCases,
       stalledCases,
       retryExhaustedCases,
       recurringClusters,
+      unhealthyProofProducers,
     },
   };
 }

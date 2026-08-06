@@ -200,10 +200,23 @@ async function main() {
     return;
   }
 
-  const report = await runEvalPrompts(selectedPrompts, args);
-  const comparison = args.comparePath ? compareEvalReports(await loadEvalReport(args.comparePath), report, args.comparePath) : null;
-  const outputPath = await writeEvalReport(report, args.outputDir, comparison);
-  if (args.recordImprovementResults) await recordImprovementResults(report, args);
+  const producerRunKey = process.env.GITHUB_RUN_ID
+    ? `github-${process.env.GITHUB_RUN_ID}-${process.env.GITHUB_RUN_ATTEMPT ?? "1"}`
+    : `private-replay-${new Date().toISOString()}`;
+  if (args.recordImprovementResults) await recordPrivateReplayProducerRun(producerRunKey, "started");
+  let report: EvalRunReport;
+  let comparison: EvalComparisonReport | null;
+  let outputPath: string;
+  try {
+    report = await runEvalPrompts(selectedPrompts, args);
+    comparison = args.comparePath ? compareEvalReports(await loadEvalReport(args.comparePath), report, args.comparePath) : null;
+    outputPath = await writeEvalReport(report, args.outputDir, comparison);
+    if (args.recordImprovementResults) await recordImprovementResults(report, args);
+  } catch (error) {
+    if (args.recordImprovementResults) await recordPrivateReplayProducerRun(producerRunKey, "failed", "producer_execution_failed");
+    throw error;
+  }
+  if (args.recordImprovementResults) await recordPrivateReplayProducerRun(producerRunKey, "succeeded");
   const hasFailures = report.totals.failed > 0 || report.totals.error > 0;
   if (args.safeSummary) {
     process.stdout.write(`${JSON.stringify(safeEvalSummary(report), null, 2)}\n`);
@@ -218,6 +231,35 @@ async function main() {
 
   process.stdout.write(formatEvalSummary(report, outputPath, comparison));
   process.exitCode = hasFailures ? 1 : 0;
+}
+
+async function recordPrivateReplayProducerRun(
+  runKey: string,
+  status: "started" | "succeeded" | "failed",
+  outcomeCode?: string,
+) {
+  const [{ loadConfig }, { createPool }, { createAppDatabase }] = await Promise.all([
+    import("../src/config/env.js"),
+    import("../src/db/pool.js"),
+    import("../src/db/repositories.js"),
+  ]);
+  const config = loadConfig();
+  const pool = createPool(config);
+  try {
+    const repo = createAppDatabase(pool);
+    await repo.recordImprovementProofProducerRun({
+      trigger: "post_deploy_private_replay",
+      runKey,
+      status,
+      revision: config.appRevision,
+      deploymentId: config.releaseNotes.verificationId,
+      outcomeCode,
+    });
+  } catch (error) {
+    process.stderr.write(`Failed to record private-replay producer ${status}: ${error instanceof Error ? error.message : String(error)}\n`);
+  } finally {
+    await pool.end();
+  }
 }
 
 export function parseEvalArgs(argv: string[]): EvalArgs {

@@ -32,7 +32,7 @@ export function assertImprovementChecks(value: unknown): asserts value is Improv
     else if (item.kind === "answer_text") { requiredText("value"); if (item.expectation !== "required" && item.expectation !== "forbidden") throw new Error("Answer-text check expectation must be required or forbidden."); }
     else if (item.kind === "runtime_event") { requiredText("name"); if (item.expectation !== "required" && item.expectation !== "forbidden") throw new Error("Runtime-event check expectation must be required or forbidden."); }
     else if (item.kind === "delivery_state") requiredText("state");
-    else if (["test", "eval", "database_invariant", "deployment_canary", "schedule_health"].includes(String(item.kind))) requiredText("reference");
+    else if (["test", "eval", "database_invariant", "deployment_canary", "schedule_health", "proof_producer_health"].includes(String(item.kind))) requiredText("reference");
     else if (item.kind === "manual") requiredText("description");
     else throw new Error(`Unknown improvement contract check kind: ${String(item.kind)}.`);
   }

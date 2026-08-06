@@ -3,6 +3,7 @@ import type { AppConfig } from "../config/env.js";
 import type { DeliveryObligationsRepository } from "../db/deliveryObligationsRepository.js";
 import type { DiscordAiAgentRepository } from "../db/repositories.js";
 import type { ImprovementCaseHealth, ImprovementCaseStatus } from "../db/types.js";
+import type { ImprovementProofProducerHealth } from "../db/improvementProofProducerRepository.js";
 import type { AgentTaskEnqueueInput } from "../jobs/agentTaskEnqueue.js";
 import {
   buildImprovementTriageDossier,
@@ -19,6 +20,8 @@ import {
   improvementDetectorPolicyForSignal,
   improvementSignalRequiresAutonomousAssessment,
 } from "./detectorPolicies.js";
+import { recordAutomatedImprovementDetection } from "./detections.js";
+import { improvementProofProducerPolicy } from "./proofProducerRegistry.js";
 const TRIAGE_STATUSES: ImprovementCaseStatus[] = ["open", "needs_evidence", "actionable"];
 const CASE_PAGE_SIZE = 100;
 const ACTOR_ID = "improvement-reconciler";
@@ -41,12 +44,14 @@ type ImprovementReconciliationRepository = Pick<
   | "verifyImprovementCasesForDeployment"
   | "listImprovementCaseIdsNeedingHealth"
   | "updateImprovementCaseHealth"
->;
+> & Partial<Pick<DiscordAiAgentRepository, "listImprovementProofProducerHealth" | "recordImprovementSignal">>;
 
 type RuntimeReader = ImprovementAssessmentRuntimeReader;
 type DeliveryReader = Pick<DeliveryObligationsRepository, "getByExecutionId">;
 
 export type ImprovementReconciliationResult = {
+  proofProducers: ImprovementProofProducerHealth[];
+  proofProducerDetections: Array<{ trigger: string; status: "recorded" | "unchanged" | "error" }>;
   triage: Array<{
     caseId: string;
     status: "applied" | "unchanged" | "deferred" | "error";
@@ -71,6 +76,13 @@ export async function runImprovementReconciliationOnce(input: {
   enqueueImprovementTask?: (job: AgentTaskEnqueueInput) => Promise<{ taskId: string }>;
   now?: Date;
 }): Promise<ImprovementReconciliationResult> {
+  const now = input.now ?? new Date();
+  const proofProducers = input.repo.listImprovementProofProducerHealth
+    ? await input.repo.listImprovementProofProducerHealth({ now })
+    : [];
+  const proofProducerDetections = input.config.nodeEnv === "production"
+    ? await recordUnhealthyProofProducerDetections(input.repo, proofProducers, input.config.appRevision)
+    : [];
   const triage = await reconcileTriage(input);
   const pullRequests = await reconcileImprovementPullRequestWork(input.repo, input.config, ACTOR_ID);
   const deployment = await input.repo.latestDeploymentVerification();
@@ -81,10 +93,11 @@ export async function runImprovementReconciliationOnce(input: {
         actorId: ACTOR_ID,
       })
     : [];
-  const now = input.now ?? new Date();
-  const health = await refreshImprovementLifecycleHealth(input);
+  const health = await refreshImprovementLifecycleHealth(input, proofProducers);
   const stalled = await recordStalledCases(input, health, now);
   return {
+    proofProducers,
+    proofProducerDetections,
     triage,
     pullRequests,
     verification: {
@@ -94,6 +107,43 @@ export async function runImprovementReconciliationOnce(input: {
     health,
     stalled,
   };
+}
+
+async function recordUnhealthyProofProducerDetections(
+  repo: ImprovementReconciliationRepository,
+  health: ImprovementProofProducerHealth[],
+  appRevision: string,
+) {
+  const results: ImprovementReconciliationResult["proofProducerDetections"] = [];
+  if (!repo.recordImprovementSignal) return results;
+  for (const producer of health.filter((candidate) => candidate.state === "unhealthy")) {
+    const policy = improvementProofProducerPolicy(producer.trigger);
+    if (!policy) continue;
+    try {
+      const episode = createHash("sha256").update(producer.evidenceKey).digest("hex").slice(0, 24);
+      const recorded = await recordAutomatedImprovementDetection({ recordImprovementSignal: repo.recordImprovementSignal.bind(repo) }, {
+        source: policy.detector.source,
+        sourceId: `proof-producer:${producer.trigger}:${episode}`,
+        stableCode: policy.detector.reference,
+        summary: policy.detector.summary,
+        appRevision,
+        scope: "deployment",
+        classification: policy.detector.classification,
+        severity: policy.detector.severity,
+        owningDomain: policy.detector.owningDomain,
+        metadata: {
+          producerTrigger: producer.trigger,
+          livenessReason: producer.reason,
+          consecutiveFailures: producer.consecutiveFailures,
+          latestRunStatus: producer.latestRun?.status ?? null,
+        },
+      });
+      results.push({ trigger: producer.trigger, status: recorded.signalCreated ? "recorded" : "unchanged" });
+    } catch {
+      results.push({ trigger: producer.trigger, status: "error" });
+    }
+  }
+  return results;
 }
 
 async function reconcileTriage(input: {
@@ -398,6 +448,7 @@ async function recordStalledCases(
 
 async function refreshImprovementLifecycleHealth(
   input: Pick<Parameters<typeof runImprovementReconciliationOnce>[0], "repo">,
+  proofProducers: ImprovementProofProducerHealth[],
 ) {
   const health: ImprovementCaseHealth[] = [];
   let afterCaseId: string | null = null;
@@ -406,7 +457,7 @@ async function refreshImprovementLifecycleHealth(
     for (const caseId of caseIds) {
       const record = await input.repo.getImprovementCase(caseId);
       if (!record) continue;
-      const update = await deriveImprovementCaseHealth(input, record);
+      const update = await deriveImprovementCaseHealth(input, record, proofProducers);
       health.push((await input.repo.updateImprovementCaseHealth(update)).health);
     }
     if (caseIds.length < CASE_PAGE_SIZE) break;
@@ -418,6 +469,7 @@ async function refreshImprovementLifecycleHealth(
 async function deriveImprovementCaseHealth(
   input: Pick<Parameters<typeof runImprovementReconciliationOnce>[0], "repo">,
   record: NonNullable<Awaited<ReturnType<ImprovementReconciliationRepository["getImprovementCase"]>>>,
+  proofProducers: ImprovementProofProducerHealth[],
 ) {
   const { case: improvementCase } = record;
   const base = { caseId: improvementCase.caseId };
@@ -472,8 +524,14 @@ async function deriveImprovementCaseHealth(
     return { ...base, state: "waiting" as const, blocker: "pull_request_merge_pending", nextAction: "sync_pull_request", retryTrigger: "improvement_reconciliation", retryAt: null, progressKey: `work:${active.workId}:${active.updatedAt.toISOString()}` };
   }
   const receipt = record.verificationReceipts[0] ?? null;
-  if (!receipt) return { ...base, state: "waiting" as const, blocker: "verified_deployment_pending", nextAction: "verify_latest_deployment", retryTrigger: "deployment_promotion", retryAt: null, progressKey: `verifying:${improvementCase.version}:no-receipt` };
+  if (!receipt) {
+    const unhealthy = unhealthyProducer(["release_promotion"], proofProducers);
+    if (unhealthy) return producerBlockedHealth(base, unhealthy, `verifying:${improvementCase.version}:no-receipt`);
+    return { ...base, state: "waiting" as const, blocker: "verified_deployment_pending", nextAction: "verify_latest_deployment", retryTrigger: "deployment_promotion", retryAt: null, progressKey: `verifying:${improvementCase.version}:no-receipt` };
+  }
   const pendingTriggers = [...new Set(receipt.checks.flatMap((check) => check.status === "inconclusive" && check.retryTrigger ? [check.retryTrigger] : []))];
+  const unhealthy = unhealthyProducer(pendingTriggers, proofProducers);
+  if (unhealthy) return producerBlockedHealth(base, unhealthy, `verification:${receipt.applicationKey}:${receipt.createdAt.toISOString()}`);
   const retryTrigger = pendingTriggers.join(",") || null;
   return {
     ...base,
@@ -483,6 +541,22 @@ async function deriveImprovementCaseHealth(
     retryTrigger,
     retryAt: null,
     progressKey: `verification:${receipt.applicationKey}:${receipt.createdAt.toISOString()}`,
+  };
+}
+
+function unhealthyProducer(triggers: string[], producers: ImprovementProofProducerHealth[]) {
+  return producers.find((producer) => triggers.includes(producer.trigger) && producer.state === "unhealthy") ?? null;
+}
+
+function producerBlockedHealth(base: { caseId: string }, producer: ImprovementProofProducerHealth, progressKey: string) {
+  return {
+    ...base,
+    state: "waiting" as const,
+    blocker: "proof_producer_unhealthy",
+    nextAction: "await_proof_producer_recovery",
+    retryTrigger: "improvement_reconciliation",
+    retryAt: null,
+    progressKey: `${progressKey}:producer:${producer.evidenceKey}`,
   };
 }
 

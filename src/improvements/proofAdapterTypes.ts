@@ -5,7 +5,8 @@ export type ImprovementProofAdapterId =
   | "private_regression_gate"
   | "deployment_canary"
   | "revision_quality"
-  | "schedule_health";
+  | "schedule_health"
+  | "producer_health";
 
 export type ImprovementProofTrigger =
   | "post_deploy_private_replay"
@@ -15,5 +16,5 @@ export type ImprovementProofTrigger =
 export type ImprovementProofAdapter = {
   id: ImprovementProofAdapterId;
   trigger: ImprovementProofTrigger;
-  proofSource: "private_eval" | "release_ci" | "deployment" | "revision_quality" | "schedule_health";
+  proofSource: "private_eval" | "release_ci" | "deployment" | "revision_quality" | "schedule_health" | "producer_health";
 };

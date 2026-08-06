@@ -1,6 +1,9 @@
 import type { ImprovementContractCheck, ImprovementSignal, ImprovementSignalSource } from "../db/types.js";
 import type { ImprovementProofAdapter, ImprovementProofAdapterId } from "./proofAdapterTypes.js";
 import { isScheduleHealthReference } from "./scheduleHealthContract.js";
+import {
+  IMPROVEMENT_PROOF_PRODUCERS,
+} from "./proofProducerRegistry.js";
 
 export type AutomatedImprovementSource = Extract<
   ImprovementSignalSource,
@@ -46,6 +49,17 @@ const proofAdapters = Object.freeze({
   revision_quality: proofAdapter("revision_quality", "production_observation", "revision_quality"),
   schedule_health: proofAdapter("schedule_health", "production_observation", "schedule_health"),
 });
+
+const producerPolicies = IMPROVEMENT_PROOF_PRODUCERS.map((producer): ImprovementDetectorPolicy => matchingPolicy({
+  id: `proof_producer_${producer.trigger}`,
+  source: producer.detector.source,
+  sampleReference: producer.detector.reference,
+  authority: "autonomous_assessment",
+  matches: (reference) => reference === producer.detector.reference,
+  expectedBehavior: `The ${producer.trigger.replaceAll("_", " ")} proof producer completes within its registered liveness policy.`,
+  check: () => ({ kind: "proof_producer_health", reference: producer.trigger }),
+  proofAdapter: proofAdapter("producer_health", producer.trigger, "producer_health"),
+}));
 
 export const IMPROVEMENT_DETECTOR_POLICIES: readonly ImprovementDetectorPolicy[] = Object.freeze([
   exactPolicy({
@@ -105,6 +119,7 @@ export const IMPROVEMENT_DETECTOR_POLICIES: readonly ImprovementDetectorPolicy[]
     check: (reference) => ({ kind: "schedule_health", reference }),
     proofAdapter: proofAdapters.schedule_health,
   }),
+  ...producerPolicies,
 ]);
 
 export function isAutomatedImprovementSource(source: ImprovementSignalSource): source is AutomatedImprovementSource {
@@ -136,6 +151,7 @@ export function improvementDetectorPolicyForCheck(check: ImprovementContractChec
 }
 
 export function improvementDetectorProofAdapter(id: ImprovementProofAdapterId) {
+  if (id === "producer_health") return null;
   return Object.values(proofAdapters).find((adapter) => adapter.id === id) ?? null;
 }
 
@@ -190,6 +206,8 @@ function detectorCheckReference(check: ImprovementContractCheck) {
     case "deployment_canary":
     case "schedule_health":
       return check.reference;
+    case "proof_producer_health":
+      return `proof-producer:${check.reference.replaceAll("_", "-")}`;
     default:
       return null;
   }

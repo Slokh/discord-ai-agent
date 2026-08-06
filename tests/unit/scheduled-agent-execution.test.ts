@@ -11,17 +11,26 @@ describe("scheduled agent execution", () => {
     const finalMessage = { id: "final", channelId: "channel", url: "https://discord.test/final" };
     const send = vi.fn(async () => statusMessage);
     const executeAgent = vi.fn(async () => ({ status: "succeeded" as const, message: finalMessage }));
+    const agentRuntime = {
+      updateExecution: vi.fn(async () => undefined),
+      recordEvent: vi.fn(async () => undefined),
+    };
     const runner = createScheduledAgentRequestRunner({
       client: {} as never,
       config: { maxReplyChars: 1800, discord: { loadingReaction: "⏳" } } as never,
       repo: {} as never,
       openRouter: {} as never,
       deliveryObligations: { getByExecutionId: vi.fn(async () => undefined) } as never,
+      agentRuntime: agentRuntime as never,
       executeAgent: executeAgent as never,
     });
 
     await expect(runner.execute(reminder(), { send } as never, "Member"))
-      .resolves.toBe(finalMessage);
+      .resolves.toEqual({
+        message: finalMessage,
+        outcome: "succeeded",
+        executionId: "scheduled-request-execution:r_1:3",
+      });
 
     expect(send).toHaveBeenCalledWith(expect.objectContaining({
       content: "<@user> running your scheduled request…",
@@ -43,6 +52,14 @@ describe("scheduled agent execution", () => {
         text: "summarize yesterday",
       }),
     );
+    expect(agentRuntime.updateExecution).toHaveBeenCalledWith(expect.objectContaining({
+      executionId: "scheduled-request-execution:r_1:3",
+      metadata: expect.objectContaining({ scheduleId: "r_1", scheduledOutcome: "succeeded" }),
+    }));
+    expect(agentRuntime.recordEvent).toHaveBeenCalledWith(expect.objectContaining({
+      eventName: "schedule.occurrence.completed",
+      metadata: expect.objectContaining({ outcome: "succeeded" }),
+    }));
   });
 
   it("recovers an already delivered occurrence without rerunning the model", async () => {
@@ -60,11 +77,18 @@ describe("scheduled agent execution", () => {
           statusMessageId: "delivered",
         })),
       } as never,
+      agentRuntime: {
+        getExecution: vi.fn(async () => ({ status: "succeeded", metadata: { responseStatus: "partial" } })),
+      } as never,
       executeAgent: executeAgent as never,
     });
 
     await expect(runner.execute(reminder(), { send } as never, "Member"))
-      .resolves.toEqual(expect.objectContaining({ id: "delivered", channelId: "channel" }));
+      .resolves.toEqual({
+        message: expect.objectContaining({ id: "delivered", channelId: "channel" }),
+        outcome: "partial",
+        executionId: "scheduled-request-execution:r_1:3",
+      });
     expect(send).not.toHaveBeenCalled();
     expect(executeAgent).not.toHaveBeenCalled();
   });
@@ -126,6 +150,11 @@ function reminder() {
     deliveryChannelId: null,
     deliveryMessageId: null,
     lastErrorCode: null,
+    lastRunAt: null,
+    lastRunStatus: null,
+    lastRunExecutionId: null,
+    consecutiveFailures: 0,
+    autoPausedAt: null,
     createdAt: new Date(),
     updatedAt: new Date(),
   };

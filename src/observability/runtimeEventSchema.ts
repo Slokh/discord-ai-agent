@@ -22,6 +22,7 @@ const runtimeEventFamilies: readonly RuntimeEventFamily[] = [
   { category: "retrieval", prefixes: ["retrieval.", "memory.search."] },
   { category: "ingress", prefixes: ["discord.mention.", "budget.ingress."] },
   { category: "delivery", prefixes: ["discord.", "delivery.", "agent.delivery.", "reminder.delivery."] },
+  { category: "system", prefixes: ["schedule."] },
   { category: "context", prefixes: ["memory.", "permissions.", "context.", "agent.context.", "agent.execution.context_"] },
   { category: "task", prefixes: ["agent.task.", "task.", "codegen.", "sandbox."] },
 ];

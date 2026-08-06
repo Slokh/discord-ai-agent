@@ -132,10 +132,31 @@ describe("reminder tools", () => {
     const listed = await listMyReminders(ctx);
     const cancelled = await manageReminder(ctx, { action: "cancel", reminderId: "r_existing" });
 
-    expect(repo.listScheduledRemindersForRequester).toHaveBeenCalledWith({ guildId: "guild", requesterId: "user", limit: 25 });
+    expect(repo.listSchedulesForRequester).toHaveBeenCalledWith({ guildId: "guild", requesterId: "user", limit: 25 });
     expect(repo.cancelReminderForRequester).toHaveBeenCalledWith({ reminderId: "r_existing", guildId: "guild", requesterId: "user" });
     expect(listed.content).toContain("call Mom");
     expect(cancelled.content).toContain("Cancelled reminder");
+  });
+
+  it("includes recent schedule health and only exposes visible result links", async () => {
+    const repo = reminderRepo({
+      deliveryKind: "agent",
+      status: "paused",
+      lastRunStatus: "failed",
+      lastRunAt: new Date("2026-08-05T11:45:00Z"),
+      consecutiveFailures: 3,
+      autoPausedAt: new Date("2026-08-05T11:45:00Z"),
+      deliveryChannelId: "channel",
+      deliveryMessageId: "result-message",
+    });
+
+    const visible = await listMyReminders(context(repo));
+    const hidden = await listMyReminders({ ...context(repo), visibleChannelIds: [] } as ToolContext);
+
+    expect(visible.content).toContain("auto-paused after 3 failed runs");
+    expect(visible.content).toContain("last run failed");
+    expect(visible.content).toContain("https://discord.com/channels/guild/channel/result-message");
+    expect(hidden.content).not.toContain("https://discord.com/channels/");
   });
 
   it("resolves an omitted reminder ID only from the scoped direct reply notification", async () => {
@@ -273,7 +294,18 @@ describe("reminder tools", () => {
   });
 });
 
-function reminderRepo(input: { recurring?: boolean; status?: string; scheduledFor?: Date } = {}) {
+function reminderRepo(input: {
+  recurring?: boolean;
+  status?: string;
+  scheduledFor?: Date;
+  deliveryKind?: "notification" | "agent";
+  lastRunStatus?: "succeeded" | "partial" | "failed";
+  lastRunAt?: Date;
+  consecutiveFailures?: number;
+  autoPausedAt?: Date;
+  deliveryChannelId?: string;
+  deliveryMessageId?: string;
+} = {}) {
   const recurrence = input.recurring ? {
     frequency: "daily" as const,
     interval: 1,
@@ -288,7 +320,7 @@ function reminderRepo(input: { recurring?: boolean; status?: string; scheduledFo
     requesterId: "user",
     sourceMessageId: "message",
     reminderText: "call Mom",
-    deliveryKind: "notification" as const,
+    deliveryKind: input.deliveryKind ?? "notification" as const,
     timezone: "America/New_York",
     scheduledFor: input.scheduledFor ?? new Date("2026-08-06T13:00:00.000Z"),
     recurrence,
@@ -299,15 +331,20 @@ function reminderRepo(input: { recurring?: boolean; status?: string; scheduledFo
     deliveredAt: null,
     cancelledAt: null,
     pausedAt: input.status === "paused" ? new Date() : null,
-    deliveryChannelId: null,
-    deliveryMessageId: null,
+    deliveryChannelId: input.deliveryChannelId ?? null,
+    deliveryMessageId: input.deliveryMessageId ?? null,
     lastErrorCode: null,
+    lastRunAt: input.lastRunAt ?? null,
+    lastRunStatus: input.lastRunStatus ?? null,
+    lastRunExecutionId: input.lastRunAt ? "scheduled-request-execution:r_existing:0" : null,
+    consecutiveFailures: input.consecutiveFailures ?? 0,
+    autoPausedAt: input.autoPausedAt ?? null,
     createdAt: new Date(),
     updatedAt: new Date(),
   };
   return {
     createReminder: vi.fn(async (created: Record<string, unknown>) => ({ ...reminder, ...created, reminderId: reminder.reminderId })),
-    listScheduledRemindersForRequester: vi.fn(async () => [reminder]),
+    listSchedulesForRequester: vi.fn(async () => [reminder]),
     cancelReminderForRequester: vi.fn(async () => reminder),
     pauseReminderForRequester: vi.fn(async () => ({ ...reminder, status: "paused", pausedAt: new Date() })),
     getReminderForRequester: vi.fn(async () => reminder),

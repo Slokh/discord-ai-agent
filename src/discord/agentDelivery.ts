@@ -35,7 +35,7 @@ import {
 } from "./requestContext.js";
 
 export type DiscordAgentExecutionResult = {
-  status: "succeeded" | "failed";
+  status: "succeeded" | "partial" | "failed";
   message: Message;
 };
 
@@ -420,6 +420,7 @@ export async function executeDiscordAgentRequest(
       replyMessageId: finalReply.id,
       replyUrl: finalReply.url,
       responseContent: storedResponseContent,
+      responseStatus: response.status ?? "ok",
       durationMs: durationMs(request.messageStartedAt),
       executorName: agentExecutor.name
     }).catch((error) => requestLogger.warn({ err: error }, "Failed to mark agent runtime execution succeeded"));
@@ -492,7 +493,10 @@ export async function executeDiscordAgentRequest(
         files: response.files?.map((file) => ({ name: file.name, contentType: file.contentType, bytes: file.data.length })) ?? []
       }
     }).catch((error) => requestLogger.warn({ err: error }, "Failed to store Discord response artifact"));
-    return { status: "succeeded", message: finalReply } satisfies DiscordAgentExecutionResult;
+    return {
+      status: response.status === "error" ? "failed" : response.status === "partial" ? "partial" : "succeeded",
+      message: finalReply,
+    } satisfies DiscordAgentExecutionResult;
   } catch (error) {
     await releaseFailedRequestWager(input, request, error, requestLogger);
     if (isOpenRouterContentFilterError(error)) {
@@ -534,6 +538,7 @@ export async function executeDiscordAgentRequest(
         replyMessageId: finalReply.id,
         replyUrl: finalReply.url,
         responseContent: filteredContent,
+        responseStatus: "error",
         error: error.message,
         durationMs: durationMs(request.messageStartedAt),
         executorName: agentExecutor.name
@@ -594,6 +599,7 @@ export async function executeDiscordAgentRequest(
       replyMessageId: finalReply.id,
       replyUrl: finalReply.url,
       responseContent: errorContent,
+      responseStatus: "error",
       error: error instanceof Error ? error.message : String(error),
       durationMs: durationMs(request.messageStartedAt),
       executorName: agentExecutor.name

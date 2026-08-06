@@ -36,7 +36,7 @@ jobs:
             node dist/scripts/revisionQuality.js --revision "$revision" --hours 48 --compare --enforce --record-detection > revision-quality.json
           quality_status="$?"
           set -e
-          jq '{revision, windowHours, generatedAt, assessment, baseline: (.baseline | if . then {revision, assessment} else null end), answers, tools, signals, deliveries, improvements, detection, verification, failureClusters}' revision-quality.json >> "$GITHUB_STEP_SUMMARY"
+          jq '{revision, windowHours, generatedAt, assessment, scheduleHealth, baseline: (.baseline | if . then {revision, assessment} else null end), answers, tools, signals, deliveries, improvements, detection, verification, failureClusters}' revision-quality.json >> "$GITHUB_STEP_SUMMARY"
           exit "$quality_status"
       - name: Collect safe improvement effectiveness
         if: always()

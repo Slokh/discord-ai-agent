@@ -88,16 +88,38 @@ export async function createReminder(
 }
 
 export async function listMyReminders(ctx: ToolContext): Promise<AgentResponse> {
-  const reminders = await ctx.repo.listScheduledRemindersForRequester({ guildId: ctx.guildId, requesterId: ctx.userId, limit: 25 });
+  const reminders = await ctx.repo.listSchedulesForRequester({ guildId: ctx.guildId, requesterId: ctx.userId, limit: 25 });
   await audit(ctx, "listMyReminders", {}, { count: reminders.length }).catch(() => undefined);
-  if (reminders.length === 0) return success("You don’t have any upcoming schedules in this server.", "reminder_list");
+  if (reminders.length === 0) return success("You don’t have any schedules in this server.", "reminder_list");
   const lines = reminders.map((reminder) => {
-    const status = reminder.status === "paused" ? "paused" : formatTimezoneDateTime(reminder.scheduledFor, reminder.timezone);
+    const status = scheduleStatusText(reminder);
     const recurrence = reminder.recurrence ? `; ${formatReminderRecurrence(reminder.recurrence)}` : "";
     const mode = reminder.deliveryKind === "agent" ? "agent" : "notification";
-    return `- \`${reminder.reminderId}\` — ${mode}; ${status}${recurrence} — ${reminder.reminderText}`;
+    const lastRun = scheduleLastRunText(reminder, ctx.visibleChannelIds);
+    return `- \`${reminder.reminderId}\` — ${mode}; ${status}${recurrence}${lastRun} — ${reminder.reminderText}`;
   });
-  return success(`Your upcoming schedules:\n${lines.join("\n")}`, "reminder_list");
+  return success(`Your schedules:\n${lines.join("\n")}`, "reminder_list");
+}
+
+function scheduleStatusText(reminder: ScheduledReminder) {
+  if (reminder.status === "delivering") return "running now";
+  if (reminder.status === "scheduled") return `next ${formatTimezoneDateTime(reminder.scheduledFor, reminder.timezone)}`;
+  if (reminder.status === "paused") {
+    const reason = reminder.autoPausedAt
+      ? `auto-paused after ${reminder.consecutiveFailures} failed runs`
+      : "paused";
+    return `${reason}; next retained for ${formatTimezoneDateTime(reminder.scheduledFor, reminder.timezone)}`;
+  }
+  if (reminder.status === "delivered") return "completed";
+  return reminder.status;
+}
+
+function scheduleLastRunText(reminder: ScheduledReminder, visibleChannelIds: string[]) {
+  if (!reminder.lastRunAt || !reminder.lastRunStatus) return "";
+  const resultLink = reminder.deliveryChannelId && reminder.deliveryMessageId && visibleChannelIds.includes(reminder.deliveryChannelId)
+    ? `; result https://discord.com/channels/${reminder.guildId}/${reminder.deliveryChannelId}/${reminder.deliveryMessageId}`
+    : "";
+  return `; last run ${reminder.lastRunStatus} ${formatTimezoneDateTime(reminder.lastRunAt, reminder.timezone)}${resultLink}`;
 }
 
 export async function manageReminder(ctx: ToolContext, input: SetReminderInput): Promise<AgentResponse> {

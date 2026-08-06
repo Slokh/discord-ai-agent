@@ -10,16 +10,13 @@ permissions:
   contents: read
   id-token: write
 
-concurrency:
-  group: production-observation
-  # The watchdog itself is a liveness proof producer.  A later schedule must
-  # not cancel the run that is responsible for recording that receipt.
-  cancel-in-progress: false
-
 jobs:
   improvement-watchdog:
     if: vars.AWS_REGION != '' && vars.EKS_CLUSTER_NAME != ''
     runs-on: ubuntu-latest
+    concurrency:
+      group: improvement-watchdog
+      cancel-in-progress: false
     env:
       AWS_REGION: ${{ vars.AWS_REGION }}
       EKS_CLUSTER_NAME: ${{ vars.EKS_CLUSTER_NAME }}
@@ -60,6 +57,11 @@ jobs:
       vars.AWS_REGION != '' && vars.EKS_CLUSTER_NAME != '' &&
       (github.event_name == 'workflow_dispatch' || github.event.schedule == '17 */6 * * *')
     runs-on: ubuntu-latest
+    # The watchdog can diagnose the reconciler, but must never hold the
+    # production-observation producer past its own liveness window.
+    concurrency:
+      group: production-observation
+      cancel-in-progress: false
     env:
       AWS_REGION: ${{ vars.AWS_REGION }}
       EKS_CLUSTER_NAME: ${{ vars.EKS_CLUSTER_NAME }}

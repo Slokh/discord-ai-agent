@@ -29,8 +29,7 @@ export async function ensureImprovementReporterConversationsForCase(pool: DbPool
        FROM improvement_signals signal
        WHERE signal.case_id = $1
          AND signal.active = true
-         AND signal.source = 'runtime_detection'
-         AND signal.metadata->>'detectionCode' LIKE 'schedule-health:%'
+         AND signal.reporter_kind = 'automation'
          AND signal.metadata ? 'affectedMemberContext'
      ), candidate_messages AS (
        SELECT DISTINCT ON (candidate.guild_id, candidate.message_id)

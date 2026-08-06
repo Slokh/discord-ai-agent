@@ -130,7 +130,7 @@ See [Code updates](code-updates.md) for publication and sandbox details.
 | Installed capability lifecycle and feature orchestration | `src/capabilities/` | focused capability tests plus architecture boundary tests |
 | Tool contract and dispatch | `src/capabilities/catalog.ts`, `toolContracts.ts`, `src/tools/contracts/`, `src/tools/handlers/` | capability-catalog, registry, contract-validation, handler-conformance tests |
 | Improvement signal intake and lifecycle | `src/tools/contracts/improvements.ts`, `src/tools/handlers/improvements.ts`, `src/discord/improvementReaction.ts`, `src/db/improvementRepository.ts` | domain, handler-conformance, reaction, and DB integration tests |
-| Improvement automation, proof routing, and receipts | `src/improvements/reconciler.ts`, `proofAdapters.ts`, `verification.ts`, and the focused improvement repositories | reconciler, improvement verification, queue, workflow, and DB integration tests |
+| Improvement automation, detector authority, proof routing, and receipts | `src/improvements/reconciler.ts`, `detectorPolicies.ts`, `proofAdapters.ts`, `verification.ts`, and the focused improvement repositories | detector-policy, reconciler, improvement verification, queue, workflow, and DB integration tests |
 | Discord ingress and delivery | `src/discord/client.ts`, `messageIngress.ts`, `agentDelivery.ts`, `responseSink.ts` | Discord client/delivery/response-sink tests |
 | Discord data and retrieval | `src/discord/crawler.ts`, `src/db/*Repository.ts`, `src/memory/`, retrieval tools | crawler/search/tool tests and DB integration tests |
 | Sandbox callback receiver | `src/execution/callbackServer.ts`, `src/execution/callbacks.ts` | sandbox callback tests |

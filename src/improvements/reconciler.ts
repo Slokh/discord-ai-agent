@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import type { AppConfig } from "../config/env.js";
 import type { DeliveryObligationsRepository } from "../db/deliveryObligationsRepository.js";
 import type { DiscordAiAgentRepository } from "../db/repositories.js";
-import type { ImprovementCaseHealth, ImprovementCaseStatus, ImprovementSignalSource } from "../db/types.js";
+import type { ImprovementCaseHealth, ImprovementCaseStatus } from "../db/types.js";
 import type { AgentTaskEnqueueInput } from "../jobs/agentTaskEnqueue.js";
 import {
   buildImprovementTriageDossier,
@@ -15,14 +15,10 @@ import {
   renderPrivateAssessmentEvidence,
   type ImprovementAssessmentRuntimeReader,
 } from "./assessmentEvidence.js";
-import { improvementSignalRequiresAutonomousAssessment } from "./assessmentPolicy.js";
-
-const AUTOMATED_SOURCES = new Set<ImprovementSignalSource>([
-  "runtime_detection",
-  "deployment_detection",
-  "ci_detection",
-  "eval_detection",
-]);
+import {
+  improvementDetectorPolicyForSignal,
+  improvementSignalRequiresAutonomousAssessment,
+} from "./detectorPolicies.js";
 const TRIAGE_STATUSES: ImprovementCaseStatus[] = ["open", "needs_evidence", "actionable"];
 const CASE_PAGE_SIZE = 100;
 const ACTOR_ID = "improvement-reconciler";
@@ -243,7 +239,7 @@ async function reconcileAutonomousAssessment(
   }
   const taskId = improvementAssessmentTaskId(record.case.caseId, dossier.snapshotKey, attempt);
   const signals = record.signals.filter((signal) => signal.active);
-  const operationalIncident = signals.some((signal) => AUTOMATED_SOURCES.has(signal.source) && improvementSignalRequiresAutonomousAssessment(signal));
+  const operationalIncident = signals.some((signal) => improvementDetectorPolicyForSignal(signal)?.authority === "autonomous_assessment");
   const request = await renderPrivateAssessmentEvidence(record.case.caseId, signals, input.runtime, input.repo, {
     assessmentMode: operationalIncident ? "operational_incident" : "reported_friction",
     proposedContract: operationalIncident && dossier.proposedContract ? {

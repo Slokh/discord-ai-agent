@@ -12,8 +12,11 @@ import type {
   ImprovementSignalSource,
 } from "../db/types.js";
 import { assertActionableContract } from "./policy.js";
-import { isRevisionQualityClusterReference } from "./proofAdapters.js";
-import { isScheduleHealthReference } from "./scheduleHealthContract.js";
+import {
+  improvementDetectionReference,
+  improvementDetectorPolicyForSignal,
+  isAutomatedImprovementSource,
+} from "./detectorPolicies.js";
 
 export type ImprovementTriageVerdict = "confirmed" | "not_reproduced" | "insufficient_evidence";
 
@@ -98,12 +101,6 @@ type ImprovementCaseRecord = {
 type RuntimeReader = Pick<AgentRuntimeRepository, "getExecution" | "listEvents">;
 type DeliveryReader = Pick<DeliveryObligationsRepository, "getByExecutionId">;
 
-const AUTOMATED_SOURCES = new Set<ImprovementSignalSource>([
-  "runtime_detection",
-  "deployment_detection",
-  "ci_detection",
-  "eval_detection",
-]);
 const FAILURE_STATUSES = new Set(["failed", "cancelled", "timed_out"]);
 const SEVERITY_ORDER: ImprovementSeverity[] = ["low", "medium", "high", "critical"];
 
@@ -169,7 +166,7 @@ export function buildImprovementTriageDossier(
   const signals = record.signals.filter((signal) => signal.active);
   const runtime = uniqueRuntime(runtimeObservations, signals);
   const runtimeByExecution = new Map(runtime.map((observation) => [observation.executionId, observation]));
-  const hasAutomatedFailure = signals.some((signal) => AUTOMATED_SOURCES.has(signal.source));
+  const hasAutomatedFailure = signals.some((signal) => isAutomatedImprovementSource(signal.source));
   const hasObservedRuntimeFailure = runtime.some(runtimeFailure);
   const verdict = hasAutomatedFailure || hasObservedRuntimeFailure ? "confirmed" : "insufficient_evidence";
   const reason = hasAutomatedFailure
@@ -286,8 +283,8 @@ function evidenceForSignal(
   signal: ImprovementSignal,
   runtime: ImprovementRuntimeObservation | undefined,
 ): ImprovementTriageEvidenceDraft {
-  if (AUTOMATED_SOURCES.has(signal.source)) {
-    const code = detectionCode(signal);
+  if (isAutomatedImprovementSource(signal.source)) {
+    const code = improvementDetectionReference(signal);
     const revision = signal.appRevision ? ` for revision ${signal.appRevision}` : "";
     return {
       signalId: signal.signalId,
@@ -339,24 +336,18 @@ function contractForFailures(
   runtime: ImprovementRuntimeObservation[],
 ): ImprovementTriageContractDraft | null {
   const checks: ImprovementContractCheck[] = [];
+  const expectedBehaviors = new Set<string>();
   let unmappedAutomatedFailure = false;
   for (const signal of signals) {
-    const reference = detectionCode(signal);
-    if (signal.source === "eval_detection" && reference === "private-regression-suite") {
-      checks.push({ kind: "eval", reference });
-    } else if (signal.source === "ci_detection" && reference === "release-verify") {
-      checks.push({ kind: "test", reference });
-    } else if (signal.source === "ci_detection" && reference === "release-db-verify") {
-      checks.push({ kind: "database_invariant", reference });
-    } else if (signal.source === "runtime_detection" && (reference === "revision-quality-gate" || isRevisionQualityClusterReference(reference))) {
-      checks.push({ kind: "deployment_canary", reference });
-    } else if (signal.source === "runtime_detection" && isScheduleHealthReference(reference)) {
-      checks.push({ kind: "schedule_health", reference });
-    } else if (signal.source === "deployment_detection" && knownPostDeployGate(reference)) {
-      checks.push({ kind: "deployment_canary", reference });
-    } else if (AUTOMATED_SOURCES.has(signal.source)) {
+    if (!isAutomatedImprovementSource(signal.source)) continue;
+    const policy = improvementDetectorPolicyForSignal(signal);
+    if (!policy) {
       unmappedAutomatedFailure = true;
+      continue;
     }
+    const contract = policy.contract(improvementDetectionReference(signal));
+    checks.push(contract.check);
+    expectedBehaviors.add(contract.expectedBehavior);
   }
   if (unmappedAutomatedFailure) return null;
   if (runtime.some(runtimeFailure) && checks.length === 0) {
@@ -366,12 +357,9 @@ function contractForFailures(
   }
   const uniqueChecks = deduplicateChecks(checks);
   if (uniqueChecks.length === 0) return null;
-  const sources = new Set(signals.filter((signal) => AUTOMATED_SOURCES.has(signal.source)).map((signal) => signal.source));
-  const expectedBehavior = uniqueChecks.every((check) => check.kind === "schedule_health")
-    ? "The affected schedule recovers without reproducing its observed health failure."
-    : sources.size === 1
-    ? expectedBehaviorForSource([...sources][0]!)
-    : sources.size > 1
+  const expectedBehavior = expectedBehaviors.size === 1
+    ? [...expectedBehaviors][0]!
+    : expectedBehaviors.size > 1
       ? "Every detected automated gate passes for the candidate revision."
       : "The triggering execution path completes without terminal runtime or delivery failures.";
   return {
@@ -469,32 +457,11 @@ function signalReference(signal: ImprovementSignal) {
   return { referenceType: null, referenceId: null };
 }
 
-function detectionCode(signal: ImprovementSignal) {
-  const value = signal.metadata.detectionCode;
-  return typeof value === "string" && value.trim() ? value.trim().slice(0, 200) : signal.source;
-}
-
 function automatedEvidenceKind(source: ImprovementSignalSource) {
   if (source === "eval_detection") return "eval_regression";
   if (source === "runtime_detection") return "runtime_gate";
   if (source === "deployment_detection") return "deployment_gate";
   return "ci_gate";
-}
-
-function expectedBehaviorForSource(source: ImprovementSignalSource) {
-  if (source === "eval_detection") return "The private regression suite passes for the candidate revision.";
-  if (source === "runtime_detection") return "The deployed revision satisfies the production runtime quality policy.";
-  if (source === "deployment_detection") return "The candidate revision passes its post-deploy verification gate.";
-  return "The trusted main-branch CI check passes for the candidate revision.";
-}
-
-function knownPostDeployGate(reference: string) {
-  return [
-    "post-deploy-deployment_health",
-    "post-deploy-capability_canary",
-    "post-deploy-stability",
-    "post-deploy-promotion",
-  ].includes(reference);
 }
 
 function sourceLabel(source: ImprovementSignalSource) {

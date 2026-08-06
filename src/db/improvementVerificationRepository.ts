@@ -6,9 +6,11 @@ import type { ImprovementReplayCheckResult } from "../observability/improvementC
 import {
   improvementCheckHash,
   improvementProofAdapterForCheck,
+} from "../improvements/proofAdapters.js";
+import {
   isRevisionQualityClusterReference,
   isRevisionQualityToolLatencyReference,
-} from "../improvements/proofAdapters.js";
+} from "../improvements/detectorPolicies.js";
 import { isScheduleHealthReference, type ScheduleHealthProofStatus } from "../improvements/scheduleHealthContract.js";
 import {
   buildImprovementVerificationDossier,

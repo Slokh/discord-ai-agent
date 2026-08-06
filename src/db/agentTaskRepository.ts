@@ -392,8 +392,19 @@ export async function markAgentTaskSucceeded(pool: DbPool, input: {
         [input.taskId, input.branchName, input.prUrl, input.draft, input.verifyPassed, JSON.stringify(input.metadata ?? {})]
       )
       .catch(() => undefined);
-    await completeImprovementWorkForTask(pool, { taskId: input.taskId, succeeded: true, prUrl: input.prUrl });
-  }
+    await completeImprovementWorkForTask(pool, {
+      taskId: input.taskId,
+      succeeded: true,
+      prUrl: input.prUrl,
+      headRevision: metadataString(input.metadata, "headRevision"),
+      autoMergeEnabled: input.metadata?.autoMergeEnabled === true,
+    });
+}
+
+function metadataString(metadata: Record<string, unknown> | undefined, key: string) {
+  const value = metadata?.[key];
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
 
 export async function markAgentTaskFailed(pool: DbPool, input: {
     taskId: string;

@@ -13,13 +13,16 @@ export async function completeImprovementWorkForTask(pool: DbPool, input: {
   taskId: string;
   succeeded: boolean;
   prUrl?: string | null;
+  headRevision?: string | null;
+  autoMergeEnabled?: boolean;
   summary?: string | null;
 }) {
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
     const result = await client.query(
-      `SELECT case_row.*, work.work_id, work.status AS work_status
+      `SELECT case_row.*, work.work_id, work.status AS work_status,
+              work.pull_request_url AS work_pull_request_url, work.head_revision AS work_head_revision
        FROM improvement_work_attempts work
        JOIN improvement_cases case_row ON case_row.case_id = work.case_id
        WHERE work.task_id = $1
@@ -28,30 +31,139 @@ export async function completeImprovementWorkForTask(pool: DbPool, input: {
     );
     if (!result.rows[0]) { await client.query("COMMIT"); return undefined; }
     const current = rowToImprovementCase(result.rows[0]);
-    const target: ImprovementCaseStatus = input.succeeded ? "verifying" : "actionable";
     if (String(result.rows[0].work_status) !== "in_progress") { await client.query("COMMIT"); return current; }
-    if (input.succeeded) await assertImprovementProofPlan(client, current.caseId);
+    if (input.succeeded) {
+      await assertImprovementProofPlan(client, current.caseId);
+      if (!input.prUrl?.trim()) throw new Error("Successful improvement work must publish a pull request before completion.");
+      const publicationChanged = result.rows[0].work_pull_request_url !== input.prUrl
+        || (input.headRevision && result.rows[0].work_head_revision !== input.headRevision);
+      await client.query(
+        `UPDATE improvement_work_attempts SET
+           pull_request_url = $2,
+           head_revision = coalesce($3,head_revision),
+           metadata = metadata || $4::jsonb,
+           updated_at = now()
+         WHERE work_id = $1`,
+        [String(result.rows[0].work_id), input.prUrl, input.headRevision ?? null, JSON.stringify({
+          promotionRequested: true,
+          autoMergeEnabled: input.autoMergeEnabled ?? false,
+        })],
+      );
+      if (publicationChanged) await insertCaseEvent(client, {
+        caseId: current.caseId,
+        eventName: "work.pull_request_opened",
+        actorKind: "automation",
+        summary: "Linked code work published a pull request and is waiting for repository promotion.",
+        metadata: {
+          workId: String(result.rows[0].work_id), source: "agent_task", taskId: input.taskId,
+          prUrl: input.prUrl, headRevision: input.headRevision ?? null,
+        },
+      });
+      await client.query("COMMIT");
+      return current;
+    }
     await client.query(
       `UPDATE improvement_work_attempts SET status = $2, pull_request_url = coalesce($3, pull_request_url),
          completed_at = now(), updated_at = now() WHERE work_id = $1`,
-      [String(result.rows[0].work_id), input.succeeded ? "succeeded" : "failed", input.prUrl ?? null],
+      [String(result.rows[0].work_id), "failed", input.prUrl ?? null],
     );
     const updated = current.status === "in_progress"
       ? await client.query(
           `UPDATE improvement_cases SET status = $2, version = version + 1, updated_at = now()
            WHERE case_id = $1 RETURNING *`,
-          [current.caseId, target],
+          [current.caseId, "actionable"],
         )
       : { rows: [result.rows[0]] };
     await insertCaseEvent(client, {
       caseId: current.caseId,
-      eventName: input.succeeded ? "work.completed" : "work.failed",
+      eventName: "work.failed",
       actorKind: "automation",
-      summary: input.summary ?? (input.succeeded ? "Linked code work completed; deployment verification is required." : "Linked code work did not complete."),
+      summary: input.summary ?? "Linked code work did not complete.",
       metadata: { workId: String(result.rows[0].work_id), source: "agent_task", taskId: input.taskId, prUrl: input.prUrl ?? null },
     });
     await client.query("COMMIT");
     return rowToImprovementCase(updated.rows[0]);
+  } catch (error) { await client.query("ROLLBACK").catch(() => undefined); throw error; }
+  finally { client.release(); }
+}
+
+export async function reconcileImprovementPullRequestWorkAttempt(pool: DbPool, input: {
+  workId: string;
+  pullRequest: ImprovementPullRequestSnapshot;
+  actorId: string;
+  failedReason?: string | null;
+  promotionState?: string | null;
+  promotionBlocker?: string | null;
+}) {
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const result = await client.query(
+      `SELECT case_row.*,to_jsonb(work) AS work_row,work.status AS work_status,work.case_id AS work_case_id,
+              work.pull_request_url AS work_pull_request_url,work.head_revision AS work_head_revision,
+              work.metadata AS work_metadata
+       FROM improvement_work_attempts work
+       JOIN improvement_cases case_row ON case_row.case_id = work.case_id
+       WHERE work.work_id = $1
+       FOR UPDATE OF case_row,work`,
+      [input.workId],
+    );
+    if (!result.rows[0]) throw new Error(`Improvement work ${input.workId} was not found.`);
+    const current = rowToImprovementCase(result.rows[0]);
+    if (String(result.rows[0].work_status) !== "in_progress") {
+      await client.query("COMMIT");
+      return { case: current, work: rowToImprovementWorkAttempt(result.rows[0].work_row as Record<string, unknown>) };
+    }
+    if (!samePullRequestUrl(String(result.rows[0].work_pull_request_url), input.pullRequest.pullRequestUrl)) {
+      throw new Error("Observed pull request does not match the linked improvement work.");
+    }
+    const failed = Boolean(input.failedReason) || input.pullRequest.state === "closed";
+    const succeeded = input.pullRequest.state === "merged";
+    const terminal = failed || succeeded;
+    const workStatus: ImprovementWorkStatus = succeeded ? "succeeded" : failed ? "failed" : "in_progress";
+    const metadata = {
+      promotionState: input.promotionState ?? (succeeded ? "merged" : failed ? "failed" : "waiting"),
+      promotionBlocker: input.promotionBlocker ?? input.failedReason ?? null,
+      observedHeadRevision: input.pullRequest.headRevision,
+      checkRollupState: input.pullRequest.checkRollupState ?? null,
+      reviewDecision: input.pullRequest.reviewDecision ?? null,
+      unresolvedReviewThreads: input.pullRequest.unresolvedReviewThreads ?? 0,
+      mergeStateStatus: input.pullRequest.mergeStateStatus ?? null,
+    };
+    const workResult = await client.query(
+      `UPDATE improvement_work_attempts SET
+         status = $2,
+         merge_revision = $3,
+         metadata = metadata || $4::jsonb,
+         completed_at = CASE WHEN $5 THEN now() ELSE NULL END,
+         updated_at = CASE WHEN $5 OR (metadata || $4::jsonb) IS DISTINCT FROM metadata THEN now() ELSE updated_at END
+       WHERE work_id = $1 RETURNING *`,
+      [input.workId, workStatus, input.pullRequest.mergeRevision ?? null, JSON.stringify(metadata), terminal],
+    );
+    let updated = { rows: [result.rows[0]] };
+    if (terminal && current.status === "in_progress") {
+      updated = await client.query(
+        `UPDATE improvement_cases SET status = $2, version = version + 1, updated_at = now()
+         WHERE case_id = $1 RETURNING *`,
+        [current.caseId, succeeded ? "verifying" : "actionable"],
+      );
+    }
+    if (terminal) await insertCaseEvent(client, {
+      caseId: current.caseId,
+      eventName: succeeded ? "work.completed" : "work.failed",
+      actorKind: "automation",
+      actorId: input.actorId,
+      summary: succeeded
+        ? "Linked pull request merged; deployment verification is required."
+        : input.failedReason ?? "Linked pull request closed without merging.",
+      metadata: {
+        workId: input.workId, pullRequestUrl: input.pullRequest.pullRequestUrl,
+        headRevision: input.pullRequest.headRevision, mergeRevision: input.pullRequest.mergeRevision ?? null,
+        promotionBlocker: input.promotionBlocker ?? null,
+      },
+    });
+    await client.query("COMMIT");
+    return { case: rowToImprovementCase(updated.rows[0]), work: rowToImprovementWorkAttempt(workResult.rows[0]) };
   } catch (error) { await client.query("ROLLBACK").catch(() => undefined); throw error; }
   finally { client.release(); }
 }
@@ -173,10 +285,14 @@ export async function linkImprovementCasePullRequest(pool: DbPool, input: {
 export async function listActiveImprovementPullRequestWork(pool: DbPool) {
   const result = await pool.query(
     `SELECT * FROM improvement_work_attempts
-     WHERE source = 'github_pull_request' AND status = 'in_progress'
+     WHERE pull_request_url IS NOT NULL AND status = 'in_progress'
      ORDER BY updated_at ASC`,
   );
   return result.rows.map(rowToImprovementWorkAttempt);
+}
+
+function samePullRequestUrl(left: string, right: string) {
+  return left.replace(/\/$/, "").toLowerCase() === right.replace(/\/$/, "").toLowerCase();
 }
 
 function rowToImprovementCase(row: Record<string, unknown>): ImprovementCase {

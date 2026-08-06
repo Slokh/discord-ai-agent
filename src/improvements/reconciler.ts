@@ -38,7 +38,7 @@ type ImprovementReconciliationRepository = Pick<
   | "messageContext"
   | "ensureImprovementReporterConversationsForCase"
   | "listActiveImprovementPullRequestWork"
-  | "linkImprovementCasePullRequest"
+  | "reconcileImprovementPullRequestWorkAttempt"
   | "latestDeploymentVerification"
   | "verifyImprovementCasesForDeployment"
   | "listImprovementCaseIdsNeedingHealth"
@@ -236,6 +236,8 @@ async function reconcileAutonomousAssessment(
       return { status: "deferred", reason: "assessment_running" };
     }
     if (existing.status === "succeeded" || existing.status === "no_changes") {
+      const work = record.workAttempts.find((candidate) => candidate.taskId === taskId);
+      if (existing.status === "succeeded" && work?.status === "failed") continue;
       await input.repo.recordImprovementReconciliationDecision({
         caseId: record.case.caseId,
         eventName: "reconciliation.awaiting_operator",
@@ -317,6 +319,8 @@ async function reconcileAutomatedRepair(
       return { status: "deferred", reason: "repair_running" };
     }
     if (existing.status === "succeeded" || existing.status === "no_changes") {
+      const work = record.workAttempts.find((candidate) => candidate.taskId === taskId);
+      if (existing.status === "succeeded" && work?.status === "failed") continue;
       await input.repo.recordImprovementReconciliationDecision({
         caseId: record.case.caseId,
         eventName: "reconciliation.awaiting_operator",
@@ -476,6 +480,18 @@ async function deriveImprovementCaseHealth(
   if (improvementCase.status === "in_progress") {
     const active = [...record.workAttempts].reverse().find((work) => work.status === "in_progress") ?? null;
     if (!active) return { ...base, state: "blocked" as const, blocker: "active_work_projection_missing", nextAction: "operator_repair_work_link", retryTrigger: null, retryAt: null, progressKey: `in_progress:${improvementCase.version}:missing` };
+    if (active.pullRequestUrl) {
+      const blocker = typeof active.metadata.promotionBlocker === "string" ? active.metadata.promotionBlocker : null;
+      return {
+        ...base,
+        state: blocker ? "blocked" as const : "waiting" as const,
+        blocker: blocker ? `pull_request_${blocker}` : "pull_request_merge_pending",
+        nextAction: blocker ? "operator_resolve_pull_request_blocker" : "sync_pull_request",
+        retryTrigger: blocker ? null : "improvement_reconciliation",
+        retryAt: null,
+        progressKey: `work:${active.workId}:${active.updatedAt.toISOString()}:${active.metadata.promotionState ?? "published"}`,
+      };
+    }
     if (active.taskId) {
       const task = await input.repo.getAgentTask(active.taskId);
       return {
@@ -548,6 +564,12 @@ async function deriveAutomatedRepairHealth(
         ? { caseId: record.case.caseId, state: "blocked" as const, blocker: "automated_repair_retries_exhausted", nextAction: "operator_inspect_repair_failure", retryTrigger: null, retryAt: null, progressKey }
         : { caseId: record.case.caseId, state: "waiting" as const, blocker: "repair_retry_pending", nextAction: "retry_automated_repair", retryTrigger: "improvement_reconciliation", retryAt: null, progressKey };
     }
+    const work = record.workAttempts.find((candidate) => candidate.taskId === task.taskId);
+    if (task.status === "succeeded" && work?.status === "failed") {
+      return attempt === MAX_AUTOMATED_REPAIR_ATTEMPTS
+        ? { caseId: record.case.caseId, state: "blocked" as const, blocker: "automated_repair_retries_exhausted", nextAction: "operator_inspect_repair_failure", retryTrigger: null, retryAt: null, progressKey }
+        : { caseId: record.case.caseId, state: "waiting" as const, blocker: "repair_retry_pending", nextAction: "retry_automated_repair", retryTrigger: "improvement_reconciliation", retryAt: null, progressKey };
+    }
     return { caseId: record.case.caseId, state: "blocked" as const, blocker: "automated_repair_completion_did_not_advance_case", nextAction: "operator_inspect_repair_completion", retryTrigger: null, retryAt: null, progressKey };
   }
   return { caseId: record.case.caseId, state: "pending" as const, blocker: null, nextAction: "queue_automated_repair", retryTrigger: "improvement_reconciliation", retryAt: null, progressKey: `actionable:${record.case.version}:repair:${contract.contractId}:${contract.version}` };
@@ -574,6 +596,12 @@ async function deriveAssessmentHealth(
       };
     }
     if (task.status === "failed" || task.status === "cancelled") {
+      return attempt === MAX_ASSESSMENT_ATTEMPTS
+        ? { caseId: record.case.caseId, state: "blocked" as const, blocker: "autonomous_assessment_retries_exhausted", nextAction: "operator_inspect_assessment_failure", retryTrigger: null, retryAt: null, progressKey }
+        : { caseId: record.case.caseId, state: "waiting" as const, blocker: "assessment_retry_pending", nextAction: "retry_autonomous_assessment", retryTrigger: "improvement_reconciliation", retryAt: null, progressKey };
+    }
+    const work = record.workAttempts.find((candidate) => candidate.taskId === task.taskId);
+    if (task.status === "succeeded" && work?.status === "failed") {
       return attempt === MAX_ASSESSMENT_ATTEMPTS
         ? { caseId: record.case.caseId, state: "blocked" as const, blocker: "autonomous_assessment_retries_exhausted", nextAction: "operator_inspect_assessment_failure", retryTrigger: null, retryAt: null, progressKey }
         : { caseId: record.case.caseId, state: "waiting" as const, blocker: "assessment_retry_pending", nextAction: "retry_autonomous_assessment", retryTrigger: "improvement_reconciliation", retryAt: null, progressKey };

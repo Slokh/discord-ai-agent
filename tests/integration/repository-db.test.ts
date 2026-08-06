@@ -338,60 +338,6 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
     });
   });
 
-  it("links explicit work and requires deployed evidence before resolving", async () => {
-    const caseRecord = await repo.recordImprovementSignal({
-      source: "developer_report", sourceKey: `source-${randomUUID()}`, reporterKind: "developer",
-      summary: "Repository invariant needs repair", classification: "defect", scope: "repository",
-    });
-    await repo.addImprovementEvidence({ caseId: caseRecord.case.caseId, kind: "test_failure", disposition: "supports", summary: "The focused test reproduces the invariant violation." });
-    await repo.acceptImprovementContract({
-      caseId: caseRecord.case.caseId, expectedBehavior: "The focused invariant test passes.",
-      checks: [{ kind: "test", reference: "release-verify" }], createdBy: "operator",
-    });
-    await repo.transitionImprovementCase({ caseId: caseRecord.case.caseId, to: "actionable", actorKind: "operator" });
-    const taskId = `task-${randomUUID()}`;
-    await repo.upsertAgentTaskQueued({
-      taskId, improvementCaseId: caseRecord.case.caseId, taskType: "code_update", title: "Repair invariant",
-      request: "Repair the focused invariant.", requestedBy: "operator",
-    });
-    await expect(repo.linkImprovementCaseTask({ caseId: caseRecord.case.caseId, taskId, actorId: "operator" })).resolves.toMatchObject({ status: "in_progress" });
-    await repo.markAgentTaskSucceeded({ taskId, branchName: "operator/repair", prUrl: "https://github.com/example/repo/pull/1", draft: false, verifyPassed: true });
-    await expect(repo.getImprovementCase(caseRecord.case.caseId)).resolves.toMatchObject({
-      case: { status: "verifying" },
-      workAttempts: [expect.objectContaining({ source: "agent_task", taskId, status: "succeeded", pullRequestUrl: "https://github.com/example/repo/pull/1" })],
-    });
-    await expect(repo.transitionImprovementCase({ caseId: caseRecord.case.caseId, to: "resolved", actorKind: "operator" })).rejects.toThrow(/verification receipt/);
-    await expect(repo.inspectImprovementVerification({ caseId: caseRecord.case.caseId, revision: "test-abc123" }))
-      .rejects.toThrow(/durable deployment verification/);
-    await repo.markDeploymentVerified({ revision: "test-abc123", deploymentId: "deployment-a" });
-    const dossier = await repo.inspectImprovementVerification({ caseId: caseRecord.case.caseId, revision: "test-abc123" });
-    expect(dossier).toMatchObject({
-      status: "passed",
-      deployment: { deploymentId: "deployment-a" },
-      checks: [{ status: "passed", proofSource: "release_ci" }],
-    });
-    await expect(pool.query("SELECT count(*)::int AS count FROM improvement_verification_receipts WHERE case_id = $1", [caseRecord.case.caseId]))
-      .resolves.toEqual(expect.objectContaining({ rows: [{ count: 0 }] }));
-    const attempts = await Promise.all([
-      repo.verifyImprovementCase({ caseId: caseRecord.case.caseId, revision: "test-abc123", actorId: "operator" }),
-      repo.verifyImprovementCase({ caseId: caseRecord.case.caseId, revision: "test-abc123", actorId: "operator" }),
-    ]);
-    const first = attempts.find((attempt) => attempt.recorded);
-    const repeated = attempts.find((attempt) => !attempt.recorded);
-    if (!first || !repeated) throw new Error("Expected one recorded and one idempotent verification receipt.");
-    expect(first).toMatchObject({ recorded: true, case: { status: "resolved" }, receipt: { status: "passed", applied: true } });
-    expect(repeated).toMatchObject({ recorded: false, case: { status: "resolved" }, receipt: { receiptId: first.receipt.receiptId } });
-    await expect(repo.verifyImprovementCase({ caseId: caseRecord.case.caseId, revision: "test-abc123", actorId: "operator" }))
-      .resolves.toMatchObject({ recorded: false, case: { status: "resolved" }, receipt: { receiptId: first.receipt.receiptId } });
-    const stored = await repo.getImprovementCase(caseRecord.case.caseId);
-    expect(stored?.evidence).toEqual(expect.arrayContaining([
-      expect.objectContaining({ kind: "deployment_verification", disposition: "supports", referenceId: first.receipt.receiptId }),
-    ]));
-    expect(stored?.events).toEqual(expect.arrayContaining([
-      expect.objectContaining({ eventName: "verification.passed", metadata: expect.objectContaining({ receiptId: first.receipt.receiptId }) }),
-    ]));
-  });
-
   it("links and reconciles direct GitHub pull request work idempotently", async () => {
     const caseRecord = await repo.recordImprovementSignal({
       source: "developer_report", sourceKey: `source-${randomUUID()}`, reporterKind: "developer",

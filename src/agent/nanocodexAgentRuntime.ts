@@ -135,7 +135,9 @@ async function runRetainedNanoCodexTurn(input: {
   // old mid-turn tool-expansion protocol. Deployment filtering still prevents
   // unavailable capabilities from entering the model contract.
   const deployedLocalTools = deploymentToolset(ctx.config).localTools;
-  const localTools = ctx.proofReplay ? deployedLocalTools.filter((tool) => !tool.mutates) : deployedLocalTools;
+  const localTools = ctx.proofReplay || ctx.readOnlyExecution
+    ? deployedLocalTools.filter((tool) => !tool.mutates)
+    : deployedLocalTools;
   const toolDefinitions = localToolDefinitionsForModel(localTools);
   const model = input.capabilities.model ?? ctx.config.openRouter.chatModel;
   const resumeContract = nanoCodexSessionResumeContract({

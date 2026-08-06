@@ -283,6 +283,17 @@
       "skipReason": "Codegen opens PRs; keep this documented but skipped in the default suite."
     },
     {
+      "id": "scheduled-agent-daily-briefing-skipped",
+      "category": "memory",
+      "prompt": "every morning at 9, summarize yesterday's Discord activity for me",
+      "expectedTools": [
+        "setReminder"
+      ],
+      "skip": true,
+      "skipReason": "Schedule creation is a durable mutation; model selection and delivery_mode arguments are covered by focused contract and handler tests.",
+      "notes": "A recurring request for fresh work should use the unified scheduler in agent mode rather than creating a literal static reminder."
+    },
+    {
       "id": "toolscope-spotify-oblique-music",
       "category": "spotify",
       "prompt": "who shows up the most on this playlist? https://open.spotify.com/playlist/abc123",

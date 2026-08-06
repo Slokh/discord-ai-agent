@@ -6,6 +6,7 @@ export const reminderToolHandlers = {
   setReminder: async (ctx, route) => setReminder(ctx, {
     action: typeof route.arguments?.action === "string" ? route.arguments.action : undefined,
     reminderId: typeof route.arguments?.reminder_id === "string" ? route.arguments.reminder_id : undefined,
+    deliveryKind: typeof route.arguments?.delivery_mode === "string" ? route.arguments.delivery_mode : undefined,
     ...reminderArguments(route.arguments),
     removeRecurrence: route.arguments?.remove_recurrence === true,
     updateScope: typeof route.arguments?.update_scope === "string" ? route.arguments.update_scope : undefined,

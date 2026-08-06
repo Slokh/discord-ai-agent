@@ -7,7 +7,7 @@ export type AgentPromptExecutionRef = {
   executionId: string;
 };
 
-export type AgentQualityCohort = "member" | "synthetic";
+export type AgentQualityCohort = "member" | "scheduled" | "synthetic";
 
 export async function ensureAgentRuntimePromptExecution(input: {
   agentRuntime?: AgentRuntimeRepository;
@@ -25,7 +25,7 @@ export async function ensureAgentRuntimePromptExecution(input: {
   status: Extract<AgentRuntimeStatus, "queued" | "running">;
   source: string;
   qualityCohort: AgentQualityCohort;
-  sessionKind?: "discord_channel" | "local_prompt";
+  sessionKind?: "discord_channel" | "scheduled_request" | "local_prompt";
   executorName?: string | null;
   appRevision?: string | null;
   config?: AppConfig | null;

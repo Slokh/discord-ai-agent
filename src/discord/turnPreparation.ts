@@ -15,10 +15,11 @@ import type { AgentPromptExecutionRef } from "../agent/runtimeLedger.js";
 import type { DiscordReplyContext } from "../tools/types.js";
 import { durationMs } from "../util/logger.js";
 import { visibleChannelIdsForMember } from "./permissions.js";
-import { discordChannelThreadKey, explicitChannelMentionIds, explicitUserMentionIds } from "./mentionParsing.js";
+import { explicitChannelMentionIds, explicitUserMentionIds } from "./mentionParsing.js";
 import { mentionedUserIdentitiesFromMessage } from "./mentionedUsers.js";
 import { discordAttachmentContextsFromMessage, resolveDiscordReplyContext, REPLY_CHAIN_CONTEXT_MESSAGE_LIMIT } from "./replyContext.js";
 import { discordEmbedContextsFromMessage } from "./embedContext.js";
+import { agentExecutionPolicy, discordAgentThreadKey } from "./agentExecutionPolicy.js";
 import type { DiscordResponseSink } from "./responseSink.js";
 import {
   recordAgentRuntimeSpan,
@@ -51,8 +52,17 @@ export async function prepareDiscordAgentTurn(input: {
   const guild = input.message.guild;
   if (!guildId || !guild) throw new Error("Discord agent request message is not attached to a guild.");
   const botUserId = input.client.user?.id ?? "";
-  const threadKey = discordChannelThreadKey(guildId, input.message.channelId);
   const requesterId = input.request.userId ?? input.message.author.id;
+  const requestKind = input.request.requestKind ?? "message";
+  const executionPolicy = agentExecutionPolicy(requestKind);
+  const threadKey = discordAgentThreadKey({
+    requestKind,
+    guildId,
+    channelId: input.message.channelId,
+    requesterId,
+    agentSessionId: input.request.agentSessionId,
+    requestId: input.request.requestId,
+  });
   const requesterMember = requesterId === input.message.author.id
     ? input.message.member ?? (await guild.members.fetch(requesterId))
     : await guild.members.fetch(requesterId);
@@ -64,7 +74,7 @@ export async function prepareDiscordAgentTurn(input: {
     guildId,
     channelId: input.message.channelId,
     metadata: {
-      kind: "discord_channel",
+      kind: requestKind === "scheduled" ? "scheduled_request" : "discord_channel",
       channelId: input.message.channelId
     }
   });
@@ -116,11 +126,13 @@ export async function prepareDiscordAgentTurn(input: {
 
   const sessionStartedAt = Date.now();
   const sessionContextLimit = sessionContextMessageLimitForReplyContext(replyContext);
-  const priorSessionMessages = await input.context.repo.recentConversationMessages({
-    threadKey,
-    limit: sessionContextLimit,
-    requesterAuthorId: requesterId,
-  });
+  const priorSessionMessages = executionPolicy.loadAmbientConversationMemory
+    ? await input.context.repo.recentConversationMessages({
+        threadKey,
+        limit: sessionContextLimit,
+        requesterAuthorId: requesterId,
+      })
+    : [];
   input.requestLogger.info(
     {
       threadKey,

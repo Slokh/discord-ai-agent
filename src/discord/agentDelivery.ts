@@ -11,8 +11,8 @@ import { cleanResponse } from "../tools/responseFormatting.js";
 import type { ToolContext } from "../tools/types.js";
 import { durationMs, logger } from "../util/logger.js";
 import { addDiscordMessageReaction, createDiscordGuildEmoji, deleteDiscordMessageById, fetchDiscordAttachment, fetchDiscordGuildEmojis, fetchDiscordGuildMembers, fetchDiscordUserAvatar, sendDiscordPollMessage } from "./api.js";
-import { discordChannelThreadKey } from "./mentionParsing.js";
 import { discordEmbedContextsFromMessage } from "./embedContext.js";
+import { agentExecutionPolicy, discordAgentThreadKey } from "./agentExecutionPolicy.js";
 import { DiscordResponseSink } from "./responseSink.js";
 import {
   createDiscordDeliveryIntent,
@@ -33,6 +33,11 @@ import {
   type DiscordAgentExecutionRequest,
   type DiscordAgentRequestInput
 } from "./requestContext.js";
+
+export type DiscordAgentExecutionResult = {
+  status: "succeeded" | "failed";
+  message: Message;
+};
 
 export async function runQueuedAgentRuntimeExecution(
   input: DiscordAgentRequestInput & { client: Client },
@@ -132,9 +137,18 @@ export async function executeDiscordAgentRequest(
     userId: request.userId ?? request.turnEnvelope?.userId ?? message.author.id,
     inputLinesArtifactId: request.inputLinesArtifactId ?? null
   });
-  const fallbackThreadKey = discordChannelThreadKey(guildId, message.channelId);
   const fallbackUserDisplayName = request.userDisplayName ?? message.member?.displayName ?? message.author.username;
   const requesterId = request.userId ?? request.turnEnvelope?.userId ?? message.author.id;
+  const requestKind = request.requestKind ?? request.turnEnvelope?.requestKind ?? "message";
+  const executionPolicy = agentExecutionPolicy(requestKind);
+  const fallbackThreadKey = discordAgentThreadKey({
+    requestKind,
+    guildId,
+    channelId: message.channelId,
+    requesterId,
+    agentSessionId: request.agentSessionId,
+    requestId: request.requestId,
+  });
   const agentRuntimeExecution = await ensureAgentRuntimePromptExecution({
     agentRuntime: input.agentRuntime,
     guildId,
@@ -149,8 +163,9 @@ export async function executeDiscordAgentRequest(
     rawContent: request.rawContent,
     discordUrl: message.url,
     status: "running",
-    source: `discord.${request.requestKind ?? request.turnEnvelope?.requestKind ?? "worker"}`,
-    qualityCohort: "member",
+    source: `discord.${requestKind}`,
+    qualityCohort: executionPolicy.qualityCohort,
+    sessionKind: executionPolicy.sessionKind,
     executorName: agentExecutor.name,
     appRevision: input.config.appRevision,
     config: input.config
@@ -160,8 +175,8 @@ export async function executeDiscordAgentRequest(
   });
   if (!agentRuntimeExecution) {
     const errorContent = "I hit an error: could not create the agent runtime ledger for this turn.";
-    await responseSink.sendError(errorContent, elapsedResponseFooter(request.messageStartedAt));
-    return;
+    const finalReply = (await responseSink.sendError(errorContent, elapsedResponseFooter(request.messageStartedAt))).message;
+    return { status: "failed", message: finalReply } satisfies DiscordAgentExecutionResult;
   }
   const preparedTurn = request.turnEnvelope
     ? await replayPreparedDiscordAgentTurn({
@@ -251,7 +266,8 @@ export async function executeDiscordAgentRequest(
       requestEmbeds,
       requestId: request.requestId,
       requestMessageId: turnEnvelope.requestId,
-      mutationAuthorizedByCurrentInput: (turnEnvelope.requestKind ?? "message") === "message",
+      mutationAuthorizedByCurrentInput: executionPolicy.mutationAuthorizedByCurrentInput,
+      readOnlyExecution: executionPolicy.readOnlyExecution,
       statusChannelId: responseSink.statusChannelId,
       statusMessageId: responseSink.statusMessageId,
       noteProgress: () => undefined,
@@ -476,6 +492,7 @@ export async function executeDiscordAgentRequest(
         files: response.files?.map((file) => ({ name: file.name, contentType: file.contentType, bytes: file.data.length })) ?? []
       }
     }).catch((error) => requestLogger.warn({ err: error }, "Failed to store Discord response artifact"));
+    return { status: "succeeded", message: finalReply } satisfies DiscordAgentExecutionResult;
   } catch (error) {
     await releaseFailedRequestWager(input, request, error, requestLogger);
     if (isOpenRouterContentFilterError(error)) {
@@ -521,7 +538,7 @@ export async function executeDiscordAgentRequest(
         durationMs: durationMs(request.messageStartedAt),
         executorName: agentExecutor.name
       }).catch((runtimeError) => requestLogger.warn({ err: runtimeError }, "Failed to mark content-filtered agent runtime execution"));
-      return;
+      return { status: "failed", message: finalReply } satisfies DiscordAgentExecutionResult;
     }
 
     requestLogger.error({ err: error }, "Agent request failed");
@@ -530,7 +547,7 @@ export async function executeDiscordAgentRequest(
         .auditTool({
           guildId: message.guildId,
           channelId: message.channelId,
-          userId: message.author.id,
+          userId: requesterId,
           toolName: "agentError",
           argumentsSummary: request.text,
           error: error.message
@@ -586,7 +603,7 @@ export async function executeDiscordAgentRequest(
       turnId: request.requestId,
       user: {
         discordMessageId: message.id,
-        authorId: message.author.id,
+        authorId: requesterId,
         authorDisplayName: userDisplayName,
         content: request.text,
         createdAt: message.createdAt,
@@ -609,6 +626,7 @@ export async function executeDiscordAgentRequest(
       }
     });
     requestLogger.info({ durationMs: durationMs(request.messageStartedAt) }, "Discord mention failed");
+    return { status: "failed", message: finalReply } satisfies DiscordAgentExecutionResult;
   }
 }
 

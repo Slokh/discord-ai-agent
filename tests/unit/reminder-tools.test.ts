@@ -34,6 +34,27 @@ describe("reminder tools", () => {
     expect(repo.auditTool).toHaveBeenCalledWith(expect.objectContaining({ toolName: "setReminder" }));
   });
 
+  it("creates a scheduled read-only agent request through the same durable scheduler", async () => {
+    const repo = reminderRepo();
+    const ctx = context(repo, { enqueueReminderDelivery: vi.fn(async () => "job") });
+
+    const result = await createReminder(ctx, {
+      reminder: "summarize yesterday's Discord activity",
+      deliveryKind: "agent",
+      scheduledFor: "2026-08-06T09:00:00-04:00",
+      timezone: "America/New_York",
+    });
+
+    expect(repo.createReminder).toHaveBeenCalledWith(expect.objectContaining({
+      reminderText: "summarize yesterday's Discord activity",
+      deliveryKind: "agent",
+    }));
+    expect(result).toEqual(expect.objectContaining({
+      status: "ok",
+      content: expect.stringContaining("Scheduled request"),
+    }));
+  });
+
   it("routes creation and mutation through one model-facing reminder setter", async () => {
     const repo = reminderRepo();
     const ctx = context(repo);
@@ -41,6 +62,7 @@ describe("reminder tools", () => {
     await reminderToolHandlers.setReminder!(ctx, route({
       action: "create",
       reminder: "call Mom",
+      delivery_mode: "notification",
       scheduled_for: "2026-08-06T09:00:00-04:00",
     }));
     await reminderToolHandlers.setReminder!(ctx, route({ action: "cancel", reminder_id: "r_existing" }));
@@ -52,6 +74,7 @@ describe("reminder tools", () => {
     }));
 
     expect(repo.createReminder).toHaveBeenCalledOnce();
+    expect(repo.createReminder).toHaveBeenCalledWith(expect.objectContaining({ deliveryKind: "notification" }));
     expect(repo.cancelReminderForRequester).toHaveBeenCalledWith({ reminderId: "r_existing", guildId: "guild", requesterId: "user" });
     expect(invalidCreate).toEqual(expect.objectContaining({ errorCode: "reminder_create_fields_invalid" }));
   });
@@ -265,6 +288,7 @@ function reminderRepo(input: { recurring?: boolean; status?: string; scheduledFo
     requesterId: "user",
     sourceMessageId: "message",
     reminderText: "call Mom",
+    deliveryKind: "notification" as const,
     timezone: "America/New_York",
     scheduledFor: input.scheduledFor ?? new Date("2026-08-06T13:00:00.000Z"),
     recurrence,

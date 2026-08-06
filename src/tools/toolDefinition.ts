@@ -4,7 +4,7 @@ import type { AppConfig } from "../config/env.js";
 /** The complete model-facing surface, grouped by the capability that owns it. */
 export const TOOL_NAMES_BY_CAPABILITY = {
   foundation: ["loadSkillContext", "setMyTimezone"],
-  reminders: ["createReminder", "listMyReminders", "manageReminder"],
+  reminders: ["setReminder", "listMyReminders"],
   discordContext: [
     "composeDiscordResponse", "findDiscordUsers", "findDiscordChannels", "searchDiscordHistory",
     "getRecentAgentMemory", "getAgentMemoryStats", "getRecentDiscordMessages", "getDiscordMessageContext",
@@ -33,8 +33,7 @@ export type ToolName = (typeof TOOL_NAMES_BY_CAPABILITY)[keyof typeof TOOL_NAMES
 export const TOOL_NAMES: readonly ToolName[] = Object.values(TOOL_NAMES_BY_CAPABILITY).flat();
 export const MUTATING_TOOL_NAMES = [
   "setMyTimezone",
-  "createReminder",
-  "manageReminder",
+  "setReminder",
   "setAgentModel",
   "runCodingAgent",
   "retryAgentTask",

@@ -11,7 +11,7 @@ Discord AI Agent is a shared assistant for a private Discord community. A member
 - Useful partial results when a complete result is impossible.
 - Reviewable code-update PRs when a member asks the bot to change itself.
 - Enough retained evidence to explain a wrong, slow, missing, or surprising result.
-- Durable conversational reminders that survive restarts and can be listed or cancelled without commands.
+- Durable conversational reminders that survive restarts and can be managed by ordinary replies.
 
 The primary deployment is a technically operated friend group, club, or small community. The system favors clear behavior, low operational burden, and strong protection of the few boundaries that carry real consequences.
 
@@ -82,9 +82,9 @@ Randomness and wagers add two rules: exposure is reserved before entropy is cons
 
 ## Reminders
 
-A member may create a one-shot or recurring reminder in ordinary language, list upcoming reminders, cancel either kind, and pause or resume a recurring series by its returned ID. The model resolves natural language using the requester's validated timezone context. Code accepts only an exact future first instant and, for recurrence, a matching daily, weekly, or monthly local wall-clock rule. Postgres owns one row for the whole series; a delayed queue job is only a wakeup, and periodic reconciliation restores missed wakeups after downtime.
+A member may create a one-shot or recurring reminder in ordinary language, list upcoming reminders, cancel either kind, pause or resume a recurring series, and update its text, time, timezone, or recurrence. A returned ID is an explicit reference; replying directly to the latest delivered notification is an equally authoritative reference without exposing an ID in the notification. The model resolves natural language using the requester's validated timezone context. Code accepts only an exact future first instant and, for recurrence, a matching daily, weekly, or monthly local wall-clock rule. Postgres owns one row for the whole series; a delayed queue job is only a wakeup, and periodic reconciliation restores missed wakeups after downtime.
 
-Delivery returns to the originating channel, mentions only the requester, and revalidates that the requester can still view the channel. A removed member, deleted channel, or lost visibility fails closed rather than moving private reminder text to another channel or DM. Each delivered occurrence advances a durable sequence before enqueueing the next wakeup. Downtime collapses missed intervals into one overdue delivery followed by the next future occurrence, rather than flooding the channel. Recurrence stays in the requester's IANA timezone: a repeated fall-back wall time fires once at the earlier instant, while a nonexistent spring-forward wall time moves to the first valid minute after the gap. Monthly rules skip months without their requested day.
+Delivery returns to the originating channel, mentions only the requester, and revalidates that the requester can still view the channel. Reply resolution requires the exact delivery message, channel, guild, and immutable requester; other reply-chain context never selects a reminder. A recurring time change names either the next occurrence or the whole series, and ambiguous requests ask rather than silently choosing. Schedule and recurrence replacement is atomic, and obsolete queue wakeups re-check the new durable time and no-op. A removed member, deleted channel, or lost visibility fails closed rather than moving private reminder text to another channel or DM. Each delivered occurrence advances a durable sequence before enqueueing the next wakeup. Downtime collapses missed intervals into one overdue delivery followed by the next future occurrence, rather than flooding the channel. Recurrence stays in the requester's IANA timezone: a repeated fall-back wall time fires once at the earlier instant, while a nonexistent spring-forward wall time moves to the first valid minute after the gap. Monthly rules skip months without their requested day.
 
 ## Improvement loop
 

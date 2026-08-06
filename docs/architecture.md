@@ -36,6 +36,11 @@ Reminder tool call
   -> nonce-deduplicated Discord notification
   -> delivered message identity committed to Postgres
   -> recurring series atomically advances and enqueues its next wakeup
+
+Reply to a reminder notification
+  -> exact direct-parent delivery identity plus immutable requester scope
+  -> atomic cancel, pause, resume, or schedule/recurrence replacement
+  -> obsolete delayed wakeups fail the current due-time claim
 ```
 
 `src/index.ts` selects process roles and starts adapters. `src/runtime/applicationServices.ts` is the shared composition root for repositories, model access, randomness, payments, and delivery state; production and the local prompt runner consume the same services. `src/config/env.ts` is the canonical configuration schema. `src/jobs/queue.ts` registers recurring and queued work.

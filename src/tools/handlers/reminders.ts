@@ -1,20 +1,26 @@
-import { createReminder, listMyReminders, manageReminder } from "../reminderTools.js";
+import { listMyReminders, setReminder } from "../reminderTools.js";
 import type { ToolName } from "../toolDefinition.js";
 import type { LocalToolHandler } from "./types.js";
 
 export const reminderToolHandlers = {
-  createReminder: async (ctx, route) => createReminder(ctx, {
-    reminder: typeof route.arguments?.reminder === "string" ? route.arguments.reminder : undefined,
-    scheduledFor: typeof route.arguments?.scheduled_for === "string" ? route.arguments.scheduled_for : undefined,
-    timezone: typeof route.arguments?.timezone === "string" ? route.arguments.timezone : undefined,
-    recurrence: reminderRecurrenceArguments(route.arguments?.recurrence),
-  }),
-  listMyReminders: async (ctx) => listMyReminders(ctx),
-  manageReminder: async (ctx, route) => manageReminder(ctx, {
+  setReminder: async (ctx, route) => setReminder(ctx, {
     action: typeof route.arguments?.action === "string" ? route.arguments.action : undefined,
     reminderId: typeof route.arguments?.reminder_id === "string" ? route.arguments.reminder_id : undefined,
+    ...reminderArguments(route.arguments),
+    removeRecurrence: route.arguments?.remove_recurrence === true,
+    updateScope: typeof route.arguments?.update_scope === "string" ? route.arguments.update_scope : undefined,
   }),
+  listMyReminders: async (ctx) => listMyReminders(ctx),
 } satisfies Partial<Record<ToolName, LocalToolHandler>>;
+
+function reminderArguments(argumentsValue: Record<string, unknown> | undefined) {
+  return {
+    reminder: typeof argumentsValue?.reminder === "string" ? argumentsValue.reminder : undefined,
+    scheduledFor: typeof argumentsValue?.scheduled_for === "string" ? argumentsValue.scheduled_for : undefined,
+    timezone: typeof argumentsValue?.timezone === "string" ? argumentsValue.timezone : undefined,
+    recurrence: reminderRecurrenceArguments(argumentsValue?.recurrence),
+  };
+}
 
 function reminderRecurrenceArguments(value: unknown) {
   if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;

@@ -9,9 +9,11 @@ type AutomatedImprovementSource = Extract<
 export type ImprovementProofProducerPolicy = {
   trigger: ImprovementProofTrigger;
   mode: "event_driven" | "scheduled";
+  observedBy: "improvement_reconciliation" | "improvement_watchdog";
   maxSilenceMs: number | null;
   maxRunDurationMs: number;
   consecutiveFailureThreshold: number;
+  notifyBotChannel: boolean;
   detector: {
     source: AutomatedImprovementSource;
     reference: string;
@@ -24,34 +26,64 @@ export type ImprovementProofProducerPolicy = {
 
 export const IMPROVEMENT_PROOF_PRODUCERS: readonly ImprovementProofProducerPolicy[] = Object.freeze([
   producer({
+    trigger: "improvement_reconciliation",
+    mode: "scheduled",
+    observedBy: "improvement_watchdog",
+    maxSilenceMs: 15 * 60 * 1_000,
+    maxRunDurationMs: 10 * 60 * 1_000,
+    consecutiveFailureThreshold: 2,
+    source: "runtime_detection",
+    summary: "The improvement reconciler is stale, stuck, or repeatedly failing.",
+    owningDomain: "improvements",
+    notifyBotChannel: true,
+  }),
+  producer({
+    trigger: "improvement_watchdog",
+    mode: "scheduled",
+    observedBy: "improvement_reconciliation",
+    maxSilenceMs: 30 * 60 * 1_000,
+    maxRunDurationMs: 5 * 60 * 1_000,
+    consecutiveFailureThreshold: 2,
+    source: "runtime_detection",
+    summary: "The external improvement watchdog is stale, stuck, or repeatedly failing.",
+    owningDomain: "operations",
+    notifyBotChannel: true,
+  }),
+  producer({
     trigger: "release_promotion",
     mode: "event_driven",
+    observedBy: "improvement_reconciliation",
     maxSilenceMs: null,
     maxRunDurationMs: 30 * 60 * 1_000,
     consecutiveFailureThreshold: 1,
     source: "deployment_detection",
     summary: "The release-promotion proof producer failed before recording deployment proof.",
     owningDomain: "deployment",
+    notifyBotChannel: false,
   }),
   producer({
     trigger: "post_deploy_private_replay",
     mode: "scheduled",
+    observedBy: "improvement_reconciliation",
     maxSilenceMs: 36 * 60 * 60 * 1_000,
     maxRunDurationMs: 15 * 60 * 1_000,
     consecutiveFailureThreshold: 2,
     source: "eval_detection",
     summary: "The private-replay proof producer is stale or repeatedly failing.",
     owningDomain: "evals",
+    notifyBotChannel: false,
   }),
   producer({
     trigger: "production_observation",
     mode: "scheduled",
+    observedBy: "improvement_reconciliation",
     maxSilenceMs: 8 * 60 * 60 * 1_000,
     maxRunDurationMs: 15 * 60 * 1_000,
     consecutiveFailureThreshold: 2,
     source: "runtime_detection",
     summary: "The production-observation proof producer is stale or repeatedly failing.",
     owningDomain: "observability",
+    notifyBotChannel: false,
   }),
 ]);
 
@@ -70,19 +102,23 @@ export function improvementProofProducerTrigger(reference: string) {
 function producer(input: {
   trigger: ImprovementProofTrigger;
   mode: ImprovementProofProducerPolicy["mode"];
+  observedBy: ImprovementProofProducerPolicy["observedBy"];
   maxSilenceMs: number | null;
   maxRunDurationMs: number;
   consecutiveFailureThreshold: number;
   source: AutomatedImprovementSource;
   summary: string;
   owningDomain: string;
+  notifyBotChannel: boolean;
 }): ImprovementProofProducerPolicy {
   return Object.freeze({
     trigger: input.trigger,
     mode: input.mode,
+    observedBy: input.observedBy,
     maxSilenceMs: input.maxSilenceMs,
     maxRunDurationMs: input.maxRunDurationMs,
     consecutiveFailureThreshold: input.consecutiveFailureThreshold,
+    notifyBotChannel: input.notifyBotChannel,
     detector: {
       source: input.source,
       reference: improvementProofProducerReference(input.trigger),

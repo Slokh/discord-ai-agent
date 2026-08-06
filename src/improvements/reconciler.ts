@@ -20,8 +20,7 @@ import {
   improvementDetectorPolicyForSignal,
   improvementSignalRequiresAutonomousAssessment,
 } from "./detectorPolicies.js";
-import { recordAutomatedImprovementDetection } from "./detections.js";
-import { improvementProofProducerPolicy } from "./proofProducerRegistry.js";
+import { recordObservedProofProducerDetections } from "./producerHealth.js";
 const TRIAGE_STATUSES: ImprovementCaseStatus[] = ["open", "needs_evidence", "actionable"];
 const CASE_PAGE_SIZE = 100;
 const ACTOR_ID = "improvement-reconciler";
@@ -44,7 +43,7 @@ type ImprovementReconciliationRepository = Pick<
   | "verifyImprovementCasesForDeployment"
   | "listImprovementCaseIdsNeedingHealth"
   | "updateImprovementCaseHealth"
-> & Partial<Pick<DiscordAiAgentRepository, "listImprovementProofProducerHealth" | "recordImprovementSignal">>;
+> & Partial<Pick<DiscordAiAgentRepository, "listImprovementProofProducerHealth" | "recordImprovementSignal" | "enqueueImprovementBotUpdate">>;
 
 type RuntimeReader = ImprovementAssessmentRuntimeReader;
 type DeliveryReader = Pick<DeliveryObligationsRepository, "getByExecutionId">;
@@ -80,8 +79,13 @@ export async function runImprovementReconciliationOnce(input: {
   const proofProducers = input.repo.listImprovementProofProducerHealth
     ? await input.repo.listImprovementProofProducerHealth({ now })
     : [];
-  const proofProducerDetections = input.config.nodeEnv === "production"
-    ? await recordUnhealthyProofProducerDetections(input.repo, proofProducers, input.config.appRevision)
+  const proofProducerDetections = input.config.nodeEnv === "production" && input.repo.recordImprovementSignal
+    ? await recordObservedProofProducerDetections({
+        repo: input.repo as ImprovementReconciliationRepository & Pick<DiscordAiAgentRepository, "recordImprovementSignal">,
+        health: proofProducers,
+        appRevision: input.config.appRevision,
+        observer: "improvement_reconciliation",
+      })
     : [];
   const triage = await reconcileTriage(input);
   const pullRequests = await reconcileImprovementPullRequestWork(input.repo, input.config, ACTOR_ID);
@@ -107,43 +111,6 @@ export async function runImprovementReconciliationOnce(input: {
     health,
     stalled,
   };
-}
-
-async function recordUnhealthyProofProducerDetections(
-  repo: ImprovementReconciliationRepository,
-  health: ImprovementProofProducerHealth[],
-  appRevision: string,
-) {
-  const results: ImprovementReconciliationResult["proofProducerDetections"] = [];
-  if (!repo.recordImprovementSignal) return results;
-  for (const producer of health.filter((candidate) => candidate.state === "unhealthy")) {
-    const policy = improvementProofProducerPolicy(producer.trigger);
-    if (!policy) continue;
-    try {
-      const episode = createHash("sha256").update(producer.evidenceKey).digest("hex").slice(0, 24);
-      const recorded = await recordAutomatedImprovementDetection({ recordImprovementSignal: repo.recordImprovementSignal.bind(repo) }, {
-        source: policy.detector.source,
-        sourceId: `proof-producer:${producer.trigger}:${episode}`,
-        stableCode: policy.detector.reference,
-        summary: policy.detector.summary,
-        appRevision,
-        scope: "deployment",
-        classification: policy.detector.classification,
-        severity: policy.detector.severity,
-        owningDomain: policy.detector.owningDomain,
-        metadata: {
-          producerTrigger: producer.trigger,
-          livenessReason: producer.reason,
-          consecutiveFailures: producer.consecutiveFailures,
-          latestRunStatus: producer.latestRun?.status ?? null,
-        },
-      });
-      results.push({ trigger: producer.trigger, status: recorded.signalCreated ? "recorded" : "unchanged" });
-    } catch {
-      results.push({ trigger: producer.trigger, status: "error" });
-    }
-  }
-  return results;
 }
 
 async function reconcileTriage(input: {

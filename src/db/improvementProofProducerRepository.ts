@@ -163,6 +163,9 @@ function producerHealth(
   } else if (latestRun?.status === "started" && now.getTime() - latestRun.startedAt.getTime() > policy.maxRunDurationMs) {
     state = "unhealthy";
     reason = "run_in_progress_too_long";
+  } else if (latestRun?.status === "started") {
+    state = "healthy";
+    reason = "current";
   } else if (consecutiveFailures >= policy.consecutiveFailureThreshold) {
     state = "unhealthy";
     reason = policy.consecutiveFailureThreshold === 1 ? "latest_run_failed" : "repeated_failures";

@@ -2,6 +2,7 @@ name: Production Observation
 
 on:
   schedule:
+    - cron: "*/15 * * * *"
     - cron: "17 */6 * * *"
   workflow_dispatch:
 
@@ -14,8 +15,48 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  revision-quality:
+  improvement-watchdog:
     if: vars.AWS_REGION != '' && vars.EKS_CLUSTER_NAME != ''
+    runs-on: ubuntu-latest
+    env:
+      AWS_REGION: ${{ vars.AWS_REGION }}
+      EKS_CLUSTER_NAME: ${{ vars.EKS_CLUSTER_NAME }}
+      HELM_RELEASE: ${{ vars.HELM_RELEASE || 'discord-ai-agent' }}
+      K8S_NAMESPACE: ${{ vars.K8S_NAMESPACE || 'discord-ai-agent' }}
+    steps:
+      - uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+      - name: Check improvement reconciler liveness
+        run: |
+          aws eks update-kubeconfig --region "$AWS_REGION" --name "$EKS_CLUSTER_NAME"
+          revision="$(kubectl --namespace "$K8S_NAMESPACE" get deployment "$HELM_RELEASE-worker" -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name=="APP_REVISION")].value}')"
+          if ! kubectl --namespace "$K8S_NAMESPACE" exec "deployment/$HELM_RELEASE-worker" -- test -f dist/scripts/improvementWatchdog.js; then
+            jq -n --arg revision "$revision" '{revision: $revision, status: "not_deployed", producers: [], detections: []}' > improvement-watchdog.json
+            jq '{revision, status, producers, detections}' improvement-watchdog.json >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          set +e
+          kubectl --namespace "$K8S_NAMESPACE" exec "deployment/$HELM_RELEASE-worker" -- \
+            env GITHUB_RUN_ID="$GITHUB_RUN_ID" GITHUB_RUN_ATTEMPT="$GITHUB_RUN_ATTEMPT" \
+            node dist/scripts/improvementWatchdog.js --revision "$revision" --record-detection --enforce > improvement-watchdog.json
+          watchdog_status="$?"
+          set -e
+          jq '{revision, generatedAt, producers, detections}' improvement-watchdog.json >> "$GITHUB_STEP_SUMMARY"
+          exit "$watchdog_status"
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: improvement-watchdog
+          path: improvement-watchdog.json
+          if-no-files-found: error
+          retention-days: 14
+
+  revision-quality:
+    if: >-
+      vars.AWS_REGION != '' && vars.EKS_CLUSTER_NAME != '' &&
+      (github.event_name == 'workflow_dispatch' || github.event.schedule == '17 */6 * * *')
     runs-on: ubuntu-latest
     env:
       AWS_REGION: ${{ vars.AWS_REGION }}

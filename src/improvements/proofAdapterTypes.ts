@@ -9,6 +9,8 @@ export type ImprovementProofAdapterId =
   | "producer_health";
 
 export type ImprovementProofTrigger =
+  | "improvement_reconciliation"
+  | "improvement_watchdog"
   | "post_deploy_private_replay"
   | "release_promotion"
   | "production_observation";

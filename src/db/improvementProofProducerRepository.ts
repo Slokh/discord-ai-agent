@@ -28,6 +28,7 @@ export type ImprovementProofProducerHealth = {
   latestSuccessAt: Date | null;
   consecutiveFailures: number;
   maxSilenceMs: number | null;
+  nextExpectedAt: Date | null;
   evidenceKey: string;
 };
 
@@ -176,6 +177,7 @@ function producerHealth(
     state = "unobserved";
     reason = "not_yet_observed";
   }
+  const cadenceAnchor = latestRun?.startedAt ?? activatedAt;
   return {
     trigger: policy.trigger,
     state,
@@ -184,6 +186,9 @@ function producerHealth(
     latestSuccessAt: latestSuccess?.completedAt ?? null,
     consecutiveFailures,
     maxSilenceMs: policy.maxSilenceMs,
+    nextExpectedAt: policy.expectedIntervalMs != null && cadenceAnchor
+      ? new Date(cadenceAnchor.getTime() + policy.expectedIntervalMs)
+      : null,
     evidenceKey: [policy.trigger, state, reason, latestRun?.runKey ?? "none", latestRun?.status ?? "none", latestSuccess?.runKey ?? "none"].join(":"),
   };
 }

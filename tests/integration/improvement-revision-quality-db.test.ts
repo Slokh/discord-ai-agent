@@ -201,10 +201,95 @@ describe.skipIf(!runDbTests)("improvement revision-quality proof", () => {
     );
     expect(proof.rows).toEqual([{
       summary: "Production behavior cohort 0123456789ab passed its traffic-sampled quality gate across 2 exact revisions.",
-      metadata: {
+      metadata: expect.objectContaining({
         qualityVersion: "0123456789abcdef",
         contributingRevisions: ["cohort-prior", "cohort-candidate"],
-      },
+      }),
     }]);
+  });
+
+  it("does not manufacture pending verification progress across deployments", async () => {
+    const caseRecord = await repo.recordImprovementSignal({
+      source: "runtime_detection",
+      sourceKey: `pending-proof-${randomUUID()}`,
+      reporterKind: "automation",
+      summary: "A production quality gate needs recovery proof.",
+      scope: "deployment",
+    });
+    await repo.addImprovementEvidence({
+      caseId: caseRecord.case.caseId,
+      kind: "runtime_gate",
+      disposition: "supports",
+      summary: "Production observation recorded the original gate failure.",
+    });
+    await repo.acceptImprovementContract({
+      caseId: caseRecord.case.caseId,
+      expectedBehavior: "The production behavior cohort satisfies the quality policy.",
+      checks: [{ kind: "deployment_canary", reference: "revision-quality-gate" }],
+      createdBy: "automation",
+    });
+    await repo.transitionImprovementCase({ caseId: caseRecord.case.caseId, to: "actionable", actorKind: "automation" });
+    await repo.transitionImprovementCase({ caseId: caseRecord.case.caseId, to: "in_progress", actorKind: "operator" });
+    await repo.transitionImprovementCase({ caseId: caseRecord.case.caseId, to: "verifying", actorKind: "system" });
+
+    for (const suffix of ["a", "b", "c"]) {
+      const revision = `pending-revision-${suffix}`;
+      const deploymentId = `pending-deployment-${suffix}`;
+      await repo.markDeploymentVerified({ revision, deploymentId });
+      for (let pass = 0; pass < 7; pass += 1) {
+        await expect(repo.verifyImprovementCasesForDeployment({ revision, deploymentId }))
+          .resolves.toContainEqual({
+            caseId: caseRecord.case.caseId,
+            status: "inconclusive",
+            recorded: suffix === "a" && pass === 0,
+          });
+      }
+    }
+    await expect(database.pool.query(
+      "SELECT count(*)::int AS count FROM improvement_verification_receipts WHERE case_id = $1",
+      [caseRecord.case.caseId],
+    )).resolves.toEqual(expect.objectContaining({ rows: [{ count: 1 }] }));
+
+    await repo.recordImprovementRevisionQualityResult({
+      revision: "pending-revision-c",
+      qualityVersion: "quality-pending",
+      contributingRevisions: ["pending-revision-a", "pending-revision-b", "pending-revision-c"],
+      status: "inconclusive",
+      observationStatus: "insufficient_data",
+      sample: { minimumAnswers: 10, minimumToolCalls: 5, answersRemaining: 3, toolCallsRemaining: 1 },
+      runKey: "pending-sample-one",
+    });
+    await expect(repo.verifyImprovementCasesForDeployment({
+      revision: "pending-revision-c",
+      deploymentId: "pending-deployment-c",
+    })).resolves.toContainEqual({ caseId: caseRecord.case.caseId, status: "inconclusive", recorded: true });
+    await repo.recordImprovementRevisionQualityResult({
+      revision: "pending-revision-c",
+      qualityVersion: "quality-pending",
+      contributingRevisions: ["pending-revision-a", "pending-revision-b", "pending-revision-c"],
+      status: "inconclusive",
+      observationStatus: "insufficient_data",
+      sample: { minimumAnswers: 10, minimumToolCalls: 5, answersRemaining: 3, toolCallsRemaining: 1 },
+      runKey: "pending-sample-two",
+    });
+    await expect(repo.verifyImprovementCasesForDeployment({
+      revision: "pending-revision-c",
+      deploymentId: "pending-deployment-c",
+    })).resolves.toContainEqual({ caseId: caseRecord.case.caseId, status: "inconclusive", recorded: false });
+
+    await repo.recordImprovementRevisionQualityResult({
+      revision: "pending-revision-c",
+      qualityVersion: "quality-pending",
+      contributingRevisions: ["pending-revision-a", "pending-revision-b", "pending-revision-c"],
+      status: "passed",
+      observationStatus: "pass",
+      sample: { minimumAnswers: 10, minimumToolCalls: 5, answersRemaining: 0, toolCallsRemaining: 0 },
+      runKey: "pending-sample-passed",
+    });
+    await expect(repo.verifyImprovementCasesForDeployment({
+      revision: "pending-revision-c",
+      deploymentId: "pending-deployment-c",
+    })).resolves.toContainEqual({ caseId: caseRecord.case.caseId, status: "passed", recorded: true });
+    await expect(repo.getImprovementCase(caseRecord.case.caseId)).resolves.toMatchObject({ case: { status: "resolved" } });
   });
 });

@@ -516,15 +516,47 @@ async function deriveImprovementCaseHealth(
   const unhealthy = unhealthyProducer(pendingTriggers, proofProducers);
   if (unhealthy) return producerBlockedHealth(base, unhealthy, `verification:${receipt.applicationKey}:${receipt.createdAt.toISOString()}`);
   const retryTrigger = pendingTriggers.join(",") || null;
+  const pendingDetail = verificationPendingDetail(receipt.checks);
+  const retryAt = pendingTriggers.length === 1
+    ? proofProducers.find((producer) => producer.trigger === pendingTriggers[0])?.nextExpectedAt ?? null
+    : null;
   return {
     ...base,
     state: retryTrigger ? "waiting" as const : "blocked" as const,
-    blocker: retryTrigger ? "verification_proof_pending" : "verification_has_no_retry_owner",
-    nextAction: retryTrigger ? "await_registered_proof_producer" : "operator_define_proof_owner",
+    blocker: pendingDetail ? "verification_awaiting_traffic" : retryTrigger ? "verification_proof_pending" : "verification_has_no_retry_owner",
+    nextAction: pendingDetail ? "await_member_traffic" : retryTrigger ? "await_registered_proof_producer" : "operator_define_proof_owner",
     retryTrigger,
-    retryAt: null,
-    progressKey: `verification:${receipt.applicationKey}:${receipt.createdAt.toISOString()}`,
+    retryAt,
+    details: pendingDetail ? { verification: pendingDetail } : {},
+    progressKey: `verification:${receipt.applicationKey}`,
   };
+}
+
+function verificationPendingDetail(checks: Array<{ status: string; proofMetadata?: Record<string, unknown> }>) {
+  const metadata = checks
+    .filter((check) => check.status === "inconclusive")
+    .map((check) => check.proofMetadata ?? {})
+    .find((candidate) => candidate.observationStatus === "awaiting_traffic" || candidate.observationStatus === "insufficient_data");
+  if (!metadata) return null;
+  const sample = object(metadata.sample);
+  const contributingRevisions = Array.isArray(metadata.contributingRevisions) ? metadata.contributingRevisions : [];
+  return {
+    reason: metadata.observationStatus,
+    answersRemaining: safeCount(sample.answersRemaining),
+    toolCallsRemaining: safeCount(sample.toolCallsRemaining),
+    minimumAnswers: safeCount(sample.minimumAnswers),
+    minimumToolCalls: safeCount(sample.minimumToolCalls),
+    qualityVersion: typeof metadata.qualityVersion === "string" ? metadata.qualityVersion : null,
+    contributingRevisionCount: contributingRevisions.length,
+  };
+}
+
+function object(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
+}
+
+function safeCount(value: unknown) {
+  return typeof value === "number" && Number.isFinite(value) ? Math.max(0, Math.trunc(value)) : 0;
 }
 
 function unhealthyProducer(triggers: string[], producers: ImprovementProofProducerHealth[]) {

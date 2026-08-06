@@ -61,7 +61,13 @@ describe.skipIf(!runDbTests)("improvement proof-producer liveness", () => {
     });
     await expect(repo.listImprovementProofProducerHealth({ now: recoveryAt }))
       .resolves.toEqual(expect.arrayContaining([
-        expect.objectContaining({ trigger: "production_observation", state: "healthy", reason: "current", consecutiveFailures: 0 }),
+        expect.objectContaining({
+          trigger: "production_observation",
+          state: "healthy",
+          reason: "current",
+          consecutiveFailures: 0,
+          nextExpectedAt: new Date(recoveryAt.getTime() + 6 * 60 * 60 * 1_000),
+        }),
       ]));
     await expect(repo.listImprovementProofProducerHealth({ now: new Date(recoveryAt.getTime() + 8 * 60 * 60 * 1_000 + 1) }))
       .resolves.toEqual(expect.arrayContaining([

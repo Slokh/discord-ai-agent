@@ -172,6 +172,38 @@ describe("improvement contract verification", () => {
     const later = build([{ kind: "test", reference: "release-verify" }], { caseVersion: 4 });
     expect(later.applicationKey).toBe(first.applicationKey);
   });
+
+  it("keys pending verification by material proof instead of deployment", () => {
+    const check: ImprovementContractCheck = { kind: "deployment_canary", reference: "revision-quality-gate" };
+    const first = build([check], { revision: "revision-a", deploymentId: "deployment-a" });
+    const laterDeployment = build([check], { revision: "revision-b", deploymentId: "deployment-b" });
+    expect(laterDeployment.applicationKey).toBe(first.applicationKey);
+
+    const waitingProof = (answersRemaining: number): ImprovementVerificationProof => ({
+      status: "inconclusive",
+      source: "revision_quality",
+      referenceType: "revision_quality",
+      referenceId: "revision-quality-gate",
+      summary: "Production needs more traffic.",
+      executionId: null,
+      checkResults: [],
+      metadata: {
+        qualityVersion: "quality-a",
+        contributingRevisions: ["revision-a", "revision-b"],
+        observationStatus: "insufficient_data",
+        sample: { minimumAnswers: 10, minimumToolCalls: 5, answersRemaining, toolCallsRemaining: 2 },
+      },
+      createdAt: new Date("2026-08-05T06:00:00Z"),
+    });
+    const observed = build([check], { revision: "revision-b", deploymentId: "deployment-b", proofs: [waitingProof(4)] });
+    const repeated = build([check], { revision: "revision-c", deploymentId: "deployment-c", proofs: [waitingProof(4)] });
+    const advanced = build([check], { revision: "revision-c", deploymentId: "deployment-c", proofs: [waitingProof(2)] });
+    expect(repeated.applicationKey).toBe(observed.applicationKey);
+    expect(advanced.applicationKey).not.toBe(observed.applicationKey);
+    expect(observed.checks[0]).toMatchObject({
+      proofMetadata: { observationStatus: "insufficient_data", sample: { answersRemaining: 4 } },
+    });
+  });
 });
 
 function privateProof(
@@ -194,6 +226,8 @@ function build(checks: ImprovementContractCheck[], overrides: {
   proofs?: ImprovementVerificationProof[];
   verifiedAt?: Date;
   caseVersion?: number;
+  revision?: string;
+  deploymentId?: string;
 } = {}) {
   return buildImprovementVerificationDossier({
     improvementCase: {
@@ -212,8 +246,8 @@ function build(checks: ImprovementContractCheck[], overrides: {
       executable: true,
       createdAt: new Date("2026-08-05T00:00:00Z"),
     },
-    revision: "revision-a",
-    deploymentId: "deployment-a",
+    revision: overrides.revision ?? "revision-a",
+    deploymentId: overrides.deploymentId ?? "deployment-a",
     deploymentVerifiedAt: overrides.verifiedAt ?? new Date("2026-08-05T00:02:00Z"),
     proofs: overrides.proofs ?? [],
   });

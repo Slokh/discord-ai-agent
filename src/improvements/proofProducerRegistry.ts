@@ -11,6 +11,7 @@ export type ImprovementProofProducerPolicy = {
   mode: "event_driven" | "scheduled";
   observedBy: "improvement_reconciliation" | "improvement_watchdog";
   maxSilenceMs: number | null;
+  expectedIntervalMs: number | null;
   maxRunDurationMs: number;
   consecutiveFailureThreshold: number;
   notifyBotChannel: boolean;
@@ -30,6 +31,7 @@ export const IMPROVEMENT_PROOF_PRODUCERS: readonly ImprovementProofProducerPolic
     mode: "scheduled",
     observedBy: "improvement_watchdog",
     maxSilenceMs: 15 * 60 * 1_000,
+    expectedIntervalMs: 5 * 60 * 1_000,
     maxRunDurationMs: 10 * 60 * 1_000,
     consecutiveFailureThreshold: 2,
     source: "runtime_detection",
@@ -42,6 +44,7 @@ export const IMPROVEMENT_PROOF_PRODUCERS: readonly ImprovementProofProducerPolic
     mode: "scheduled",
     observedBy: "improvement_reconciliation",
     maxSilenceMs: 30 * 60 * 1_000,
+    expectedIntervalMs: 15 * 60 * 1_000,
     maxRunDurationMs: 5 * 60 * 1_000,
     consecutiveFailureThreshold: 2,
     source: "runtime_detection",
@@ -54,6 +57,7 @@ export const IMPROVEMENT_PROOF_PRODUCERS: readonly ImprovementProofProducerPolic
     mode: "event_driven",
     observedBy: "improvement_reconciliation",
     maxSilenceMs: null,
+    expectedIntervalMs: null,
     maxRunDurationMs: 30 * 60 * 1_000,
     consecutiveFailureThreshold: 1,
     source: "deployment_detection",
@@ -66,6 +70,7 @@ export const IMPROVEMENT_PROOF_PRODUCERS: readonly ImprovementProofProducerPolic
     mode: "scheduled",
     observedBy: "improvement_reconciliation",
     maxSilenceMs: 36 * 60 * 60 * 1_000,
+    expectedIntervalMs: 24 * 60 * 60 * 1_000,
     maxRunDurationMs: 15 * 60 * 1_000,
     consecutiveFailureThreshold: 2,
     source: "eval_detection",
@@ -78,6 +83,7 @@ export const IMPROVEMENT_PROOF_PRODUCERS: readonly ImprovementProofProducerPolic
     mode: "scheduled",
     observedBy: "improvement_reconciliation",
     maxSilenceMs: 8 * 60 * 60 * 1_000,
+    expectedIntervalMs: 6 * 60 * 60 * 1_000,
     maxRunDurationMs: 15 * 60 * 1_000,
     consecutiveFailureThreshold: 2,
     source: "runtime_detection",
@@ -104,6 +110,7 @@ function producer(input: {
   mode: ImprovementProofProducerPolicy["mode"];
   observedBy: ImprovementProofProducerPolicy["observedBy"];
   maxSilenceMs: number | null;
+  expectedIntervalMs: number | null;
   maxRunDurationMs: number;
   consecutiveFailureThreshold: number;
   source: AutomatedImprovementSource;
@@ -116,6 +123,7 @@ function producer(input: {
     mode: input.mode,
     observedBy: input.observedBy,
     maxSilenceMs: input.maxSilenceMs,
+    expectedIntervalMs: input.expectedIntervalMs,
     maxRunDurationMs: input.maxRunDurationMs,
     consecutiveFailureThreshold: input.consecutiveFailureThreshold,
     notifyBotChannel: input.notifyBotChannel,

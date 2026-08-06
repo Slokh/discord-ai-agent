@@ -15,6 +15,7 @@ import { isScheduleHealthReference, type ScheduleHealthProofStatus } from "../im
 import {
   buildImprovementVerificationDossier,
   improvementVerificationApplicationKey,
+  improvementVerificationProofSnapshotKey,
   type ImprovementVerificationContract,
   type ImprovementVerificationDossier,
   type ImprovementVerificationProof,
@@ -104,6 +105,13 @@ export async function recordImprovementRevisionQualityResult(pool: DbPool, input
   presentFailureReferences?: string[];
   clusterAbsenceStatus?: Extract<ImprovementVerificationStatus, "passed" | "inconclusive">;
   clusterAbsenceStatuses?: Record<string, Extract<ImprovementVerificationStatus, "passed" | "inconclusive">>;
+  observationStatus?: "pass" | "awaiting_traffic" | "insufficient_data" | "fail";
+  sample?: {
+    minimumAnswers: number;
+    minimumToolCalls: number;
+    answersRemaining: number;
+    toolCallsRemaining: number;
+  };
 }) {
   const revision = bounded(input.revision, "revision", 200);
   const client = await pool.connect();
@@ -133,7 +141,6 @@ export async function recordImprovementRevisionQualityResult(pool: DbPool, input
     const qualityVersion = input.qualityVersion ? bounded(input.qualityVersion, "qualityVersion", 200) : null;
     const contributingRevisions = [...new Set((input.contributingRevisions ?? [revision])
       .map((candidate) => bounded(candidate, "contributingRevision", 200)))].slice(0, 100);
-    const qualityMetadata = JSON.stringify({ qualityVersion, contributingRevisions });
     let recorded = 0;
     for (const row of candidates.rows) {
       const references = revisionQualityReferences((row.checks ?? []) as ImprovementContractCheck[]);
@@ -145,6 +152,30 @@ export async function recordImprovementRevisionQualityResult(pool: DbPool, input
             : isRevisionQualityToolLatencyReference(reference)
               ? clusterAbsenceStatuses.get(reference) ?? "inconclusive"
               : input.clusterAbsenceStatus ?? "inconclusive";
+        const metadata = {
+          qualityVersion,
+          contributingRevisions,
+          observationStatus: input.observationStatus ?? null,
+          sample: input.sample ? boundedQualitySample(input.sample) : null,
+        };
+        const summary = qualityProofSummary(
+          status,
+          reference,
+          qualityVersion,
+          contributingRevisions.length,
+          input.observationStatus,
+          metadata.sample,
+        );
+        const snapshotKey = improvementVerificationProofSnapshotKey({
+          status,
+          source: "revision_quality",
+          referenceType: "revision_quality",
+          referenceId: reference,
+          summary,
+          executionId: null,
+          checkResults: [],
+          metadata,
+        });
         const result = await client.query(
           `INSERT INTO improvement_verification_proofs(
              proof_id,case_id,contract_id,contract_version,revision,deployment_id,source,status,
@@ -154,7 +185,7 @@ export async function recordImprovementRevisionQualityResult(pool: DbPool, input
            ON CONFLICT(source,contract_id,deployment_id,reference_id,run_key) DO NOTHING
            RETURNING proof_id`,
           [String(row.case_id), String(row.contract_id), Number(row.version), revision, deploymentId, status,
-            reference, runKey, qualityProofSummary(status, reference, qualityVersion, contributingRevisions.length), qualityMetadata],
+            reference, runKey, summary, JSON.stringify({ ...metadata, proofSnapshotKey: snapshotKey })],
         );
         recorded += result.rowCount ?? 0;
       }
@@ -465,6 +496,7 @@ function verificationContract(row: Record<string, unknown>): ImprovementVerifica
 }
 
 function verificationProof(row: Record<string, unknown>): ImprovementVerificationProof {
+  const metadata = record(row.metadata);
   return {
     status: String(row.status) as ImprovementVerificationStatus,
     source: String(row.source) as ImprovementVerificationProof["source"],
@@ -473,6 +505,8 @@ function verificationProof(row: Record<string, unknown>): ImprovementVerificatio
     summary: String(row.summary),
     executionId: nullable(row.execution_id),
     checkResults: Array.isArray(row.check_results) ? row.check_results as ImprovementReplayCheckResult[] : [],
+    metadata: withoutKey(metadata, "proofSnapshotKey"),
+    snapshotKey: typeof metadata.proofSnapshotKey === "string" ? metadata.proofSnapshotKey : undefined,
     createdAt: date(row.created_at),
   };
 }
@@ -503,6 +537,8 @@ function qualityProofSummary(
   reference = "revision-quality-gate",
   qualityVersion: string | null = null,
   contributingRevisionCount = 1,
+  observationStatus?: "pass" | "awaiting_traffic" | "insufficient_data" | "fail",
+  sample?: { answersRemaining: number; toolCallsRemaining: number } | null,
 ) {
   if (reference !== "revision-quality-gate") {
     if (status === "passed") return "The deployed revision had enough relevant traffic and did not reproduce this quality cluster.";
@@ -514,6 +550,9 @@ function qualityProofSummary(
     const revisions = `${contributingRevisionCount} exact revision${contributingRevisionCount === 1 ? "" : "s"}`;
     if (status === "passed") return `Production behavior cohort ${cohort} passed its traffic-sampled quality gate across ${revisions}.`;
     if (status === "failed") return `Production behavior cohort ${cohort} failed its traffic-sampled quality gate across ${revisions}.`;
+    if (observationStatus === "awaiting_traffic" || observationStatus === "insufficient_data") {
+      return `Production behavior cohort ${cohort} needs ${sample?.answersRemaining ?? 0} more member answers and ${sample?.toolCallsRemaining ?? 0} more tool calls across ${revisions}.`;
+    }
     return `Production behavior cohort ${cohort} does not yet have enough member traffic across ${revisions} for its quality gate.`;
   }
   if (status === "passed") return "The deployed revision passed its traffic-sampled production quality gate.";
@@ -562,6 +601,34 @@ function bounded(value: string, name: string, max: number) {
   const normalized = value.trim().slice(0, max);
   if (!normalized) throw new Error(`${name} is required.`);
   return normalized;
+}
+
+function boundedQualitySample(sample: {
+  minimumAnswers: number;
+  minimumToolCalls: number;
+  answersRemaining: number;
+  toolCallsRemaining: number;
+}) {
+  return {
+    minimumAnswers: boundedCount(sample.minimumAnswers),
+    minimumToolCalls: boundedCount(sample.minimumToolCalls),
+    answersRemaining: boundedCount(sample.answersRemaining),
+    toolCallsRemaining: boundedCount(sample.toolCallsRemaining),
+  };
+}
+
+function boundedCount(value: number) {
+  return Math.max(0, Math.min(1_000_000, Math.trunc(Number.isFinite(value) ? value : 0)));
+}
+
+function record(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
+}
+
+function withoutKey(value: Record<string, unknown>, key: string) {
+  const copy = { ...value };
+  delete copy[key];
+  return copy;
 }
 
 function safeCheckResultsForContract(results: ImprovementReplayCheckResult[], checks: ImprovementContractCheck[]) {

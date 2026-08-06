@@ -203,7 +203,7 @@ describe.skipIf(!runDbTests)("forward migration upgrades", () => {
         .resolves.toEqual(expect.objectContaining({ rows: [expect.objectContaining({
           case_id: "linked-case", source: "agent_task", source_key: "agent_task:linked-task", status: "in_progress", task_id: "linked-task",
         })] }));
-      for (const version of ["044_improvement_reporter_conversations", "045_improvement_lifecycle_health", "046_scheduled_reminders", "047_recurring_reminders", "048_reminder_reply_lookup", "049_scheduled_agent_requests", "050_schedule_run_health", "051_schedule_health_verification", "052_improvement_proof_producer_runs", "053_improvement_proof_producer_activation", "054_improvement_reconciler_watchdog"]) {
+      for (const version of ["044_improvement_reporter_conversations", "045_improvement_lifecycle_health", "046_scheduled_reminders", "047_recurring_reminders", "048_reminder_reply_lookup", "049_scheduled_agent_requests", "050_schedule_run_health", "051_schedule_health_verification", "052_improvement_proof_producer_runs", "053_improvement_proof_producer_activation", "054_improvement_reconciler_watchdog", "055_improvement_verification_progress"]) {
         await client.query(await readFile(path.resolve(`migrations/${version}.sql`), "utf8"));
       }
       await expect(client.query("SELECT reminder_id, requester_id, scheduled_for, status, recurrence, occurrence_sequence, paused_at, delivery_kind, last_run_at, last_run_status, last_run_execution_id, consecutive_failures, auto_paused_at FROM scheduled_reminders LIMIT 0"))
@@ -222,6 +222,8 @@ describe.skipIf(!runDbTests)("forward migration upgrades", () => {
         .resolves.toEqual(expect.objectContaining({ rows: [{ producers: 5 }] }));
       await expect(client.query("SELECT case_id,producer_trigger,liveness_reason,delivery_message_id FROM improvement_bot_updates LIMIT 0"))
         .resolves.toEqual(expect.objectContaining({ rows: [] }));
+      await expect(client.query("SELECT automation_details FROM improvement_cases WHERE case_id = 'linked-case'"))
+        .resolves.toEqual(expect.objectContaining({ rows: [{ automation_details: {} }] }));
     } finally {
       await client.query("RESET search_path").catch(() => undefined);
       await client.query(`DROP SCHEMA IF EXISTS ${schema} CASCADE`).catch(() => undefined);

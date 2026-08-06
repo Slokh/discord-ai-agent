@@ -65,6 +65,7 @@ export type ImprovementCaseHealth = {
   nextAction: string;
   retryTrigger: string | null;
   retryAt: Date | null;
+  details: Record<string, unknown>;
   progressKey: string;
   lastProgressAt: Date;
   checkedAt: Date;

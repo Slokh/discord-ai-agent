@@ -86,6 +86,8 @@ try {
           ? "passed"
           : "inconclusive",
         clusterAbsenceStatuses: revisionQualityClusterAbsenceStatuses(quality),
+        observationStatus: assessment.status,
+        sample: assessment.sample,
       });
       const scheduleProof = await repo.recordImprovementScheduleHealthResult({
         revision,

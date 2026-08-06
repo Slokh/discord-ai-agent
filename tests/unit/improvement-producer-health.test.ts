@@ -62,6 +62,7 @@ function unhealthy(trigger: ImprovementProofProducerHealth["trigger"]): Improvem
     latestSuccessAt: null,
     consecutiveFailures: 0,
     maxSilenceMs: 60_000,
+    nextExpectedAt: null,
     evidenceKey: `${trigger}:unhealthy:missed_sla:none`,
   };
 }

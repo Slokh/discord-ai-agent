@@ -8,6 +8,7 @@ export type ImprovementCaseHealthUpdate = {
   nextAction: string;
   retryTrigger?: string | null;
   retryAt?: Date | null;
+  details?: Record<string, unknown>;
   progressKey: string;
 };
 
@@ -51,12 +52,14 @@ export async function updateImprovementCaseHealth(pool: DbPool, input: Improveme
     const blocker = boundedNullable(input.blocker, 200);
     const nextAction = bounded(input.nextAction, "nextAction", 200);
     const retryTrigger = boundedNullable(input.retryTrigger, 200);
+    const details = boundedDetails(input.details);
     const progressKey = bounded(input.progressKey, "progressKey", 500);
     const changed = current.state !== input.state
       || current.blocker !== blocker
       || current.nextAction !== nextAction
       || current.retryTrigger !== retryTrigger
-      || dateValue(current.retryAt) !== dateValue(input.retryAt ?? null);
+      || dateValue(current.retryAt) !== dateValue(input.retryAt ?? null)
+      || stableJson(current.details) !== stableJson(details);
     const progressed = current.progressKey !== progressKey;
     const updated = await client.query(
       `UPDATE improvement_cases SET
@@ -65,11 +68,12 @@ export async function updateImprovementCaseHealth(pool: DbPool, input: Improveme
          automation_next_action = $4,
          automation_retry_trigger = $5,
          automation_retry_at = $6,
-         automation_progress_key = $7,
-         automation_last_progress_at = CASE WHEN automation_progress_key IS DISTINCT FROM $7 THEN now() ELSE automation_last_progress_at END,
+         automation_details = $7,
+         automation_progress_key = $8,
+         automation_last_progress_at = CASE WHEN automation_progress_key IS DISTINCT FROM $8 THEN now() ELSE automation_last_progress_at END,
          automation_checked_at = now()
        WHERE case_id = $1 RETURNING *`,
-      [input.caseId, input.state, blocker, nextAction, retryTrigger, input.retryAt ?? null, progressKey],
+      [input.caseId, input.state, blocker, nextAction, retryTrigger, input.retryAt ?? null, JSON.stringify(details), progressKey],
     );
     if (changed || progressed) {
       await client.query(
@@ -78,7 +82,7 @@ export async function updateImprovementCaseHealth(pool: DbPool, input: Improveme
         [
           input.caseId,
           `Improvement automation is ${input.state}: ${blocker ?? nextAction}.`,
-          JSON.stringify({ state: input.state, blocker, nextAction, retryTrigger, retryAt: input.retryAt?.toISOString() ?? null, progressed }),
+          JSON.stringify({ state: input.state, blocker, nextAction, retryTrigger, retryAt: input.retryAt?.toISOString() ?? null, details, progressed }),
         ],
       );
     }
@@ -100,6 +104,7 @@ export function rowToImprovementCaseHealth(row: Record<string, unknown>): Improv
     nextAction: String(row.automation_next_action),
     retryTrigger: nullable(row.automation_retry_trigger),
     retryAt: nullableDate(row.automation_retry_at),
+    details: boundedDetails(row.automation_details),
     progressKey: String(row.automation_progress_key),
     lastProgressAt: date(row.automation_last_progress_at),
     checkedAt: date(row.automation_checked_at),
@@ -116,3 +121,17 @@ function nullable(value: unknown) { return value == null ? null : String(value);
 function date(value: unknown) { return value instanceof Date ? value : new Date(String(value)); }
 function nullableDate(value: unknown) { return value == null ? null : date(value); }
 function dateValue(value: Date | null) { return value?.getTime() ?? null; }
+function boundedDetails(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  const serialized = JSON.stringify(value);
+  if (serialized.length > 4_000) throw new Error("Improvement automation details exceed 4000 bytes.");
+  return value as Record<string, unknown>;
+}
+function stableJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(",")}]`;
+  if (value && typeof value === "object") {
+    const object = value as Record<string, unknown>;
+    return `{${Object.keys(object).sort().map((key) => `${JSON.stringify(key)}:${stableJson(object[key])}`).join(",")}}`;
+  }
+  return JSON.stringify(value) ?? "null";
+}

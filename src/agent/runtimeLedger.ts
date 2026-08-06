@@ -126,6 +126,7 @@ export async function finishAgentRuntimePromptExecution(input: {
   executionId?: string | null;
   traceId?: string | null;
   status: Extract<AgentRuntimeStatus, "succeeded" | "failed">;
+  responseStatus?: "ok" | "partial" | "error";
   replyMessageId: string;
   replyUrl: string;
   responseContent: string;
@@ -149,7 +150,8 @@ export async function finishAgentRuntimePromptExecution(input: {
       promptMessageId: input.traceId ?? null,
       executionId: input.executionId ?? null,
       discordUrl: input.replyUrl,
-      error: input.status === "failed"
+      error: input.status === "failed",
+      responseStatus: input.responseStatus ?? (input.status === "failed" ? "error" : "ok")
     }
   });
   await input.agentRuntime.updateExecution({
@@ -161,7 +163,8 @@ export async function finishAgentRuntimePromptExecution(input: {
       replyUrl: input.replyUrl,
       responseChars: input.responseContent.length,
       durationMs: input.durationMs,
-      executor: executorName
+      executor: executorName,
+      responseStatus: input.responseStatus ?? (input.status === "failed" ? "error" : "ok")
     }
   });
   await input.agentRuntime.recordEvent({
@@ -175,7 +178,8 @@ export async function finishAgentRuntimePromptExecution(input: {
     metadata: {
       replyMessageId: input.replyMessageId,
       replyUrl: input.replyUrl,
-      executor: executorName
+      executor: executorName,
+      responseStatus: input.responseStatus ?? (input.status === "failed" ? "error" : "ok")
     },
     durationMs: input.durationMs
   });

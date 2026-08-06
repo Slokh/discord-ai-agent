@@ -67,6 +67,7 @@ describe("agent runtime ledger", () => {
       executionId: ref?.executionId,
       traceId: "message",
       status: "succeeded",
+      responseStatus: "partial",
       replyMessageId: "reply",
       replyUrl: "https://discord.com/channels/guild/channel/reply",
       responseContent: "hi",
@@ -81,7 +82,8 @@ describe("agent runtime ledger", () => {
         metadata: expect.objectContaining({
           traceId: "message",
           promptMessageId: "message",
-          executionId: "agent-execution-message"
+          executionId: "agent-execution-message",
+          responseStatus: "partial"
         })
       })
     );
@@ -89,7 +91,7 @@ describe("agent runtime ledger", () => {
       expect.objectContaining({
         executionId: "agent-execution-message",
         status: "succeeded",
-        metadata: expect.objectContaining({ replyMessageId: "reply", durationMs: 42, executor: "nanocodex" })
+        metadata: expect.objectContaining({ replyMessageId: "reply", durationMs: 42, executor: "nanocodex", responseStatus: "partial" })
       })
     );
     expect(agentRuntime.recordEvent).toHaveBeenCalledWith(
@@ -97,7 +99,7 @@ describe("agent runtime ledger", () => {
         eventName: "agent.execution.succeeded",
         traceId: "message",
         durationMs: 42,
-        metadata: expect.objectContaining({ executor: "nanocodex" })
+        metadata: expect.objectContaining({ executor: "nanocodex", responseStatus: "partial" })
       })
     );
   });

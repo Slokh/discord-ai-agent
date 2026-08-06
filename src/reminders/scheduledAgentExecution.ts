@@ -3,7 +3,7 @@ import type { AppConfig } from "../config/env.js";
 import type { AgentRuntimeRepository } from "../db/agentRuntimeRepository.js";
 import type { BudgetRepository } from "../db/budgetRepository.js";
 import type { DeliveryObligationsRepository } from "../db/deliveryObligationsRepository.js";
-import type { DiscordAiAgentRepository, ScheduledReminder } from "../db/repositories.js";
+import type { DiscordAiAgentRepository, ScheduledReminder, ScheduleRunStatus } from "../db/repositories.js";
 import type { JobRuntime } from "../jobs/queue.js";
 import type { OpenRouterClient } from "../models/openrouter.js";
 import type { RngRepository } from "../db/rngRepository.js";
@@ -18,7 +18,13 @@ export type ScheduledAgentRequestRunner = {
     reminder: ScheduledReminder,
     channel: { send: (payload: MessageCreateOptions) => Promise<Message> },
     requesterDisplayName: string,
-  ) => Promise<Message>;
+  ) => Promise<ScheduledAgentExecutionResult>;
+};
+
+export type ScheduledAgentExecutionResult = {
+  message: Message;
+  outcome: ScheduleRunStatus;
+  executionId: string;
 };
 
 export function createScheduledAgentRequestRunner(input: {
@@ -39,11 +45,16 @@ export function createScheduledAgentRequestRunner(input: {
       const identity = scheduledAgentOccurrenceIdentity(reminder);
       const retained = await input.deliveryObligations?.getByExecutionId(identity.executionId).catch(() => undefined);
       if (retained?.state === "delivered" && retained.statusChannelId && retained.statusMessageId) {
+        const execution = await input.agentRuntime?.getExecution({ executionId: identity.executionId }).catch(() => undefined);
         return {
-          id: retained.statusMessageId,
-          channelId: retained.statusChannelId,
-          url: typeof retained.metadata?.replyUrl === "string" ? retained.metadata.replyUrl : "",
-        } as Message;
+          message: {
+            id: retained.statusMessageId,
+            channelId: retained.statusChannelId,
+            url: typeof retained.metadata?.replyUrl === "string" ? retained.metadata.replyUrl : "",
+          } as Message,
+          outcome: recoveredScheduleOutcome(execution),
+          executionId: identity.executionId,
+        };
       }
 
       const requestLogger = logger.child({
@@ -103,9 +114,47 @@ export function createScheduledAgentRequestRunner(input: {
           userDisplayName: requesterDisplayName,
         },
       );
-      return result.message;
+      await input.agentRuntime?.updateExecution({
+        executionId: identity.executionId,
+        metadata: {
+          scheduleId: reminder.reminderId,
+          occurrenceSequence: reminder.occurrenceSequence,
+          scheduledOutcome: result.status,
+        },
+      }).catch((error) => requestLogger.warn({ err: error }, "Failed to project scheduled occurrence outcome"));
+      await input.agentRuntime?.recordEvent({
+        sessionId: identity.sessionId,
+        executionId: identity.executionId,
+        traceId: identity.requestId,
+        kind: result.status === "failed" ? "error" : "status",
+        level: result.status === "failed" ? "error" : result.status === "partial" ? "warn" : "info",
+        eventName: result.status === "failed" ? "schedule.occurrence.failed" : "schedule.occurrence.completed",
+        summary: result.status === "failed"
+          ? "Scheduled agent occurrence failed."
+          : result.status === "partial"
+            ? "Scheduled agent occurrence completed partially."
+            : "Scheduled agent occurrence succeeded.",
+        metadata: {
+          scheduleId: reminder.reminderId,
+          occurrenceSequence: reminder.occurrenceSequence,
+          outcome: result.status,
+          phase: result.status === "failed" ? "failed" : "completed",
+        },
+      }).catch((error) => requestLogger.warn({ err: error }, "Failed to record scheduled occurrence outcome"));
+      return { message: result.message, outcome: result.status, executionId: identity.executionId };
     },
   };
+}
+
+function recoveredScheduleOutcome(
+  execution: { status: string; metadata: Record<string, unknown> } | undefined,
+): ScheduleRunStatus {
+  const projected = execution?.metadata.scheduledOutcome;
+  if (projected === "succeeded" || projected === "partial" || projected === "failed") return projected;
+  const responseStatus = execution?.metadata.responseStatus;
+  if (responseStatus === "partial") return "partial";
+  if (responseStatus === "error" || execution?.status === "failed") return "failed";
+  return "succeeded";
 }
 
 export function scheduledAgentOccurrenceIdentity(reminder: Pick<ScheduledReminder, "reminderId" | "occurrenceSequence">) {

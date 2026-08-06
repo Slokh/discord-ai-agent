@@ -1,7 +1,7 @@
 import { ChannelType, PermissionFlagsBits, type Client, type Message, type MessageCreateOptions } from "discord.js";
 import type { AppConfig } from "../config/env.js";
 import type { AgentRuntimeRepository } from "../db/agentRuntimeRepository.js";
-import type { DiscordAiAgentRepository, ScheduledReminder } from "../db/repositories.js";
+import type { DiscordAiAgentRepository, ScheduledReminder, ScheduleRunStatus } from "../db/repositories.js";
 import type { ReminderWakeup } from "../db/reminderRepository.js";
 import { sendDiscordNotification } from "../discord/responseSink.js";
 import {
@@ -59,26 +59,59 @@ async function deliverReminder(input: {
   });
 
   try {
-    const message = await sendReminder(input.client, input.config, reminder, input.scheduledAgent);
+    const delivery = await sendReminder(input.client, input.config, reminder, input.scheduledAgent);
     const nextScheduledFor = reminder.recurrence
       ? nextReminderOccurrence(reminder.recurrence, reminder.timezone, new Date(), reminder.scheduledFor)
       : undefined;
-    const saved = await input.repo.markReminderDelivered({
+    const saved = await input.repo.completeReminderOccurrence({
       reminderId: reminder.reminderId,
-      channelId: message.channelId,
-      messageId: message.id,
+      channelId: delivery.message.channelId,
+      messageId: delivery.message.id,
+      outcome: delivery.outcome,
+      executionId: delivery.executionId,
       nextScheduledFor,
     });
+    if (saved?.autoPausedAt && !reminder.autoPausedAt) {
+      await sendDiscordNotification({
+        channel: delivery.channel,
+        content: `<@${reminder.requesterId}> I paused schedule \`${reminder.reminderId}\` after ${saved.consecutiveFailures} failed runs. Ask me to resume it when you’re ready.`,
+        mentionUserId: reminder.requesterId,
+        deliveryKey: `schedule-auto-paused:${reminder.reminderId}:${reminder.occurrenceSequence}`,
+        maxChars: input.config.maxReplyChars,
+        logger,
+      }).catch(async (error) => {
+        logger.warn({ err: error, reminderId: reminder.reminderId }, "Failed to notify requester about auto-paused schedule");
+        await recordBackgroundJobEvent(runtime, {
+          eventName: "schedule.auto_pause_notification.failed",
+          summary: "Could not deliver the schedule auto-pause notification.",
+          level: "warn",
+          metadata: { reminderId: reminder.reminderId },
+        }).catch(() => undefined);
+      });
+    }
     await recordBackgroundJobEvent(runtime, {
       eventName: "reminder.delivery.sent",
       summary: "Scheduled reminder delivered",
-      metadata: { reminderId: reminder.reminderId, channelId: message.channelId, messageId: message.id, deliveryKind: reminder.deliveryKind },
+      metadata: {
+        reminderId: reminder.reminderId,
+        channelId: delivery.message.channelId,
+        messageId: delivery.message.id,
+        deliveryKind: reminder.deliveryKind,
+        outcome: delivery.outcome,
+        autoPaused: Boolean(saved?.autoPausedAt),
+      },
       durationMs: durationMs(startedAt),
     });
     await finishBackgroundJobRuntime(runtime, {
       status: "succeeded",
       summary: "Scheduled reminder delivered.",
-      metadata: { reminderId: reminder.reminderId, messageId: message.id, deliveryKind: reminder.deliveryKind },
+      metadata: {
+        reminderId: reminder.reminderId,
+        messageId: delivery.message.id,
+        deliveryKind: reminder.deliveryKind,
+        outcome: delivery.outcome,
+        autoPaused: Boolean(saved?.autoPausedAt),
+      },
       durationMs: durationMs(startedAt),
     });
     return saved?.status === "scheduled"
@@ -116,7 +149,12 @@ async function sendReminder(
   config: AppConfig,
   reminder: ScheduledReminder,
   scheduledAgent?: ScheduledAgentRequestRunner,
-): Promise<Message> {
+): Promise<{
+  message: Message;
+  outcome: ScheduleRunStatus;
+  executionId: string | null;
+  channel: { send: (payload: MessageCreateOptions) => Promise<Message> };
+}> {
   if (!client.isReady()) throw new Error("discord_client_not_ready");
   let channel;
   try {
@@ -151,13 +189,17 @@ async function sendReminder(
   }
   if (reminder.deliveryKind === "agent") {
     if (!scheduledAgent) throw new Error("scheduled_agent_unavailable");
-    return scheduledAgent.execute(
+    const result = await scheduledAgent.execute(
       reminder,
       channel as unknown as { send: (payload: MessageCreateOptions) => Promise<Message> },
       requester.displayName ?? requester.user.username,
     );
+    return {
+      ...result,
+      channel: channel as unknown as { send: (payload: MessageCreateOptions) => Promise<Message> },
+    };
   }
-  return sendDiscordNotification({
+  const message = await sendDiscordNotification({
     channel: channel as unknown as { send: (payload: MessageCreateOptions) => Promise<Message> },
     content: `<@${reminder.requesterId}> reminder: ${reminder.reminderText}`,
     mentionUserId: reminder.requesterId,
@@ -165,6 +207,12 @@ async function sendReminder(
     maxChars: config.maxReplyChars,
     logger,
   });
+  return {
+    message,
+    outcome: "succeeded",
+    executionId: null,
+    channel: channel as unknown as { send: (payload: MessageCreateOptions) => Promise<Message> },
+  };
 }
 
 class TerminalReminderDeliveryError extends Error {}

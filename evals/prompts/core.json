@@ -294,6 +294,15 @@
       "notes": "A recurring request for fresh work should use the unified scheduler in agent mode rather than creating a literal static reminder."
     },
     {
+      "id": "scheduled-agent-latest-health",
+      "category": "memory",
+      "prompt": "what happened with my morning summary schedule?",
+      "expectedTools": [
+        "listMyReminders"
+      ],
+      "notes": "Natural schedule-health questions should use the requester-scoped schedule list, whose result includes recent outcomes and authorized result links."
+    },
+    {
       "id": "toolscope-spotify-oblique-music",
       "category": "spotify",
       "prompt": "who shows up the most on this playlist? https://open.spotify.com/playlist/abc123",

@@ -12,6 +12,7 @@ import {
   revisionQualityDetectionInputs,
 } from "../src/observability/revisionQuality.js";
 import { qualityCohortIdentityFromMetadata, runtimeVersionMetadata } from "../src/observability/runtimeVersions.js";
+import { collectScheduleHealthObservation, scheduleHealthDetectionInputs } from "../src/observability/scheduleHealth.js";
 
 const config = loadConfig();
 const revision = argument("--revision") ?? config.appRevision;
@@ -24,6 +25,7 @@ try {
     : await findRevisionQualityCohort(pool, revision);
   const observation = await collectRevisionQualityObservation(pool, revision, hours, currentCohort);
   const quality = observation.quality;
+  const scheduleObservation = await collectScheduleHealthObservation(pool, revision, hours);
   const baselineTarget = process.argv.includes("--compare") && currentCohort
     ? await findBaselineQualityCohort(pool, currentCohort, hours)
     : null;
@@ -31,7 +33,11 @@ try {
     ? await collectRevisionQuality(pool, baselineTarget.revision, hours, baselineTarget.cohort)
     : null;
   const assessment = assessRevisionQuality(quality, baseline);
-  const detectionInputs = revisionQualityDetectionInputs(quality, assessment, observation.failureClusters);
+  const qualityDetectionInputs = revisionQualityDetectionInputs(quality, assessment, observation.failureClusters);
+  const detectionInputs = [
+    ...qualityDetectionInputs,
+    ...scheduleHealthDetectionInputs(scheduleObservation.health, scheduleObservation.privateIssues),
+  ];
   let detection: Record<string, unknown> | null = null;
   let verification: Record<string, unknown> | null = null;
   const repo = createAppDatabase(pool);
@@ -60,7 +66,7 @@ try {
         runKey: quality.generatedAt,
         presentFailureReferences: [...new Set([
           ...quality.failureClusters.map((cluster) => cluster.reference),
-          ...detectionInputs.map((input) => input.stableCode),
+          ...qualityDetectionInputs.map((input) => input.stableCode),
         ])],
         clusterAbsenceStatus: assessment.sample.answersRemaining === 0 && assessment.sample.toolCallsRemaining === 0
           ? "passed"
@@ -88,6 +94,7 @@ try {
     ...quality,
     assessment,
     baseline: baseline ? { ...baseline, assessment: assessRevisionQuality(baseline) } : null,
+    scheduleHealth: scheduleObservation.health,
     detection,
     verification,
   }, null, 2)}\n`);

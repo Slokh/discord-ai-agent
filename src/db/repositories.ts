@@ -25,7 +25,7 @@ export type * from "./types.js";
 export type { DiscordEmojiCultureProfile, DiscordEmojiUsageExample } from "./discordEmojiUsageRepository.js";
 export type { GuildAgentSettings } from "./agentSettingsRepository.js";
 export type { UserPreference } from "./userPreferenceRepository.js";
-export type { ScheduledReminder, ReminderDeliveryKind, ReminderStatus } from "./reminderRepository.js";
+export type { ScheduledReminder, ReminderDeliveryKind, ReminderStatus, ScheduleRunStatus } from "./reminderRepository.js";
 
 type PoolFunction = (pool: DbPool, ...args: any[]) => any;
 type BoundRepository<T extends Record<string, unknown>> = {

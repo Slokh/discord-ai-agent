@@ -10,14 +10,13 @@ permissions:
   contents: read
   id-token: write
 
-concurrency:
-  group: production-observation
-  # The watchdog itself is a liveness proof producer.  A later schedule must
-  # not cancel the run that is responsible for recording that receipt.
-  cancel-in-progress: false
-
 jobs:
   improvement-watchdog:
+    # Do not let the slower six-hour observation job delay the watchdog past
+    # its liveness budget. Watchdog runs are idempotent by GitHub run key.
+    concurrency:
+      group: improvement-watchdog
+      cancel-in-progress: false
     if: vars.AWS_REGION != '' && vars.EKS_CLUSTER_NAME != ''
     runs-on: ubuntu-latest
     env:
@@ -56,6 +55,9 @@ jobs:
           retention-days: 14
 
   revision-quality:
+    concurrency:
+      group: production-revision-quality
+      cancel-in-progress: false
     if: >-
       vars.AWS_REGION != '' && vars.EKS_CLUSTER_NAME != '' &&
       (github.event_name == 'workflow_dispatch' || github.event.schedule == '17 */6 * * *')

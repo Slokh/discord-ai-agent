@@ -57,7 +57,7 @@ export function renderImprovementBotUpdate(update: ImprovementBotUpdate) {
   } else if (update.caseStatus === "dismissed") {
     content = `${producer} health incident was assessed and closed without a code change.`;
   } else if (update.caseStatus === "verifying") {
-    content = `A repair for ${producer.toLowerCase()} has shipped. Recovery is being verified in production.`;
+    content = `${producer} was updated and is checking its recovery in production.`;
   } else if (update.caseStatus === "in_progress" || update.caseStatus === "actionable") {
     content = `${producer} is unhealthy. An automated repair is queued or in progress; I’ll update this message when recovery is verified.`;
   } else {
@@ -116,7 +116,7 @@ async function deliverImprovementBotUpdate(
 
 function producerLabel(trigger: ImprovementBotUpdate["producerTrigger"]) {
   if (trigger === "improvement_reconciliation") return "The improvement reconciler";
-  if (trigger === "improvement_watchdog") return "The external improvement watchdog";
+  if (trigger === "improvement_watchdog") return "The automated monitor for the improvement system";
   return `The ${trigger.replaceAll("_", " ")} proof producer`;
 }
 

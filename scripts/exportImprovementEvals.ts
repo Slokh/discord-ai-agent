@@ -4,7 +4,7 @@ import { loadConfig } from "../src/config/env.js";
 import { createPool } from "../src/db/pool.js";
 import type { ImprovementContractCheck } from "../src/db/types.js";
 import { PRIVATE_REPLAY_MUTATING_TOOL_NAMES } from "../src/improvements/proofAdapters.js";
-import { improvementContractAssertions, improvementContractReplaySkipReason } from "../src/observability/improvementContractReplay.js";
+import { hasFaithfulPrivateReplayContext, improvementContractAssertions, improvementContractReplaySkipReason } from "../src/observability/improvementContractReplay.js";
 
 const outputPath = path.resolve(process.argv[2] ?? ".discord-ai-agent/evals/improvement-contracts.json");
 const pool = createPool(loadConfig());
@@ -13,13 +13,19 @@ try {
     SELECT case_row.case_id, case_row.classification, contract.contract_id, contract.version, contract.expected_behavior, contract.checks,
            contract.source_revision, contract.created_at,
            replay.execution_id, replay.guild_id, replay.channel_id, replay.user_id,
-           replay.request, replay.visible_channel_ids
+           replay.request, replay.visible_channel_ids, replay.request_kind,
+           replay.reply_context, replay.request_attachments, replay.request_embeds, replay.interaction
     FROM improvement_contracts contract
     JOIN improvement_cases case_row ON case_row.case_id = contract.case_id
     JOIN LATERAL (
       SELECT candidate.execution_id, candidate.guild_id, candidate.channel_id, candidate.reporter_id AS user_id,
              coalesce(nullif(turn.envelope->>'text', ''), nullif(session.request, '')) AS request,
-             turn.envelope->'visibleChannelIds' AS visible_channel_ids
+             turn.envelope->'visibleChannelIds' AS visible_channel_ids,
+             coalesce(nullif(turn.envelope->>'requestKind', ''), 'message') AS request_kind,
+             turn.envelope->'replyContext' AS reply_context,
+             turn.envelope->'requestAttachments' AS request_attachments,
+             turn.envelope->'requestEmbeds' AS request_embeds,
+             turn.envelope->'interaction' AS interaction
       FROM improvement_signals candidate
       JOIN agent_runtime_executions execution ON execution.execution_id = candidate.execution_id
       JOIN agent_runtime_sessions session ON session.session_id = execution.session_id
@@ -54,7 +60,14 @@ try {
     const hasAssertion = Object.values(assertions).some((values) => values.length > 0);
     if (!hasAssertion) return [];
     const hasReplayScope = Boolean(row.guild_id && row.channel_id && row.user_id && visibleChannelIds.length > 0);
-    const skipReason = improvementContractReplaySkipReason({ hasAssertion, hasReplayScope });
+    const hasReplayableContext = hasFaithfulPrivateReplayContext({
+      requestKind: row.request_kind,
+      replyContext: row.reply_context,
+      requestAttachments: row.request_attachments,
+      requestEmbeds: row.request_embeds,
+      interaction: row.interaction,
+    });
+    const skipReason = improvementContractReplaySkipReason({ hasAssertion, hasReplayScope, hasReplayableContext });
     return [{
       id: `improvement-${safeId(String(row.case_id))}-v${Number(row.version)}`,
       category: String(row.classification),

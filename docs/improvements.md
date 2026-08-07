@@ -55,7 +55,7 @@ Privacy deletion removes reporter-owned signals, orphaned conversation projectio
 
 The allowed states are `open`, `needs_evidence`, `actionable`, `in_progress`, `verifying`, `resolved`, and `dismissed`.
 
-- `actionable` requires supporting evidence and an active contract whose checks all have registered proof adapters. Private-replay checks additionally require retained requester, channel, prompt, visible-channel scope, and an original execution with no mutating tool use.
+- `actionable` requires supporting evidence and an active contract whose checks all have registered proof adapters. Private-replay checks additionally require retained requester, channel, prompt, visible-channel scope, and an original execution with no mutating tool use. The exported replay runs only when the original input is a standalone text message; reply context, attachments, embeds, interactions, and other inputs the prompt runner cannot reconstruct are skipped as inconclusive instead of being evaluated against a different request.
 - Work starts only from `actionable`, and a case has at most one active work attempt. Enqueue failure or a pull request closed without merging restores `actionable`.
 - Successful linked work moves to `verifying`; failed, cancelled, or no-diff work returns to `actionable`.
 - `resolved` requires a passed receipt for the active contract on an exact durable deployment. The receipt, supporting `deployment_verification` evidence, event, and transition are written atomically.

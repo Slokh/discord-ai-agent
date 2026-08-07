@@ -4,15 +4,16 @@ This guide is the system map. It explains the deployed processes, request lifecy
 
 ## System shape
 
-The application is TypeScript on Node.js 22 with Postgres, pgvector, Discord, OpenRouter, and the embedded NanoCodex runtime. One executable supports three roles:
+The application is TypeScript on Node.js 22 with Postgres, pgvector, Discord, OpenRouter, and the embedded NanoCodex runtime. One executable supports four roles:
 
 | Role | Owns |
 | --- | --- |
 | `bot` | Discord gateway events, ingress, reactions, delivery, component interactions, deployment announcements, and task notifications |
 | `worker` | Agent executions, crawl and embedding jobs, reminder and scheduled-request delivery, code-update jobs, reconciliation, compaction, and retention |
 | `api` | Internal signed sandbox callbacks and health probe |
+| `console` | Private read-only operator dashboard and health probe |
 
-`all` starts all roles for a fully configured single-process environment. Production normally splits them. Chat requires the bot plus a worker with agent-runtime work enabled. Code updates also require task work and the API callback surface.
+`all` starts all roles for a fully configured single-process environment. Production normally splits them. Chat requires the bot plus a worker with agent-runtime work enabled. Code updates also require task work and the API callback surface. The console reads Postgres but does not start queues, Discord, model, or mutation capabilities.
 
 ```text
 Discord message
@@ -54,6 +55,7 @@ Large entry points remain coordinators. Focused mechanics live beside them: keye
 - NanoCodex is the only agent engine. Chat runs in the application; only repository changes enter a sandbox.
 - `agent_runtime_*` is the canonical execution ledger for chat, code-update attempts, and durable background jobs.
 - Discord delivery obligations describe what still needs to be rendered; they are not a second execution ledger.
+- Service heartbeats are an expiring current-liveness projection. They do not duplicate runtime or improvement event history.
 - The model receives one stable tool schema narrowed only by each contract's declarative deployment-availability predicate. It chooses tools directly.
 - `src/agent/` is capability-agnostic. Installed product behavior enters through the capability session, tool contracts, and tool handlers rather than feature imports or tool-name branches in the model loop.
 - Every tool call is revalidated against its canonical schema, current deployment, requester scope, and access policy.
@@ -119,6 +121,7 @@ See [Code updates](code-updates.md) for publication and sandbox details.
 | Typed per-user preferences | `userPreferenceRepository.ts` plus capability-owned key validators |
 | Scheduled notification/agent state, claims, and delivery identity | `reminderRepository.ts` and `src/reminders/` |
 | Unified improvement lifecycle and automation liveness | `improvementRepository.ts`, `improvementWorkRepository.ts`, `improvementVerificationRepository.ts`, `improvementProofProducerRepository.ts`, `improvementBotUpdateRepository.ts`, and `src/improvements/` |
+| Current process liveness and operator overview | `serviceHeartbeatRepository.ts`, `operatorDashboardRepository.ts`, and `src/console/` |
 
 `src/db/repositories.ts` composes the focused repository functions with one pool. It contains only cross-repository lifecycle coordination; SQL stays in the focused owner.
 
@@ -134,6 +137,7 @@ See [Code updates](code-updates.md) for publication and sandbox details.
 | Discord ingress and delivery | `src/discord/client.ts`, `messageIngress.ts`, `agentDelivery.ts`, `responseSink.ts` | Discord client/delivery/response-sink tests |
 | Discord data and retrieval | `src/discord/crawler.ts`, `src/db/*Repository.ts`, `src/memory/`, retrieval tools | crawler/search/tool tests and DB integration tests |
 | Sandbox callback receiver | `src/execution/callbackServer.ts`, `src/execution/callbacks.ts` | sandbox callback tests |
+| Private operator console | `src/console/server.ts`, `src/db/operatorDashboardRepository.ts`, `src/runtime/serviceHeartbeat.ts` | console API/UI unit tests and dashboard DB projection tests |
 | Queue ownership | `src/jobs/queue.ts`, `agentTaskEnqueue.ts` | queue unit tests and `tests/integration/jobs-db.test.ts` |
 | Schedule lifecycle | `src/tools/contracts/reminders.ts`, `src/tools/reminderTools.ts`, `src/db/reminderRepository.ts`, `src/reminders/reminderDelivery.ts`, `scheduledAgentExecution.ts`, `src/jobs/reminderJobs.ts` | schedule tool/delivery/execution tests and reminder/jobs DB integration tests |
 | Code-update execution | `src/execution/backend.ts`, `runnerPipeline.ts`, `repoWorkspace.ts` | sandbox runner, backend, callback, and task tests |

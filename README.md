@@ -27,6 +27,7 @@ The design is model-led and code-governed: the model owns language, relevance, t
 - Bounded document, archive, image, audio, video, and generated-data inspection
 - Image generation and Discord Components V2 presentation
 - Unified private improvement cases from member, agent, operator, and runtime signals
+- Private operator dashboard for live services, prompts, code work, improvements, and releases
 - Optional Spotify catalog tools
 - Optional Privy/Tempo managed wallets, transfers, wagers, and provable RNG
 - Sandboxed repository changes with verification, release scanning, and PR publication
@@ -90,6 +91,8 @@ npm run worker
 ```
 
 The bot accepts requests and delivers results; the worker executes queued chat turns. Start `npm run api` only when code-update sandbox callbacks are enabled.
+
+Run `npm run console` for the deployed private production dashboard, or `npm run console:dev` to restart and automatically reload the branch's local UI on edits while it reads the live production snapshot. Both workflows stay on loopback through Kubernetes. Use `npm run console:local` only when intentionally developing against local data; never publish the console as a public endpoint.
 
 ## Index Discord history
 

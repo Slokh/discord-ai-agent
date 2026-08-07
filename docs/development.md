@@ -24,6 +24,14 @@ npm run improve -- --target local show <case-id>
 
 The CLI requires `--target local|production`; production additionally requires `--confirm-production`. Run it only in the environment whose configured database you intend to inspect. Production images omit npm, so invoke `node dist/scripts/improve.js --target production --confirm-production <command>` inside a configured application pod.
 
+For dashboard presentation work, keep production as the data plane while serving the branch's UI locally:
+
+```bash
+npm run console:dev
+```
+
+This command restarts the branch's local page, styles, and client server on edits at `http://127.0.0.1:8081`, then reloads connected browser tabs through a development-only same-origin event stream. `/api/snapshot` is streamed in memory from the deployed console through a separate loopback-only Kubernetes tunnel. The launcher completes a readiness request and then explicitly warms one persistent production connection before opening the local UI; the Console's keep-alive window remains longer than its refresh interval so tunnel and database connection setup do not recur on each poll. Application heartbeats remain authoritative; during deployment skew before heartbeat storage exists, development mode explicitly falls back to current Kubernetes deployment readiness instead of presenting unknown services as unhealthy. The workflow does not copy the production database credential or persist the snapshot locally. Use `npm run console:local` when the data projection itself needs local migrations or fixtures; add new production projection fields through a reviewed deployment before depending on them in the local UI.
+
 ## Find the owner
 
 Map the observed failure to one owner before editing:

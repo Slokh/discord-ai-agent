@@ -6,7 +6,7 @@ import {
 } from "../../scripts/releaseStatus.js";
 
 const kubernetesPayload = {
-  items: ["api", "bot", "worker"].flatMap((component) => [{
+  items: ["api", "bot", "worker", "console"].flatMap((component) => [{
     kind: "Deployment",
     metadata: { name: `discord-ai-agent-${component}` },
     spec: {
@@ -34,6 +34,7 @@ describe("release status", () => {
     expect(deploymentsFromKubernetes(kubernetesPayload)).toEqual([
       expect.objectContaining({ name: "discord-ai-agent-api", revision: "revision-a", ready: 1, desired: 1 }),
       expect.objectContaining({ name: "discord-ai-agent-bot", revision: "revision-a", ready: 1, desired: 1 }),
+      expect.objectContaining({ name: "discord-ai-agent-console", revision: "revision-a", ready: 1, desired: 1 }),
       expect.objectContaining({ name: "discord-ai-agent-worker", revision: "revision-a", ready: 1, desired: 1 }),
     ]);
   });

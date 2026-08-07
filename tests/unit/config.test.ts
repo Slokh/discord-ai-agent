@@ -12,6 +12,7 @@ describe("config", () => {
         embeddingDimensions: 1536,
         github: expect.objectContaining({ repository: productConfig.github.repository, baseBranch: "main" }),
         callbackServer: { host: "0.0.0.0", port: 8080 },
+        consoleServer: { host: "0.0.0.0", port: 8081 },
         discordAgentResponseTimeoutMs: 1_800_000,
         agentPromptMaxConcurrency: 4
       }));

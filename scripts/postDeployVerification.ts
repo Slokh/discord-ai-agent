@@ -166,7 +166,7 @@ async function runCli() {
       });
     },
     verifyCapabilities: async () => {
-      for (const component of ["api", "bot", "worker"]) {
+      for (const component of ["api", "bot", "worker", "console"]) {
         command("kubectl", ["--namespace", args.namespace, "rollout", "status", `deployment/${args.release}-${component}`, "--timeout=2m"]);
       }
       const allowed = command("kubectl", [

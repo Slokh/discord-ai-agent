@@ -72,7 +72,8 @@ describe("improvement triage", () => {
         listEvents: async () => ([
           { id: 1, level: "warn", eventName: "agent.tool.complete", metadata: { callId: "call-a", toolName: "web", status: "error" }, summary: "private failed output" },
           { id: 2, level: "info", eventName: "agent.tool.complete", metadata: { callId: "call-a", toolName: "web", status: "ok" }, summary: "private recovered output" },
-          { id: 3, level: "error", eventName: "agent.delivery.failed", metadata: {}, summary: "private Discord content" },
+          { id: 3, level: "warn", eventName: "agent.tool.complete", metadata: { callId: "call-b", toolName: "web", status: "error" }, summary: "private separate failed output" },
+          { id: 4, level: "error", eventName: "agent.delivery.failed", metadata: {}, summary: "private Discord content" },
         ] as never),
       },
       deliveries: { getByExecutionId: async () => ({ state: "abandoned" } as never) },
@@ -81,12 +82,12 @@ describe("improvement triage", () => {
     expect(observations).toEqual([{
       executionId: "execution-a",
       status: "succeeded",
-      warningEvents: 1,
+      warningEvents: 2,
       errorEvents: 1,
-      failedToolCalls: 0,
+      failedToolCalls: 1,
       deliveryState: "abandoned",
       durationMs: 1250,
-      failureEventNames: ["agent.delivery.failed"],
+      failureEventNames: ["agent.delivery.failed", "agent.tool.complete"],
     }]);
     expect(JSON.stringify(observations)).not.toContain("private");
   });

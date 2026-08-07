@@ -165,6 +165,37 @@ describe("NanoCodex agent runtime executor", () => {
     }));
   });
 
+  it("does not deliver a purported summary after web research has no usable evidence", async () => {
+    const runtime = agentRuntime();
+    const runRuntime = vi.fn(async (input: any) => {
+      await input.executeTool({
+        callId: "call-1",
+        name: "web__run",
+        arguments: { operations: [{ kind: "open", refId: "https://example.com/video" }] },
+      });
+      return result("Here is a high-level summary based on its preview.");
+    });
+
+    const response = await executeNanoCodexAgentRuntime({
+      toolContext: toolContext(runtime),
+      text: "summarize this video",
+      timeoutMs: 1_000,
+      runRuntime: runRuntime as never,
+      executeToolRoute: (async () => ({
+        content: "The requested content could not be retrieved.",
+        status: "error" as const,
+        errorCode: "external_evidence_missing",
+        retryable: true,
+      })) as never,
+    });
+    expect(response).toMatchObject({
+      content: expect.stringContaining("could not be verified"),
+      status: "error",
+      errorCode: "external_evidence_missing",
+    });
+    expect(response.content).not.toContain("high-level summary based on its preview");
+  });
+
   it("starts fresh from legacy checkpoints whose resume contract is unavailable", async () => {
     const runtime = agentRuntime();
     runtime.getLatestBinaryArtifactForSession.mockResolvedValue({

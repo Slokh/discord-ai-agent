@@ -27,6 +27,7 @@ import { prepareUserTimezoneCapability } from "./userTimezone.js";
 import { imageContextPromptContribution } from "./imageContext.js";
 import { prepareRandomGameCapability } from "./randomGames.js";
 import { prepareScheduledRequestCapability } from "./scheduledRequests.js";
+import { ExternalResearchCapability } from "./externalResearch.js";
 
 export type CapabilityId = keyof typeof TOOL_NAMES_BY_CAPABILITY;
 
@@ -142,6 +143,14 @@ const declarations: readonly CapabilityDeclaration[] = ([
     id: "externalResearch",
     summary: "Current public-web search, time, and page retrieval through the configured provider.",
     toolNames: TOOL_NAMES_BY_CAPABILITY.externalResearch,
+    prepareTurn: (ctx) => {
+      const research = new ExternalResearchCapability(ctx);
+      return {
+        promptContributions: [],
+        observeToolResult: (toolName, result) => research.observeToolResult(toolName, result),
+        finalizeResponse: (response) => research.finalizeResponse(response),
+      };
+    },
   },
 ] satisfies readonly CapabilityDeclaration[]).map(defineCapability);
 

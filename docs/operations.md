@@ -43,6 +43,14 @@ npm run worker
 
 The bot handles gateway ingress and delivery. The worker executes queued chat requests. Start `npm run api` only to receive signed callbacks from isolated code-update sandboxes. `npm run start:all` is intended only for a fully configured built environment.
 
+Start the read-only operator dashboard against local data only when intentionally working on its data projection or fixtures:
+
+```bash
+npm run console:local
+```
+
+It listens on port 8081 and needs only the database. Its overview includes bounded private prompt previews, so treat it as an operator surface rather than a public application endpoint.
+
 ## Configuration ownership
 
 `.env.example` and [Configuration](configuration.md) are generated from the accepted manifest in `src/config/environment.ts`. `src/config/env.ts` separates those deployment inputs from versioned `productConfig`. Environment variables are reserved for credentials, private Discord identity/policy, release metadata, Kubernetes namespace, and the immutable sandbox image. Model choices, limits, repository target, queue topology, callback URL, and payment rail change through reviewed source. Production startup rejects retired variables; run `npm run config:check` whenever the manifest changes.
@@ -110,6 +118,14 @@ kubectl -n discord-ai-agent exec deploy/discord-ai-agent-worker -- node dist/scr
 ```
 
 The API role is an internal-only signed callback receiver. It exposes only `/healthz` and task-scoped callback writes from isolated code-update sandboxes; it has no operator reads, metrics, browser UI, public service, or password configuration.
+
+The separate console role exposes `/`, `/activity/<kind>/<story-id>`, static same-origin assets, `/api/snapshot`, lazy `/api/activity/<kind>/<story-id>` detail data, and `/healthz`. Every application component writes a 15-second Postgres heartbeat; the console considers a component live for 45 seconds and derives every other view from the canonical runtime, task, improvement, proof-producer, and deployment tables. One compact top bar summarizes identity, freshness, health, proof producers, releases, and attention while exposing transient detail on hover or focus. Below it, an independently scrollable Activity sidebar and detail workspace form one master-detail surface with All, Active, Waiting, Blocked, Failures, and System filters; the attention count selects Blocked rather than opening a second work queue. Activity is projected as operator stories rather than raw events: each prompt uses its execution-time title, execution result, and authoritative Discord delivery obligation; reply-originated prompts carry a boolean parent marker derived from the retained source message while top-level prompts remain unmarked; code tasks include their runtime and pull request; every open improvement remains in the projection regardless of the recent-event window; and verified releases are first-class stories. Synthetic prompt executions and `post-deploy-canary` tasks are excluded from the Activity projection without removing their runtime records, rollout evidence, or improvement proofs. Linked improvement repair work folds into its case instead of creating a duplicate story. Repeated successful background runs are rolled up by job kind behind the System filter while failures remain individually visible. Filter counts, collapsed latency, selected-row state, and stable refresh anchoring keep the index compact. Selecting a story updates browser history and fetches its detail projection in place without reloading or losing the sidebar; direct story URLs hydrate both panes, and narrow screens switch between list and detail with a back control. The five-second refresh is single-flight and rerenders only projections whose data changed. Overlapping HTTP reads share only the currently running projection; no completed snapshot is retained. The overview snapshot selects one latest event per story and omits lifecycle, run, and technical-event arrays. Initial projections render behind an accessible, non-interactive split-pane skeleton and reveal only after their complete first paint, preventing load-time geometry changes from shifting visible content. The selected detail separates lifecycle, facts, trusted Discord/GitHub links, individual system runs, and technical events. Prompt detail lazily reconstructs at most 24 archived Discord ancestors and joins them to the execution-scoped current prompt and final assistant reply; its Discord-like Context view includes attachment metadata, exact timestamp links, and exact runtime fallback for deleted bot replies while privacy-cleared member content remains unavailable. The overview snapshot never carries the chain or detail-only event history. Story pagination happens before event expansion so one noisy execution cannot crowd out unrelated work. The HTTP surface is GET-only, ships a restrictive content-security policy, and has no Kubernetes Ingress. In production, open it through a trusted local tunnel:
+
+```bash
+npm run console
+```
+
+Then visit `http://127.0.0.1:8081`. The launcher verifies that the production service exists, establishes a loopback-only Kubernetes tunnel, and rejects snapshots that are not explicitly marked production with the supported schema version. Do not expose the ClusterIP through a public load balancer: active request previews are intentionally private operator data. Full transcripts and artifacts remain available only through the existing authorized production-debug workflow.
 
 `release:status` is the single safe release view. It combines an explicitly requested PR (or the current non-main branch), Helm release state, role images/readiness/revisions, current-pod restart counts, the matching deployment workflow, and the deployed revision-quality assessment. Running it from `main` intentionally omits PR evidence without producing a warning. It uses the same typed deployment-health evaluator as CI and exits nonzero for failed checks, deployment failure, role drift, incomplete rollout, restarted current pods, stale active execution/task work, or a failed quality gate; unavailable evidence is reported explicitly rather than guessed.
 
@@ -218,6 +234,7 @@ kubectl -n discord-ai-agent get pods
 kubectl -n discord-ai-agent logs deploy/discord-ai-agent-api
 kubectl -n discord-ai-agent logs deploy/discord-ai-agent-bot
 kubectl -n discord-ai-agent logs deploy/discord-ai-agent-worker
+kubectl -n discord-ai-agent logs deploy/discord-ai-agent-console
 ```
 
 The chart runs migrations as a hook; production application pods never run migrations on startup. Commit-tagged application and sandbox images are built once and promoted; the deployment workflow must not rebuild a different artifact.

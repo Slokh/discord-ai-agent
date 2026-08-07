@@ -3,9 +3,11 @@ import { AgentRuntimeRepository } from "../db/agentRuntimeRepository.js";
 import { BudgetRepository } from "../db/budgetRepository.js";
 import { DeliveryObligationsRepository } from "../db/deliveryObligationsRepository.js";
 import { PaymentRepository } from "../db/paymentRepository.js";
+import { OperatorDashboardRepository } from "../db/operatorDashboardRepository.js";
 import { createPool } from "../db/pool.js";
 import { createAppDatabase } from "../db/repositories.js";
 import { RngRepository } from "../db/rngRepository.js";
+import { ServiceHeartbeatRepository } from "../db/serviceHeartbeatRepository.js";
 import { OpenRouterClient } from "../models/openrouter.js";
 import { PrivyTempoWalletProvider } from "../payments/privyTempoWalletProvider.js";
 import { WalletService } from "../payments/walletService.js";
@@ -23,6 +25,8 @@ export function createApplicationServices(input: {
   const rng = new RngRepository(pool);
   const payments = new PaymentRepository(pool);
   const deliveryObligations = new DeliveryObligationsRepository(pool);
+  const operatorDashboard = new OperatorDashboardRepository(pool);
+  const serviceHeartbeats = new ServiceHeartbeatRepository(pool);
   const openRouter = new OpenRouterClient(config.openRouter);
   const walletProvider = input.enableWalletRuntime && config.payments.walletEnabled
     ? new PrivyTempoWalletProvider({
@@ -43,6 +47,8 @@ export function createApplicationServices(input: {
     rng,
     payments,
     deliveryObligations,
+    operatorDashboard,
+    serviceHeartbeats,
     openRouter,
     wallet,
     close: () => pool.end(),

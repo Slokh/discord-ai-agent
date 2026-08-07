@@ -4,7 +4,7 @@ import { z } from "zod";
 import { parseGitHubRepository } from "../github/repository.js";
 import { assertNoRetiredEnvironmentVariables, environmentVariableNames } from "./environment.js";
 
-type ProcessRole = "all" | "api" | "bot" | "worker";
+type ProcessRole = "all" | "api" | "bot" | "worker" | "console";
 const PUBLIC_REPOSITORY_URL = "https://github.com/Slokh/discord-ai-agent";
 
 /**
@@ -36,6 +36,7 @@ export const productConfig = {
     port: 8_080,
     internalUrl: "http://discord-ai-agent-api:8080"
   },
+  console: { host: "0.0.0.0", port: 8_081 },
   sandbox: {
     namespace: "discord-ai-agent",
     image: "discord-ai-agent-sandbox:latest",
@@ -167,6 +168,7 @@ export function loadConfig(argv = process.argv) {
       appInstallationId: env.GITHUB_APP_INSTALLATION_ID
     },
     callbackServer: { host: productConfig.callback.host, port: productConfig.callback.port },
+    consoleServer: { host: productConfig.console.host, port: productConfig.console.port },
     execution: {
       taskSigningSecret: env.TASK_SIGNING_SECRET,
       sandbox: { taskTimeoutSeconds: productConfig.sandbox.taskTimeoutSeconds },
@@ -227,7 +229,7 @@ export function loadConfig(argv = process.argv) {
 }
 
 function processRoleFromArgs(argv = process.argv): ProcessRole {
-  return argv.find((arg): arg is ProcessRole => arg === "all" || arg === "api" || arg === "bot" || arg === "worker") ?? "bot";
+  return argv.find((arg): arg is ProcessRole => ["all", "api", "bot", "worker", "console"].includes(arg)) ?? "bot";
 }
 
 function defaultDatabaseUrl() {

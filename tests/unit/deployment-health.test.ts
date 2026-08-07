@@ -9,6 +9,7 @@ describe("deployment health", () => {
         { component: "api", restarts: 0 },
         { component: "bot", restarts: 0 },
         { component: "worker", restarts: 0 },
+        { component: "console", restarts: 0 },
       ],
       issues: [],
     });
@@ -49,7 +50,7 @@ describe("deployment health", () => {
 
 function snapshot() {
   const items: any[] = [];
-  for (const component of ["api", "bot", "worker"]) {
+  for (const component of ["api", "bot", "worker", "console"]) {
     items.push({
       kind: "Deployment",
       metadata: { name: `discord-ai-agent-${component}`, generation: 2 },

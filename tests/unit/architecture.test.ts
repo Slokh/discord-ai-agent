@@ -86,7 +86,10 @@ describe("architecture guardrails", () => {
     expect(observation).toContain("--record-detection");
     expect(observation).toContain('cron: "*/15 * * * *"');
     expect(observation).toContain("dist/scripts/improvementWatchdog.js");
+    expect(observation).toContain("group: improvement-watchdog");
+    expect(observation).toContain("group: production-revision-quality");
     expect(observation).toContain("cancel-in-progress: false");
+    expect(observation).not.toMatch(/^concurrency:\n {2}group: production-observation/m);
     expect(observation).toContain("improvements, detection");
     expect(observation).toContain("verification");
     expect(observation).not.toContain("feedback");

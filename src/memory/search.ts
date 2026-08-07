@@ -145,11 +145,38 @@ export async function searchDiscordHistory(input: {
     ? (async (): Promise<{ vector: SearchResult[]; semanticDegraded: boolean }> => {
       const semanticStartedAt = Date.now();
       try {
-        const embedded = await observeRetrievalStep(input, "retrieval.query_embedding", () => embedQueryCached({
-          openRouter: input.openRouter,
-          config: input.config,
-          query: normalizedQuery
-        }), { queryChars: normalizedQuery.length });
+        const queryEmbedding = await observeRetrievalStep(input, "retrieval.query_embedding", async () => {
+          try {
+            return { embedded: await embedQueryCached({
+              openRouter: input.openRouter,
+              config: input.config,
+              query: normalizedQuery,
+            }) };
+          } catch (error) {
+            return { embedded: undefined, error };
+          }
+        }, { queryChars: normalizedQuery.length });
+        if (queryEmbedding.error) {
+          const dimensions = runtimeErrorDimensions(queryEmbedding.error);
+          logger.warn(
+            {
+              guildId: input.search.guildId,
+              query: normalizedQuery.slice(0, 120),
+              durationMs: durationMs(semanticStartedAt),
+              ...dimensions,
+            },
+            "Semantic history search degraded; returning scoped fallback results",
+          );
+          await observeRetrievalStep(
+            input,
+            "retrieval.query_embedding.degraded",
+            async () => undefined,
+            { queryChars: normalizedQuery.length, ...dimensions },
+          );
+          return { vector: [], semanticDegraded: true };
+        }
+        const embedded = queryEmbedding.embedded;
+        if (!embedded) return { vector: [], semanticDegraded: true };
         const embedding = embedded.embedding;
         if (!embedding) return { vector: [], semanticDegraded: true };
         const vectorLeg = () => observeRetrievalStep(input, "retrieval.vector_sql", () => input.repo.vectorSearch({

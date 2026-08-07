@@ -200,11 +200,13 @@ describe("searchDiscordHistory", () => {
         throw new Error("OpenRouter request timed out after 4000ms (/embeddings).");
       })
     };
+    const observeSpan = vi.fn(async () => undefined);
 
     const { results, semanticDegraded } = await searchDiscordHistory({
       repo: repo as any,
       openRouter: openRouter as any,
       config: { maxHistoryResults: 10, openRouter: { apiKey: "key", embeddingModel: "embed" } } as any,
+      observeSpan,
       search: {
         guildId: "g",
         userVisibleChannelIds: ["c"],
@@ -217,6 +219,19 @@ describe("searchDiscordHistory", () => {
     expect(semanticDegraded).toBe(true);
     expect(openRouter.embed).toHaveBeenCalledTimes(1);
     expect(repo.vectorSearch).not.toHaveBeenCalled();
+    expect(observeSpan).toHaveBeenCalledWith(expect.objectContaining({
+      name: "retrieval.query_embedding",
+      status: "succeeded",
+    }));
+    expect(observeSpan).toHaveBeenCalledWith(expect.objectContaining({
+      name: "retrieval.query_embedding.degraded",
+      status: "succeeded",
+      metadata: expect.objectContaining({ errorKind: "error" }),
+    }));
+    expect(observeSpan).not.toHaveBeenCalledWith(expect.objectContaining({
+      name: "retrieval.query_embedding",
+      status: "failed",
+    }));
   });
 
   it("returns recent messages from the same scope when semantic and keyword matching are unavailable", async () => {

@@ -8,17 +8,18 @@ export const EXTERNAL_EVIDENCE_BLOCKED_RESPONSE =
 /** Prevents a final answer from substituting recall for a failed evidence lookup. */
 export class ExternalResearchCapability {
   private evidenceMissing = false;
+  private hasUsableEvidence = false;
 
   constructor(private readonly ctx: ToolContext) {}
 
   observeToolResult(toolName: ToolName, result: AgentResponse) {
-    if (toolName === "web__run" && result.errorCode === "external_evidence_missing") {
-      this.evidenceMissing = true;
-    }
+    if (toolName !== "web__run") return;
+    if (result.status === "ok" || result.status === "partial") this.hasUsableEvidence = true;
+    if (result.errorCode === "external_evidence_missing") this.evidenceMissing = true;
   }
 
   async finalizeResponse(response: AgentResponse): Promise<AgentResponse> {
-    if (!this.evidenceMissing) return response;
+    if (!this.evidenceMissing || this.hasUsableEvidence) return response;
     await recordAgentEvent(this.ctx, {
       eventName: "agent.external_research.evidence_blocked",
       level: "warn",

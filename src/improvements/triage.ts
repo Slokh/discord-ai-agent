@@ -128,11 +128,15 @@ export async function collectImprovementRuntimeObservations(
       readers.runtime.listEvents({ sessionId: execution.sessionId, executionId, limit: 1_000 }),
       readers.deliveries.getByExecutionId(executionId),
     ]);
+    // A tool can be invoked more than once in an execution.  Keep the terminal
+    // state for each invocation, rather than letting a later call to the same
+    // tool hide an earlier failure.
     const terminalTools = new Map<string, { status: string; eventName: string }>();
     for (const event of events) {
       if (event.eventName !== "agent.tool.complete") continue;
       const toolName = textValue(event.metadata.toolName) ?? "unknown";
-      terminalTools.set(toolName, {
+      const callId = textValue(event.metadata.callId);
+      terminalTools.set(callId ?? `${toolName}:${event.id}`, {
         status: textValue(event.metadata.status) ?? "ok",
         eventName: event.eventName,
       });

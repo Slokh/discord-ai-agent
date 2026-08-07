@@ -12,11 +12,13 @@ permissions:
 
 jobs:
   improvement-watchdog:
-    if: vars.AWS_REGION != '' && vars.EKS_CLUSTER_NAME != ''
-    runs-on: ubuntu-latest
+    # Do not let the slower six-hour observation job delay the watchdog past
+    # its liveness budget. Watchdog runs are idempotent by GitHub run key.
     concurrency:
       group: improvement-watchdog
       cancel-in-progress: false
+    if: vars.AWS_REGION != '' && vars.EKS_CLUSTER_NAME != ''
+    runs-on: ubuntu-latest
     env:
       AWS_REGION: ${{ vars.AWS_REGION }}
       EKS_CLUSTER_NAME: ${{ vars.EKS_CLUSTER_NAME }}
@@ -53,15 +55,13 @@ jobs:
           retention-days: 14
 
   revision-quality:
+    concurrency:
+      group: production-revision-quality
+      cancel-in-progress: false
     if: >-
       vars.AWS_REGION != '' && vars.EKS_CLUSTER_NAME != '' &&
       (github.event_name == 'workflow_dispatch' || github.event.schedule == '17 */6 * * *')
     runs-on: ubuntu-latest
-    # The watchdog can diagnose the reconciler, but must never hold the
-    # production-observation producer past its own liveness window.
-    concurrency:
-      group: production-observation
-      cancel-in-progress: false
     env:
       AWS_REGION: ${{ vars.AWS_REGION }}
       EKS_CLUSTER_NAME: ${{ vars.EKS_CLUSTER_NAME }}

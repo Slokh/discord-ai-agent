@@ -20,10 +20,26 @@ export function improvementContractAssertions(checks: readonly ImprovementContra
 export function improvementContractReplaySkipReason(input: {
   hasAssertion: boolean;
   hasReplayScope: boolean;
+  hasReplayableContext: boolean;
 }): string | null {
   if (!input.hasAssertion) return "The contract has no private-replay assertion.";
   if (!input.hasReplayScope) return "The original requester's visible-channel scope is unavailable, so this case cannot be replayed faithfully.";
+  if (!input.hasReplayableContext) return "The original request depends on Discord context that the private replay cannot reproduce faithfully.";
   return null;
+}
+
+export function hasFaithfulPrivateReplayContext(input: {
+  requestKind: unknown;
+  replyContext: unknown;
+  requestAttachments: unknown;
+  requestEmbeds: unknown;
+  interaction: unknown;
+}): boolean {
+  return input.requestKind === "message"
+    && input.replyContext == null
+    && !nonEmptyArray(input.requestAttachments)
+    && !nonEmptyArray(input.requestEmbeds)
+    && input.interaction == null;
 }
 
 /** Produces content-free, per-check conclusions from one retained private replay. */
@@ -55,4 +71,8 @@ export function improvementContractReplayResults(
     }
     return [{ checkHash: improvementCheckHash(check), status: passed ? "passed" : "failed" }];
   });
+}
+
+function nonEmptyArray(value: unknown) {
+  return Array.isArray(value) && value.length > 0;
 }

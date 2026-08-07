@@ -3,6 +3,7 @@ import type { ImprovementContractCheck } from "../../src/db/types.js";
 import { improvementFingerprint, normalizeImprovementTitle } from "../../src/improvements/coalescing.js";
 import { assertActionableContract, assertImprovementTransition, improvementChecksExecutable } from "../../src/improvements/policy.js";
 import {
+  hasFaithfulPrivateReplayContext,
   improvementContractAssertions,
   improvementContractReplayResults,
   improvementContractReplaySkipReason,
@@ -45,8 +46,25 @@ describe("improvement domain", () => {
       expectedRuntimeEvents: [],
       forbiddenRuntimeEvents: ["agent.execution.failed"],
     });
-    expect(improvementContractReplaySkipReason({ hasAssertion: true, hasReplayScope: true })).toBeNull();
-    expect(improvementContractReplaySkipReason({ hasAssertion: false, hasReplayScope: true })).toMatch(/no private-replay assertion/);
+    expect(improvementContractReplaySkipReason({ hasAssertion: true, hasReplayScope: true, hasReplayableContext: true })).toBeNull();
+    expect(improvementContractReplaySkipReason({ hasAssertion: false, hasReplayScope: true, hasReplayableContext: true })).toMatch(/no private-replay assertion/);
+    expect(improvementContractReplaySkipReason({ hasAssertion: true, hasReplayScope: true, hasReplayableContext: false })).toMatch(/cannot reproduce faithfully/);
+  });
+
+  it("replays only text turns whose Discord context can be reconstructed", () => {
+    const textTurn = {
+      requestKind: "message",
+      replyContext: null,
+      requestAttachments: [],
+      requestEmbeds: [],
+      interaction: null,
+    };
+    expect(hasFaithfulPrivateReplayContext(textTurn)).toBe(true);
+    expect(hasFaithfulPrivateReplayContext({ ...textTurn, replyContext: { messageId: "parent" } })).toBe(false);
+    expect(hasFaithfulPrivateReplayContext({ ...textTurn, requestAttachments: [{ id: "file" }] })).toBe(false);
+    expect(hasFaithfulPrivateReplayContext({ ...textTurn, requestEmbeds: [{ url: "https://example.com" }] })).toBe(false);
+    expect(hasFaithfulPrivateReplayContext({ ...textTurn, interaction: { customId: "button" } })).toBe(false);
+    expect(hasFaithfulPrivateReplayContext({ ...textTurn, requestKind: "scheduled" })).toBe(false);
   });
 
   it("derives content-free pass and failure conclusions for every private replay check kind", () => {

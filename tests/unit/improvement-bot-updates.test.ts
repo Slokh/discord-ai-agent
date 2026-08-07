@@ -9,7 +9,10 @@ describe("improvement bot updates", () => {
   it("renders one standalone automation incident through recovery", () => {
     expect(renderImprovementBotUpdate(update()).content).toContain("expected heartbeat is missing");
     expect(renderImprovementBotUpdate(update({ caseStatus: "in_progress" })).content).toContain("queued or in progress");
-    expect(renderImprovementBotUpdate(update({ caseStatus: "verifying" })).content).toContain("being verified in production");
+    expect(renderImprovementBotUpdate(update({
+      producerTrigger: "improvement_watchdog",
+      caseStatus: "verifying",
+    })).content).toBe("The automated monitor for the improvement system was updated and is checking its recovery in production.");
     expect(renderImprovementBotUpdate(update({ caseStatus: "resolved" })).content).toContain("recovered");
   });
 

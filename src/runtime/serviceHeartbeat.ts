@@ -13,26 +13,27 @@ export async function startServiceHeartbeat(input: {
   const instanceId = `${hostname()}:${process.pid}`;
   const startedAt = new Date();
   let stopped = false;
-  let running = false;
+  let inFlight: Promise<void> | null = null;
 
-  const pulse = async () => {
-    if (stopped || running) return;
-    running = true;
-    try {
-      await Promise.all(input.components.map((component) => input.repository.pulse({
-        component,
-        instanceId,
-        revision: input.config.appRevision,
-        startedAt,
-      })));
-    } catch (error) {
-      logger.warn({ err: error, components: input.components }, "Service heartbeat failed");
-    } finally {
-      running = false;
-    }
+  const pulse = () => {
+    if (stopped || inFlight) return inFlight;
+    inFlight = Promise.all(input.components.map((component) => input.repository.pulse({
+      component,
+      instanceId,
+      revision: input.config.appRevision,
+      startedAt,
+    })))
+      .then(() => undefined)
+      .catch((error) => {
+        logger.warn({ err: error, components: input.components }, "Service heartbeat failed");
+      })
+      .finally(() => {
+        inFlight = null;
+      });
+    return inFlight;
   };
 
-  await pulse();
+  void pulse();
   const timer = setInterval(() => void pulse(), HEARTBEAT_INTERVAL_MS);
   timer.unref();
 
@@ -40,6 +41,7 @@ export async function startServiceHeartbeat(input: {
     stop: async () => {
       stopped = true;
       clearInterval(timer);
+      await inFlight;
       await Promise.all(input.components.map((component) => input.repository.remove(component, instanceId)));
     },
   };

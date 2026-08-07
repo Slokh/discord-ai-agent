@@ -196,6 +196,40 @@ describe("NanoCodex agent runtime executor", () => {
     expect(response.content).not.toContain("high-level summary based on its preview");
   });
 
+  it("allows a response supported by a successful retry after an unavailable web result", async () => {
+    const runtime = agentRuntime();
+    const runRuntime = vi.fn(async (input: any) => {
+      await input.executeTool({
+        callId: "call-1",
+        name: "web__run",
+        arguments: { operations: [{ kind: "open", refId: "https://example.com/unavailable" }] },
+      });
+      await input.executeTool({
+        callId: "call-2",
+        name: "web__run",
+        arguments: { operations: [{ kind: "search", query: "verified source" }] },
+      });
+      return result("Here is the verified answer.");
+    });
+    const executeToolRoute = vi
+      .fn()
+      .mockResolvedValueOnce({
+        content: "The requested content could not be retrieved.",
+        status: "error" as const,
+        errorCode: "external_evidence_missing",
+        retryable: true,
+      })
+      .mockResolvedValueOnce({ content: "Verified source result.", status: "ok" as const });
+
+    await expect(executeNanoCodexAgentRuntime({
+      toolContext: toolContext(runtime),
+      text: "find a current answer",
+      timeoutMs: 1_000,
+      runRuntime: runRuntime as never,
+      executeToolRoute: executeToolRoute as never,
+    })).resolves.toMatchObject({ content: "Here is the verified answer." });
+  });
+
   it("starts fresh from legacy checkpoints whose resume contract is unavailable", async () => {
     const runtime = agentRuntime();
     runtime.getLatestBinaryArtifactForSession.mockResolvedValue({

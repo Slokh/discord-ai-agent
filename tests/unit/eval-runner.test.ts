@@ -61,10 +61,10 @@ describe("eval runner", () => {
     );
   });
 
-  it("records failed assertions as a failed private replay producer run", () => {
+  it("keeps a completed private replay producer healthy when assertions fail", () => {
     expect(privateReplayProducerResult({
       totals: { passed: 0, failed: 1, error: 0, skipped: 0, total: 1 },
-    })).toEqual({ status: "failed", outcomeCode: "eval_assertions_failed" });
+    })).toEqual({ status: "succeeded", outcomeCode: "eval_assertions_failed" });
     expect(privateReplayProducerResult({
       totals: { passed: 1, failed: 0, error: 0, skipped: 0, total: 1 },
     })).toEqual({ status: "succeeded", outcomeCode: undefined });

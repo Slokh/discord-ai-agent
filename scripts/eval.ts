@@ -236,11 +236,16 @@ async function main() {
   process.exitCode = hasFailures ? 1 : 0;
 }
 
-/** A completed eval process can still be an unsuccessful proof producer. */
+/**
+ * Producer liveness measures whether the replay runner completed, not whether
+ * every replay assertion passed. Assertion failures are handled by the
+ * case-specific verification result and the command's non-zero exit status.
+ */
 export function privateReplayProducerResult(report: Pick<EvalRunReport, "totals">) {
-  return report.totals.failed > 0 || report.totals.error > 0
-    ? { status: "failed" as const, outcomeCode: "eval_assertions_failed" }
-    : { status: "succeeded" as const, outcomeCode: undefined };
+  return {
+    status: "succeeded" as const,
+    outcomeCode: report.totals.failed > 0 || report.totals.error > 0 ? "eval_assertions_failed" : undefined,
+  };
 }
 
 async function recordPrivateReplayProducerRun(

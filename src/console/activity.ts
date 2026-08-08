@@ -25,6 +25,7 @@ export type ActivityStory = {
   responseKind: string | null;
   hasParent: boolean;
   improvementCaseId: string | null;
+  failureReason: string | null;
   rollupKey: string | null;
   runCount: number | null;
   successCount: number | null;
@@ -139,6 +140,7 @@ function activeTaskStory(task: DashboardRecord, execution?: DashboardRecord): Ac
     responseUrl: nullableString(task.responseUrl),
     responseKind: nullableString(task.responseKind),
     improvementCaseId: nullableString(task.improvementCaseId),
+    failureReason: nullableString(task.failureReason),
     rollupKey: system ? "improvement_report" : null,
     lifecycle: system ? systemLifecycle(status) : codeLifecycle(status, currentStep, Boolean(task.pullRequestUrl), task.verifyPassed),
     technicalEvents: latestEvent ? [technicalEvent(`active-task-${string(task.taskId)}`, latestEvent, "info", task.updatedAt)] : [],
@@ -209,6 +211,7 @@ function projectRecentStory(source: DashboardRecord): ActivityStory {
     responseKind: nullableString(source.responseKind),
     hasParent: Boolean(source.hasParent),
     improvementCaseId: nullableString(source.improvementCaseId),
+    failureReason: nullableString(source.failureReason),
     rollupKey: nullableString(source.rollupKey),
     lifecycle: kind === "code_change"
       ? codeLifecycle(executionStatus, null, Boolean(source.pullRequestUrl), source.verifyPassed)
@@ -279,6 +282,7 @@ function correlateImprovementWork(stories: ActivityStory[]): ActivityStory[] {
     improvement.technicalEvents = [...improvement.technicalEvents, ...story.technicalEvents]
       .sort((left, right) => timestamp(right.createdAt) - timestamp(left.createdAt))
       .slice(0, 16);
+    improvement.failureReason = preferFailureReason(improvement.failureReason, story.failureReason);
     if (timestamp(story.occurredAt) > timestamp(improvement.occurredAt)) improvement.occurredAt = story.occurredAt;
     return false;
   });
@@ -328,6 +332,12 @@ function mergeOpenImprovements(stories: ActivityStory[], cases: DashboardRecord[
     byCaseId.set(caseId, story);
   }
   return stories;
+}
+
+function preferFailureReason(current: string | null, candidate: string | null): string | null {
+  if (!candidate) return current;
+  if (!current || current === "The repair retries reached their limit.") return candidate;
+  return current;
 }
 
 function foldActiveImprovementWork(activity: { active: ActivityStory[]; recent: ActivityStory[] }): {
@@ -503,7 +513,7 @@ function improvementLifecycle(events: ActivityStory["technicalEvents"], status: 
 function storyDefaults(input: Partial<ActivityStory> & Pick<ActivityStory, "id" | "kind" | "category" | "title" | "status" | "tone" | "summary" | "occurredAt" | "startedAt">): ActivityStory {
   return {
     durationMs: null, latencyTone: null, attempts: null, branchName: null, pullRequestUrl: null, workState: null,
-    sourceUrl: null, responseUrl: null, responseKind: null, hasParent: false, improvementCaseId: null, rollupKey: null,
+    sourceUrl: null, responseUrl: null, responseKind: null, hasParent: false, improvementCaseId: null, failureReason: null, rollupKey: null,
     runCount: null, successCount: null, failureCount: null, p95DurationMs: null,
     runs: [], lifecycle: [], technicalEvents: [], ...input,
   };

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { deriveOperatorActivity, eventLabel, improvementMilestone, retainOpenImprovementActivity } from "../../src/console/activity.js";
+import { operatorTaskFailureSummary } from "../../src/console/taskFailureSummary.js";
 
 describe("operator activity story projection", () => {
   it("pins active conversations and code work as distinct stories without duplicate executions", () => {
@@ -244,7 +245,7 @@ describe("operator activity story projection", () => {
         status: "actionable", tone: "neutral", category: "product", workState: null, summary: "Marked actionable",
         occurredAt: "2026-08-06T12:00:00.000Z", startedAt: "2026-08-06T11:00:00.000Z",
         durationMs: null, latencyTone: null, attempts: null, branchName: null, pullRequestUrl: null,
-        sourceUrl: null, responseUrl: null, responseKind: null, hasParent: false, rollupKey: null,
+        sourceUrl: null, responseUrl: null, responseKind: null, hasParent: false, failureReason: null, rollupKey: null,
         runCount: null, successCount: null, failureCount: null, p95DurationMs: null,
         runs: [], lifecycle: [], technicalEvents: [],
       }],
@@ -254,6 +255,33 @@ describe("operator activity story projection", () => {
     }] });
 
     expect(result.recent[0]).toMatchObject({ workState: "waiting", tone: "warning", status: "needs_evidence" });
+  });
+
+  it("keeps a safe repair failure reason when code work folds into an improvement", () => {
+    const result = deriveOperatorActivity({
+      executions: [], tasks: [], deployments: [],
+      activity: [{
+        id: "improvement-case-a", kind: "improvement", improvementCaseId: "case-a",
+        title: "Repair model failure", status: "actionable", detail: "work.failed",
+        occurredAt: "2026-08-06T12:05:00.000Z", events: [],
+      }, {
+        id: "task-case-a", kind: "code_change", improvementCaseId: "case-a", title: "Repair model failure",
+        status: "failed", occurredAt: "2026-08-06T12:04:00.000Z", failureReason: "The repair workspace branch already existed.", events: [],
+      }],
+    });
+
+    expect(result.recent).toContainEqual(expect.objectContaining({
+      kind: "improvement", improvementCaseId: "case-a", failureReason: "The repair workspace branch already existed.",
+    }));
+  });
+
+  it("classifies task failures without exposing their raw error", () => {
+    expect(operatorTaskFailureSummary("failed", "fatal: a branch named 'private-name' already exists")).toBe(
+      "The repair workspace branch already existed.",
+    );
+    expect(operatorTaskFailureSummary("failed", "secret=do-not-display")).toBe(
+      "The repair task failed; retained task evidence has the details.",
+    );
   });
 
   it("turns implementation event names into operator language", () => {

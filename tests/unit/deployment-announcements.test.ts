@@ -24,6 +24,7 @@ function setup() {
     claimDeploymentAnnouncement: vi.fn().mockResolvedValue(true),
     markDeploymentAnnouncementPosted: vi.fn().mockResolvedValue(undefined),
     markDeploymentAnnouncementFailed: vi.fn().mockResolvedValue(undefined),
+    markDeploymentAnnouncementSkipped: vi.fn().mockResolvedValue(undefined),
     recordTraceEvent: vi.fn().mockResolvedValue(undefined),
     auditTool: vi.fn().mockResolvedValue(undefined)
   };
@@ -87,6 +88,40 @@ describe("deployment announcements", () => {
     expect(fixture.repo.recordDeploymentBaseline).toHaveBeenCalledOnce();
     expect(fixture.fetchImpl).not.toHaveBeenCalled();
     expect(fixture.send).not.toHaveBeenCalled();
+  });
+
+  it("records Console-only deploys without contacting Discord or generating bot updates", async () => {
+    const fixture = setup();
+    fixture.fetchImpl.mockResolvedValue(new Response(JSON.stringify({
+      status: "ahead",
+      ahead_by: 1,
+      files: [{ filename: "src/console/client.ts", status: "modified", additions: 10, deletions: 2 }],
+    }), { status: 200 }));
+
+    await expect(announceDeployment(fixture as any)).resolves.toBe("skipped");
+    expect(fixture.client.channels.fetch).not.toHaveBeenCalled();
+    expect(fixture.send).not.toHaveBeenCalled();
+    expect(fixture.openRouter.chat).not.toHaveBeenCalled();
+    expect(fixture.repo.markDeploymentAnnouncementSkipped).toHaveBeenCalledWith({
+      guildId: "guild-1",
+      revision: newRevision,
+      comparisonUrl: `https://github.com/example-org/example-agent/compare/${oldRevision}...${newRevision}`,
+    });
+  });
+
+  it("keeps announcements for a diff that includes a member-facing change", async () => {
+    const fixture = setup();
+    fixture.fetchImpl.mockResolvedValue(new Response(JSON.stringify({
+      status: "ahead",
+      ahead_by: 2,
+      files: [
+        { filename: "src/console/client.ts", status: "modified" },
+        { filename: "src/discord/responseSink.ts", status: "modified" },
+      ],
+    }), { status: 200 }));
+
+    await expect(announceDeployment(fixture as any)).resolves.toBe("posted");
+    expect(fixture.send).toHaveBeenCalledOnce();
   });
 
   it("does not duplicate an announcement already visible in Discord after a crash", async () => {

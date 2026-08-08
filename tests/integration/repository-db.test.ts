@@ -720,6 +720,27 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
     await expect(repo.claimDeploymentAnnouncement(claim)).resolves.toBe(false);
   });
 
+  it("advances the deployment comparison after a private Console-only deploy", async () => {
+    const guildId = `guild-${randomUUID()}`;
+    const revision = randomUUID().replaceAll("-", "");
+    const claim = {
+      guildId,
+      revision,
+      previousRevision: "a".repeat(40),
+      repository: "example/repository",
+      channelId: `channel-${randomUUID()}`,
+    };
+
+    await repo.claimDeploymentAnnouncement(claim);
+    await repo.markDeploymentAnnouncementSkipped({
+      guildId,
+      revision,
+      comparisonUrl: "https://github.com/example/repository/compare/a...b",
+    });
+
+    await expect(repo.latestDeploymentRevision(guildId)).resolves.toBe(revision);
+  });
+
   it("records privacy deletion for a user with no prior indexed messages", async () => {
     const userId = `user-${randomUUID()}`;
     await repo.setUserPreference({ userId, key: "timezone", value: "America/New_York" });

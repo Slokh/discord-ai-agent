@@ -77,12 +77,26 @@ export async function recordDeploymentBaseline(pool: DbPool, input: Omit<Deploym
   );
 }
 
+/** Records a deployed private-operator change without creating a Discord update. */
+export async function markDeploymentAnnouncementSkipped(pool: DbPool, input: {
+  guildId: string;
+  revision: string;
+  comparisonUrl: string;
+}): Promise<void> {
+  await pool.query(
+    `UPDATE deployment_announcements SET
+       status = 'skipped', comparison_url = $3, error = NULL, posted_at = now(), updated_at = now()
+     WHERE guild_id = $1 AND revision = $2`,
+    [input.guildId, input.revision, input.comparisonUrl],
+  );
+}
+
 export async function latestDeploymentRevision(pool: DbPool, guildId: string): Promise<string | null> {
   const result = await pool.query(
     `
       SELECT revision
       FROM deployment_announcements
-      WHERE guild_id = $1 AND status IN ('posted', 'baseline')
+      WHERE guild_id = $1 AND status IN ('posted', 'baseline', 'skipped')
       ORDER BY posted_at DESC NULLS LAST, updated_at DESC
       LIMIT 1
     `,

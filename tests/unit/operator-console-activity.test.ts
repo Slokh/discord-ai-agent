@@ -194,6 +194,27 @@ describe("operator activity story projection", () => {
     expect(result.recent[0]?.lifecycle.map((step) => step.label)).toEqual(["Reported", "Verification passed"]);
   });
 
+  it("folds linked assessment attempts into their improvement instead of showing duplicate failures", () => {
+    const result = deriveOperatorActivity({
+      executions: [], tasks: [], deployments: [],
+      activity: [{
+        id: "improvement-case-a", kind: "improvement", improvementCaseId: "case-a",
+        title: "Investigate delivery", status: "dismissed", detail: "case.dismissed",
+        occurredAt: "2026-08-06T12:05:00.000Z", events: [],
+      }, {
+        id: "task-assessment-a", kind: "system", improvementCaseId: "case-a",
+        title: "Assess report", status: "failed", occurredAt: "2026-08-06T12:04:00.000Z",
+        failureReason: "The repair task failed; retained task evidence has the details.", events: [],
+      }],
+    });
+
+    expect(result.recent).toHaveLength(1);
+    expect(result.recent[0]).toMatchObject({
+      kind: "improvement", improvementCaseId: "case-a", status: "dismissed", tone: "neutral",
+      failureReason: "The repair task failed; retained task evidence has the details.",
+    });
+  });
+
   it("projects one issue for cases and failure artifacts linked to the same execution", () => {
     const result = deriveOperatorActivity({
       executions: [], tasks: [], deployments: [],

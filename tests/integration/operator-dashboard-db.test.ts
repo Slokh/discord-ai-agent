@@ -141,6 +141,14 @@ describe.skipIf(!runDbTests)("operator dashboard database projection", () => {
          )`,
     );
     await pool.query(
+      `INSERT INTO agent_tasks(
+         task_id,task_type,title,request,requested_by,status,retried_from_task_id,created_at,started_at,completed_at,updated_at
+       ) VALUES
+         ('task-retry-root','code_update','Retried change','private request','operator','failed',NULL,now(),now() - interval '3 minutes',now() - interval '2 minutes',now() - interval '2 minutes'),
+         ('task-retry-middle','code_update','Retried change','private request','operator','failed','task-retry-root',now(),now() - interval '2 minutes',now() - interval '1 minute',now() - interval '1 minute'),
+         ('task-retry-leaf','code_update','Retried change','private request','operator','succeeded','task-retry-middle',now(),now() - interval '1 minute',now(),now())`,
+    );
+    await pool.query(
       `INSERT INTO improvement_cases(case_id,scope,privacy,title,status,classification,severity,automation_state,automation_blocker)
        VALUES ('imp-dashboard','repository','private','Dashboard visibility','actionable','product_gap','high','blocked','waiting_for_proof')`,
     );
@@ -256,6 +264,11 @@ describe.skipIf(!runDbTests)("operator dashboard database projection", () => {
     expect(snapshot.activity).toContainEqual(expect.objectContaining({
       id: "task-task-current-orphan", kind: "code_change", status: "failed",
     }));
+    expect(snapshot.activity).toContainEqual(expect.objectContaining({
+      id: "task-task-retry-leaf", kind: "code_change", status: "succeeded", attempts: 3,
+    }));
+    expect(snapshot.activity).not.toContainEqual(expect.objectContaining({ id: "task-task-retry-root" }));
+    expect(snapshot.activity).not.toContainEqual(expect.objectContaining({ id: "task-task-retry-middle" }));
     expect(snapshot.activity).not.toContainEqual(expect.objectContaining({ id: "task-task-legacy-orphan" }));
     expect(JSON.stringify({ executions: snapshot.executions, tasks: snapshot.tasks, activity: snapshot.activity })).not.toContain("canary");
     expect(snapshot.activity.find((story) => story.id === "runtime-agent-execution-attempt-2")).toMatchObject({

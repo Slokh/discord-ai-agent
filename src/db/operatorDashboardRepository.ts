@@ -6,6 +6,7 @@ import { messageActivityDetail, recentMessageActivities } from "./operatorMessag
 import { improvementActivityTrace } from "./operatorImprovementActivityRepository.js";
 import { RELATED_CASES_FOR_EXECUTION_SQL, RELATED_CASES_FOR_IMPROVEMENT_SQL } from "./operatorActivityLinks.js";
 import type { OperatorActivitySource } from "./operatorActivityLinks.js";
+import { recentTaskActivityQuery } from "./operatorDashboardActivityQueries.js";
 const COMPONENTS = ["bot", "worker", "api", "console"] as const;
 export class OperatorDashboardRepository {
   constructor(private readonly pool: DbPool) {}
@@ -299,41 +300,7 @@ export class OperatorDashboardRepository {
          ORDER BY recent.story_updated_at DESC,event.created_at DESC,event.id DESC`,
         [now],
       ),
-      this.pool.query(
-        `WITH recent_tasks AS (
-           SELECT * FROM agent_tasks
-           WHERE status NOT IN ('queued','running')
-             AND task_type <> 'post-deploy-canary'
-             AND updated_at >= $1::timestamptz - interval '7 days'
-             AND (
-               improvement_case_id IS NOT NULL
-               OR created_at >= coalesce(
-                 (SELECT applied_at FROM schema_migrations WHERE version = '039_improvement_cases'),
-                 '-infinity'::timestamptz
-               )
-             )
-           ORDER BY updated_at DESC,created_at DESC
-         )
-         SELECT task.task_id,task.task_type,task.title,task.status,task.status_message,task.current_step,task.error,
-                task.branch_name,task.pr_url,task.verify_passed,task.improvement_case_id,
-                task.guild_id,task.channel_id,task.trace_id,
-                task.discord_response_channel_id,task.discord_response_message_id,
-                coalesce(task.started_at,task.created_at) AS story_started_at,
-                task.updated_at AS story_updated_at,
-                event.id,event.event_name,event.level,event.created_at,event.group_event_count
-         FROM recent_tasks task
-         LEFT JOIN agent_runtime_executions execution USING (task_id)
-         LEFT JOIN LATERAL (
-           SELECT candidate.id,candidate.event_name,candidate.level,candidate.created_at,
-                  count(*) OVER ()::int AS group_event_count
-           FROM agent_runtime_events candidate
-           WHERE candidate.execution_id = execution.execution_id
-           ORDER BY candidate.created_at DESC,candidate.id DESC
-           LIMIT ${activityEventLimit}
-         ) event ON true
-         ORDER BY task.updated_at DESC,event.created_at DESC,event.id DESC`,
-        [now],
-      ),
+      this.pool.query(recentTaskActivityQuery(activityEventLimit), [now]),
       this.pool.query(
         `WITH recent_cases AS (
            SELECT event.case_id,max(event.created_at) AS story_updated_at
@@ -662,7 +629,7 @@ function projectActivitySources(
       occurredAt,
       startedAt,
       durationMs: Math.max(0, occurredAt.getTime() - startedAt.getTime()),
-      attempts: 1,
+      attempts: number(row.attempts) || 1,
       eventCount: number(row.group_event_count),
       rollupKey: row.task_type === "improvement_report" ? "improvement_report" : null,
       responseStatus: null,

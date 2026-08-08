@@ -1,6 +1,6 @@
 import type { DbPool } from "./pool.js";
 import { deriveOperatorActivity } from "../console/activity.js";
-
+import { embeddingActivityDetail, releaseActivityDetail } from "./operatorActivityDetailRepository.js";
 const COMPONENTS = ["bot", "worker", "api", "console"] as const;
 
 export class OperatorDashboardRepository {
@@ -20,6 +20,13 @@ export class OperatorDashboardRepository {
       generatedAt: snapshot.generatedAt,
       revision: snapshot.revision,
     };
+    if (input.kind === "release") {
+      const deployment = snapshot.deployments.find((candidate) => `release-${candidate.deploymentId}` === input.id);
+      return deployment ? { ...detail, release: await releaseActivityDetail(this.pool, deployment) } : detail;
+    }
+    if (input.kind === "system" && story.rollupKey === "embedding") {
+      return { ...detail, embedding: await embeddingActivityDetail(this.pool) };
+    }
     if (input.kind !== "conversation") return detail;
     const executionId = executionIdFromActivityId(input.id);
     if (!executionId) return { ...detail, messages: [] };

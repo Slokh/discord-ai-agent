@@ -25,6 +25,7 @@ export type ActivityStory = {
   responseKind: string | null;
   hasParent: boolean;
   improvementCaseId: string | null;
+  relatedImprovementCaseIds: string[];
   failureReason: string | null;
   rollupKey: string | null;
   runCount: number | null;
@@ -64,10 +65,10 @@ export function deriveOperatorActivity(snapshot: DashboardRecord): { active: Act
     active.push(activeExecutionStory(execution));
   }
 
-  const projected = mergeOpenImprovements(
-    correlateImprovementWork(records(snapshot.activity).map(projectRecentStory)),
+  const projected = correlateImprovementWork(mergeOpenImprovements(
+    records(snapshot.activity).map(projectRecentStory),
     records(record(snapshot.improvements).cases),
-  ).filter((story) => story.rollupKey !== "embedding");
+  )).filter((story) => story.rollupKey !== "embedding");
   projected.push(...records(snapshot.messages).map(messageStory));
   for (const deployment of records(snapshot.deployments).slice(0, 3)) projected.push(releaseStory(deployment));
   const rolledUp = rollupSystemStories(projected);
@@ -102,7 +103,7 @@ export function retainOpenImprovementActivity(
 ): { active: ActivityStory[]; recent: ActivityStory[] } {
   const activeIds = new Set(activity.active.map((story) => `${story.kind}:${story.id}`));
   const stories = [...new Map([...activity.recent, ...activity.active].map((story) => [`${story.kind}:${story.id}`, story])).values()];
-  const merged = mergeOpenImprovements(stories, records(record(improvements).cases));
+  const merged = correlateImprovementWork(mergeOpenImprovements(stories, records(record(improvements).cases)));
   return foldActiveImprovementWork({
     active: merged.filter((story) => activeIds.has(`${story.kind}:${story.id}`)),
     recent: merged.filter((story) => !activeIds.has(`${story.kind}:${story.id}`))
@@ -211,6 +212,7 @@ function projectRecentStory(source: DashboardRecord): ActivityStory {
     responseKind: nullableString(source.responseKind),
     hasParent: Boolean(source.hasParent),
     improvementCaseId: nullableString(source.improvementCaseId),
+    relatedImprovementCaseIds: strings(source.relatedImprovementCaseIds),
     failureReason: nullableString(source.failureReason),
     rollupKey: nullableString(source.rollupKey),
     lifecycle: kind === "code_change"
@@ -268,24 +270,90 @@ function activityOutcome(
 }
 
 function correlateImprovementWork(stories: ActivityStory[]): ActivityStory[] {
-  const improvements = new Map(stories
-    .filter((story) => story.kind === "improvement" && story.improvementCaseId)
-    .map((story) => [story.improvementCaseId!, story]));
+  const parent = new Map<string, string>();
+  const find = (caseId: string): string => {
+    const current = parent.get(caseId) ?? caseId;
+    if (current === caseId) return current;
+    const root = find(current);
+    parent.set(caseId, root);
+    return root;
+  };
+  const union = (left: string, right: string) => {
+    const leftRoot = find(left);
+    const rightRoot = find(right);
+    if (leftRoot !== rightRoot) parent.set(rightRoot, leftRoot);
+  };
+  for (const story of stories) {
+    const caseIds = storyCaseIds(story);
+    for (const caseId of caseIds) parent.set(caseId, parent.get(caseId) ?? caseId);
+    for (const caseId of caseIds.slice(1)) union(caseIds[0]!, caseId);
+  }
+
+  const improvementGroups = new Map<string, ActivityStory[]>();
+  for (const story of stories) {
+    if (story.kind !== "improvement") continue;
+    const caseId = storyCaseIds(story)[0];
+    if (!caseId) continue;
+    const root = find(caseId);
+    improvementGroups.set(root, [...(improvementGroups.get(root) ?? []), story]);
+  }
+  const improvementByRoot = new Map<string, ActivityStory>();
+  const secondaryImprovements = new Set<ActivityStory>();
+  for (const [root, group] of improvementGroups) {
+    const ordered = [...group].sort((left, right) => timestamp(left.startedAt) - timestamp(right.startedAt) || left.id.localeCompare(right.id));
+    const canonical = ordered[0]!;
+    canonical.relatedImprovementCaseIds = [...new Set(ordered.flatMap(storyCaseIds))];
+    for (const related of ordered.slice(1)) {
+      mergeImprovementStory(canonical, related);
+      secondaryImprovements.add(related);
+    }
+    improvementByRoot.set(root, canonical);
+  }
+
   return stories.filter((story) => {
-    if (story.kind !== "code_change" || !story.improvementCaseId) return true;
-    const improvement = improvements.get(story.improvementCaseId);
+    if (secondaryImprovements.has(story)) return false;
+    if (story.kind === "improvement") return true;
+    if (story.kind !== "code_change" && story.kind !== "conversation") return true;
+    const caseId = storyCaseIds(story)[0];
+    const improvement = caseId ? improvementByRoot.get(find(caseId)) : undefined;
     if (!improvement) return true;
-    improvement.pullRequestUrl ??= story.pullRequestUrl;
-    improvement.branchName ??= story.branchName;
-    improvement.durationMs ??= story.durationMs;
-    improvement.latencyTone ??= story.latencyTone;
-    improvement.technicalEvents = [...improvement.technicalEvents, ...story.technicalEvents]
-      .sort((left, right) => timestamp(right.createdAt) - timestamp(left.createdAt))
-      .slice(0, 16);
-    improvement.failureReason = preferFailureReason(improvement.failureReason, story.failureReason);
-    if (timestamp(story.occurredAt) > timestamp(improvement.occurredAt)) improvement.occurredAt = story.occurredAt;
+    mergeImprovementEvidence(improvement, story);
     return false;
   });
+}
+
+function storyCaseIds(story: ActivityStory): string[] {
+  return [...new Set([story.improvementCaseId, ...strings(story.relatedImprovementCaseIds)].filter((value): value is string => Boolean(value)))];
+}
+
+function mergeImprovementStory(canonical: ActivityStory, related: ActivityStory) {
+  const canonicalPriority = workStatePriority(canonical.workState);
+  const relatedPriority = workStatePriority(related.workState);
+  if (relatedPriority > canonicalPriority || relatedPriority === canonicalPriority && timestamp(related.occurredAt) > timestamp(canonical.occurredAt)) {
+    canonical.status = related.status;
+    canonical.workState = related.workState;
+    canonical.tone = related.tone;
+    canonical.category = related.category;
+    canonical.summary = related.summary;
+  }
+  canonical.lifecycle = [...canonical.lifecycle, ...related.lifecycle];
+  mergeImprovementEvidence(canonical, related);
+}
+
+function mergeImprovementEvidence(improvement: ActivityStory, evidence: ActivityStory) {
+  improvement.pullRequestUrl ??= evidence.pullRequestUrl;
+  improvement.branchName ??= evidence.branchName;
+  improvement.durationMs ??= evidence.durationMs;
+  improvement.latencyTone ??= evidence.latencyTone;
+  improvement.technicalEvents = [...improvement.technicalEvents, ...evidence.technicalEvents]
+    .sort((left, right) => timestamp(right.createdAt) - timestamp(left.createdAt))
+    .slice(0, 16);
+  improvement.failureReason = preferFailureReason(improvement.failureReason, evidence.failureReason);
+  if (timestamp(evidence.occurredAt) > timestamp(improvement.occurredAt)) improvement.occurredAt = evidence.occurredAt;
+}
+
+function workStatePriority(state: ActivityWorkState): number {
+  return state === "blocked" ? 4 : state === "active" ? 3 : state === "waiting" ? 2 : state === "terminal" ? 1 : 0;
 }
 
 function mergeOpenImprovements(stories: ActivityStory[], cases: DashboardRecord[]): ActivityStory[] {
@@ -300,6 +368,11 @@ function mergeOpenImprovements(stories: ActivityStory[], cases: DashboardRecord[
     const occurredAt = improvement.lastProgressAt ?? improvement.lastSeenAt;
     const summary = nullableString(improvement.blocker) ?? nullableString(improvement.nextAction);
     if (existing) {
+      existing.relatedImprovementCaseIds = [...new Set([
+        ...strings(existing.relatedImprovementCaseIds),
+        caseId,
+        ...strings(improvement.relatedImprovementCaseIds),
+      ])];
       existing.workState = workState;
       existing.title = string(improvement.title, existing.title);
       existing.status = string(improvement.status, existing.status);
@@ -323,6 +396,7 @@ function mergeOpenImprovements(stories: ActivityStory[], cases: DashboardRecord[
       startedAt: improvement.firstSeenAt ?? occurredAt,
       pullRequestUrl: nullableString(improvement.pullRequestUrl),
       improvementCaseId: caseId,
+      relatedImprovementCaseIds: [...new Set([caseId, ...strings(improvement.relatedImprovementCaseIds)])],
       lifecycle: [{
         label: humanize(string(improvement.status, "open")),
         state: workState === "blocked" ? "failed" : workState === "waiting" ? "pending" : "active",
@@ -344,10 +418,10 @@ function foldActiveImprovementWork(activity: { active: ActivityStory[]; recent: 
   active: ActivityStory[];
   recent: ActivityStory[];
 } {
-  const improvementByCase = new Map(activity.recent.flatMap((story) => story.kind === "improvement" && story.improvementCaseId
-    ? [[story.improvementCaseId, story] as const]
+  const improvementByCase = new Map(activity.recent.flatMap((story) => story.kind === "improvement"
+    ? storyCaseIds(story).map((caseId) => [caseId, story] as const)
     : []));
-  const pinned = new Map<string, ActivityStory>();
+  const pinned = new Set<ActivityStory>();
   const active = activity.active.filter((story) => {
     if (story.kind !== "code_change" || !story.improvementCaseId) return true;
     const improvement = improvementByCase.get(story.improvementCaseId);
@@ -359,13 +433,13 @@ function foldActiveImprovementWork(activity: { active: ActivityStory[]; recent: 
       improvement.workState = "active";
       improvement.tone = "active";
     }
-    pinned.set(story.improvementCaseId, improvement);
+    pinned.add(improvement);
     return false;
   });
-  const pinnedStories = [...pinned.values()];
+  const pinnedStories = [...pinned];
   return {
     active: [...active, ...pinnedStories].sort((left, right) => timestamp(right.occurredAt) - timestamp(left.occurredAt)),
-    recent: activity.recent.filter((story) => !story.improvementCaseId || !pinned.has(story.improvementCaseId)),
+    recent: activity.recent.filter((story) => !pinned.has(story)),
   };
 }
 
@@ -513,7 +587,8 @@ function improvementLifecycle(events: ActivityStory["technicalEvents"], status: 
 function storyDefaults(input: Partial<ActivityStory> & Pick<ActivityStory, "id" | "kind" | "category" | "title" | "status" | "tone" | "summary" | "occurredAt" | "startedAt">): ActivityStory {
   return {
     durationMs: null, latencyTone: null, attempts: null, branchName: null, pullRequestUrl: null, workState: null,
-    sourceUrl: null, responseUrl: null, responseKind: null, hasParent: false, improvementCaseId: null, failureReason: null, rollupKey: null,
+    sourceUrl: null, responseUrl: null, responseKind: null, hasParent: false, improvementCaseId: null,
+    relatedImprovementCaseIds: [], failureReason: null, rollupKey: null,
     runCount: null, successCount: null, failureCount: null, p95DurationMs: null,
     runs: [], lifecycle: [], technicalEvents: [], ...input,
   };
@@ -608,6 +683,9 @@ function record(value: unknown): DashboardRecord {
 
 function string(value: unknown, fallback = ""): string { return value == null ? fallback : String(value); }
 function nullableString(value: unknown): string | null { return value == null || value === "" ? null : String(value); }
+function strings(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((item) => item != null && item !== "").map(String) : [];
+}
 function nullableNumber(value: unknown): number | null {
   if (value == null) return null;
   const parsed = Number(value);

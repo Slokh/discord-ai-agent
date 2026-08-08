@@ -52,14 +52,14 @@ const REPEATED_CASE_EVENTS = new Set([
   "reconciliation.stalled",
 ]);
 
-export async function improvementActivityTrace(pool: DbPool, caseId: string): Promise<TraceEvent[]> {
+export async function improvementActivityTrace(pool: DbPool, caseIds: string[]): Promise<TraceEvent[]> {
   const [caseEvents, attempts, runtimeGroups] = await Promise.all([
     pool.query(
       `WITH ranked AS (
          SELECT event_id,event_name,created_at,
                 row_number() OVER (PARTITION BY event_name ORDER BY created_at DESC,event_id DESC) AS occurrence
          FROM improvement_case_events
-         WHERE case_id = $1
+         WHERE case_id = ANY($1::text[])
            AND event_name = ANY($2::text[])
        )
        SELECT event_id,event_name,created_at
@@ -67,7 +67,7 @@ export async function improvementActivityTrace(pool: DbPool, caseId: string): Pr
        WHERE event_name <> ALL($3::text[]) OR occurrence = 1
        ORDER BY created_at ASC,event_id ASC
        LIMIT 200`,
-      [caseId, Object.keys(CASE_EVENT_TITLES), [...REPEATED_CASE_EVENTS]],
+      [caseIds, Object.keys(CASE_EVENT_TITLES), [...REPEATED_CASE_EVENTS]],
     ),
     pool.query(
       `SELECT attempt.work_id,attempt.source,attempt.status,attempt.task_id,
@@ -80,11 +80,11 @@ export async function improvementActivityTrace(pool: DbPool, caseId: string): Pr
        LEFT JOIN agent_tasks task ON task.task_id = attempt.task_id
        LEFT JOIN agent_runtime_executions execution ON execution.task_id = task.task_id
        LEFT JOIN agent_runtime_artifacts artifact ON artifact.execution_id = execution.execution_id
-       WHERE attempt.case_id = $1
+       WHERE attempt.case_id = ANY($1::text[])
        GROUP BY attempt.work_id,attempt.source,attempt.status,attempt.task_id,
                 attempt.started_at,attempt.completed_at,attempt.created_at,task.status,task.error
        ORDER BY attempt.started_at ASC,attempt.created_at ASC`,
-      [caseId],
+      [caseIds],
     ),
     pool.query(
       `SELECT attempt.work_id,event.event_name,
@@ -97,11 +97,11 @@ export async function improvementActivityTrace(pool: DbPool, caseId: string): Pr
        FROM improvement_work_attempts attempt
        JOIN agent_runtime_executions execution ON execution.task_id = attempt.task_id
        JOIN agent_runtime_events event ON event.execution_id = execution.execution_id
-       WHERE attempt.case_id = $1
+       WHERE attempt.case_id = ANY($1::text[])
          AND (event.event_name = ANY($2::text[]) OR event.event_name LIKE 'agent.%.model.call.%')
        GROUP BY attempt.work_id,event.event_name
        ORDER BY min(event.created_at) ASC`,
-      [caseId, Object.keys(RUNTIME_EVENT_TITLES)],
+      [caseIds, Object.keys(RUNTIME_EVENT_TITLES)],
     ),
   ]);
 

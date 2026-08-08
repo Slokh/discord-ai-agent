@@ -109,7 +109,11 @@ describe("improvement reporter conversations", () => {
     };
     await expect(resolveImprovementReporterThread(client as never, conversation(), "hub-channel")).resolves.toBe(thread);
     expect(client.channels.fetch).toHaveBeenCalledWith("hub-channel");
-    expect(create).toHaveBeenCalledWith(expect.objectContaining({ name: "🐛 report follow-up", type: 11 }));
+    expect(create).toHaveBeenCalledWith(expect.objectContaining({
+      name: "🐛 report follow-up",
+      type: 11,
+      autoArchiveDuration: 60,
+    }));
   });
 
   it("declines hub delivery when the channel is unconfigured or outside the report guild", async () => {

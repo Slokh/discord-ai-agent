@@ -246,7 +246,7 @@ export async function resolveImprovementReporterThread(
   return reportChannel.threads.create({
     name: THREAD_NAME,
     type: ChannelType.PublicThread,
-    autoArchiveDuration: ThreadAutoArchiveDuration.OneDay,
+    autoArchiveDuration: ThreadAutoArchiveDuration.OneHour,
     reason: "Follow-up conversation for a member improvement report",
   });
 }

@@ -129,6 +129,16 @@ describe.skipIf(!runDbTests)("operator dashboard database projection", () => {
        VALUES ('imp-dashboard','repository','private','Dashboard visibility','actionable','product_gap','high','blocked','waiting_for_proof')`,
     );
     await pool.query(
+      `INSERT INTO agent_tasks(
+         task_id,task_type,title,request,requested_by,status,current_step,error,improvement_case_id,
+         created_at,started_at,completed_at,updated_at
+       ) VALUES (
+         'task-improvement-repair','code_update','Repair dashboard visibility','private repair request','automation',
+         'failed','failed','Job has reached specified backoff limit: private secret output','imp-dashboard',
+         now() - interval '30 minutes',now() - interval '29 minutes',now() - interval '20 minutes',now() - interval '20 minutes'
+       )`,
+    );
+    await pool.query(
       `INSERT INTO improvement_case_events(case_id,event_name,actor_kind,summary)
        VALUES
          ('imp-dashboard','case.created','operator','Improvement created'),
@@ -144,6 +154,14 @@ describe.skipIf(!runDbTests)("operator dashboard database projection", () => {
       `INSERT INTO improvement_work_attempts(
          work_id,case_id,source,source_key,status,repository,pull_request_number,pull_request_url
        ) VALUES ('work-dashboard','imp-dashboard','github_pull_request','github:pr:1','in_progress','owner/repo',1,'https://github.com/owner/repo/pull/1')`,
+    );
+    await pool.query(
+      `INSERT INTO improvement_work_attempts(
+         work_id,case_id,source,source_key,status,task_id,started_at,completed_at,created_at,updated_at
+       ) VALUES (
+         'work-improvement-repair','imp-dashboard','agent_task','agent_task:task-improvement-repair','failed','task-improvement-repair',
+         now() - interval '29 minutes',now() - interval '20 minutes',now() - interval '30 minutes',now() - interval '20 minutes'
+       )`,
     );
     await pool.query(
       `INSERT INTO deployment_verifications(revision,deployment_id,verified_at) VALUES
@@ -171,19 +189,37 @@ describe.skipIf(!runDbTests)("operator dashboard database projection", () => {
          session_id,thread_key,title,request,requested_by,status,harness,metadata,started_at,completed_at,updated_at
        ) VALUES
          ('embedding-session-a','embedding:a','Embedding batch (3 messages)','Embed messages','system','succeeded','background_job','{"kind":"background_job","jobKind":"embedding"}',now() - interval '10 minutes',now() - interval '9 minutes',now() - interval '9 minutes'),
-         ('embedding-session-b','embedding:b','Embedding batch (5 messages)','Embed messages','system','succeeded','background_job','{"kind":"background_job","jobKind":"embedding"}',now() - interval '5 minutes',now() - interval '4 minutes',now() - interval '4 minutes')`,
+         ('embedding-session-b','embedding:b','Embedding batch (5 messages)','Embed messages','system','succeeded','background_job','{"kind":"background_job","jobKind":"embedding"}',now() - interval '5 minutes',now() - interval '4 minutes',now() - interval '4 minutes'),
+         ('improvement-repair-session','repair:dashboard','Repair dashboard visibility','private repair request','automation','failed','sandbox','{}',now() - interval '29 minutes',now() - interval '20 minutes',now() - interval '20 minutes')`,
     );
     await pool.query(
       `INSERT INTO agent_runtime_executions(
          execution_id,session_id,status,metadata,started_at,completed_at,updated_at
        ) VALUES
          ('embedding-a','embedding-session-a','succeeded','{"jobKind":"embedding","messageCount":3,"jobCount":3}',now() - interval '10 minutes',now() - interval '9 minutes',now() - interval '9 minutes'),
-         ('embedding-b','embedding-session-b','succeeded','{"jobKind":"embedding","messageCount":5,"jobCount":5}',now() - interval '5 minutes',now() - interval '4 minutes',now() - interval '4 minutes')`,
+         ('embedding-b','embedding-session-b','succeeded','{"jobKind":"embedding","messageCount":5,"jobCount":5}',now() - interval '5 minutes',now() - interval '4 minutes',now() - interval '4 minutes'),
+         ('improvement-repair-execution','improvement-repair-session','failed','{}',now() - interval '29 minutes',now() - interval '20 minutes',now() - interval '20 minutes')`,
+    );
+    await pool.query(
+      `UPDATE agent_runtime_executions SET task_id = 'task-improvement-repair'
+       WHERE execution_id = 'improvement-repair-execution'`,
     );
     await pool.query(
       `INSERT INTO agent_runtime_events(session_id,execution_id,sequence,kind,level,event_name,summary,duration_ms) VALUES
          ('embedding-session-a','embedding-a',1,'status','info','background.job.completed','Embedded batch',60000),
-         ('embedding-session-b','embedding-b',1,'status','info','background.job.completed','Embedded batch',60000)`,
+         ('embedding-session-b','embedding-b',1,'status','info','background.job.completed','Embedded batch',60000),
+         ('improvement-repair-session','improvement-repair-execution',1,'status','info','agent.task.started','private branch path',NULL),
+         ('improvement-repair-session','improvement-repair-execution',2,'command','info','agent.task.command','private command',1200),
+         ('improvement-repair-session','improvement-repair-execution',3,'command','error','agent.task.command','private failing command',800),
+         ('improvement-repair-session','improvement-repair-execution',4,'status','error','agent.task.completed','private secret output',NULL)`,
+    );
+    await pool.query(
+      `INSERT INTO agent_runtime_artifacts(
+         artifact_id,session_id,execution_id,kind,name,size_bytes,preview,redacted
+       ) VALUES (
+         'improvement-repair-artifact','improvement-repair-session','improvement-repair-execution',
+         'command_output','private-command.log',2048,'private secret output',true
+       )`,
     );
 
     const snapshot = await new OperatorDashboardRepository(pool).snapshot({ revision: "revision-a" });
@@ -299,12 +335,28 @@ describe.skipIf(!runDbTests)("operator dashboard database projection", () => {
       active: false,
       story: {
         id: "improvement-imp-dashboard",
-        technicalEvents: [
+        technicalEvents: expect.arrayContaining([
           expect.objectContaining({ name: "triage.applied" }),
           expect.objectContaining({ name: "case.created" }),
-        ],
+        ]),
       },
+      traceEvents: expect.arrayContaining([
+        expect.objectContaining({ title: "Triage completed", code: "triage.applied" }),
+        expect.objectContaining({ title: "Repair attempt 1 started", type: "task" }),
+        expect.objectContaining({
+          title: "Sandbox command", type: "command", code: "attempt.1.agent.task.command", recordCount: 2,
+          summary: "2 records in repair attempt 1; at least one command failed.",
+        }),
+        expect.objectContaining({ title: "1 retained evidence item", type: "artifact" }),
+        expect.objectContaining({
+          title: "Repair attempt 1 failed",
+          summary: "The repair retries reached their limit.",
+          durationMs: 540000,
+        }),
+      ]),
     });
+    expect(JSON.stringify(improvement)).not.toContain("private secret");
+    expect(JSON.stringify(improvement)).not.toContain("private command");
   });
 
   it("keeps the production projection available before heartbeat storage is deployed", async () => {

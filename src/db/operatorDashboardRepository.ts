@@ -3,6 +3,7 @@ import { deriveOperatorActivity } from "../console/activity.js";
 import { operatorTaskFailureSummary } from "../console/taskFailureSummary.js";
 import { releaseActivityDetail } from "./operatorActivityDetailRepository.js";
 import { messageActivityDetail, recentMessageActivities } from "./operatorMessageActivityRepository.js";
+import { improvementActivityTrace } from "./operatorImprovementActivityRepository.js";
 const COMPONENTS = ["bot", "worker", "api", "console"] as const;
 export class OperatorDashboardRepository {
   constructor(private readonly pool: DbPool) {}
@@ -27,6 +28,8 @@ export class OperatorDashboardRepository {
     if (input.kind === "message" && input.id.startsWith("message-")) return {
       ...detail, message: await messageActivityDetail(this.pool, input.id.slice("message-".length)),
     };
+    if (input.kind === "improvement" && input.id.startsWith("improvement-"))
+      return { ...detail, traceEvents: await improvementActivityTrace(this.pool, input.id.slice("improvement-".length)) };
     if (input.kind !== "conversation") return detail;
     const executionId = executionIdFromActivityId(input.id);
     if (!executionId) return { ...detail, messages: [] };
@@ -498,7 +501,6 @@ function record(value: unknown): Record<string, unknown> {
     ? value as Record<string, unknown>
     : {};
 }
-
 const TRACE_METADATA_KEYS = new Set([
   "purpose", "requestedModel", "model", "reasoningEffort", "messageCount", "toolCount", "offeredTools",
   "maxTokens", "timeoutMs", "toolChoice", "finishReason", "usage", "estimatedCostUsd", "outputChars",
@@ -569,7 +571,6 @@ function safeTraceValue(value: unknown, depth = 0): unknown {
     .map(([key, nested]) => [key, safeTraceValue(nested, depth + 1)])
     .filter(([, nested]) => nested !== undefined));
 }
-
 function safeDiscordUrl(value: unknown): string | null {
   const url = nullable(value);
   return url && /^https:\/\/discord\.com\/channels\//.test(url) ? url : null;

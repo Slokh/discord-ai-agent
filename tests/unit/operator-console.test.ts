@@ -236,6 +236,8 @@ describe("operator console", () => {
     expect(stylesheetText).toContain(".badge.not_embedded");
     expect(clientScript).not.toContain('detailMetric("Status"');
     expect(clientScript).toContain("const traceItems=");
+    expect(clientScript).toContain("Number(event.recordCount)");
+    expect(clientScript).toContain("event.firstOccurredAt||event.occurredAt");
     expect(clientScript).toContain('id="trace-toggle"');
     expect(clientScript).toContain("traceExpanded=!traceExpanded");
     expect(clientScript).not.toContain("detailRuns(story)");

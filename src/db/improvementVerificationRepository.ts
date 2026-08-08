@@ -34,6 +34,7 @@ export type ImprovementEvalResultProof = {
   runKey: string;
   durationMs: number;
   traceId: string | null;
+  outcomeCode?: "private_replay_context_unavailable" | null;
   checkResults: ImprovementReplayCheckResult[];
 };
 
@@ -81,7 +82,10 @@ export async function recordImprovementEvalResults(pool: DbPool, results: Improv
          RETURNING proof_id`,
         [proofId, bounded(input.revision, "revision", 200), bounded(input.deploymentId, "deploymentId", 300), input.status,
           bounded(input.referenceId, "referenceId", 300), bounded(input.runKey, "runKey", 200), proofSummary(input.status),
-          JSON.stringify({ durationMs: Math.max(0, Math.trunc(input.durationMs)) }), execution?.rows[0]?.execution_id ?? null,
+          JSON.stringify({
+            durationMs: Math.max(0, Math.trunc(input.durationMs)),
+            ...(input.outcomeCode ? { outcomeCode: input.outcomeCode } : {}),
+          }), execution?.rows[0]?.execution_id ?? null,
           JSON.stringify(checkResults), input.contractId, input.caseId, input.contractVersion],
       );
       recorded += inserted.rowCount ?? 0;

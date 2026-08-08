@@ -512,6 +512,18 @@ async function deriveImprovementCaseHealth(
     if (unhealthy) return producerBlockedHealth(base, unhealthy, `verifying:${improvementCase.version}:no-receipt`);
     return { ...base, state: "waiting" as const, blocker: "verified_deployment_pending", nextAction: "verify_latest_deployment", retryTrigger: "deployment_promotion", retryAt: null, progressKey: `verifying:${improvementCase.version}:no-receipt` };
   }
+  const unavailableReplay = receipt.checks.some((check) =>
+    check.status === "inconclusive" && check.proofMetadata?.outcomeCode === "private_replay_context_unavailable",
+  );
+  if (unavailableReplay) return {
+    ...base,
+    state: "blocked" as const,
+    blocker: "verification_replay_unavailable",
+    nextAction: "operator_revise_verification_contract",
+    retryTrigger: null,
+    retryAt: null,
+    progressKey: `verification:${receipt.applicationKey}:replay-unavailable`,
+  };
   const pendingTriggers = [...new Set(receipt.checks.flatMap((check) => check.status === "inconclusive" && check.retryTrigger ? [check.retryTrigger] : []))];
   const unhealthy = unhealthyProducer(pendingTriggers, proofProducers);
   if (unhealthy) return producerBlockedHealth(base, unhealthy, `verification:${receipt.applicationKey}:${receipt.createdAt.toISOString()}`);

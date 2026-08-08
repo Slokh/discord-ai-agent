@@ -82,15 +82,17 @@ export function deriveOperatorActivity(snapshot: DashboardRecord): { active: Act
 
 function messageStory(message: DashboardRecord): ActivityStory {
   const embedded = Boolean(message.embedded);
+  const skipReason = nullableString(message.embeddingSkipReason);
+  const skipped = !embedded && Boolean(skipReason);
   return storyDefaults({
     id: `message-${string(message.id)}`,
     kind: "message",
     category: "system",
     title: string(message.preview, "Message content unavailable"),
-    status: embedded ? "embedded" : "not_embedded",
-    tone: embedded ? "success" : "warning",
-    workState: embedded ? "terminal" : "waiting",
-    summary: embedded ? "Embedded" : "Not embedded",
+    status: embedded ? "embedded" : skipped ? "embedding_skipped" : "embedding_pending",
+    tone: embedded ? "success" : skipped ? "neutral" : "warning",
+    workState: embedded || skipped ? "terminal" : "waiting",
+    summary: embedded ? "Embedded" : skipped ? "Embedding skipped · bot mention" : "Embedding pending",
     occurredAt: message.createdAt,
     startedAt: message.createdAt,
     sourceUrl: nullableString(message.sourceUrl),

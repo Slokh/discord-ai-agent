@@ -8,7 +8,7 @@ import { RELATED_CASES_FOR_EXECUTION_SQL, RELATED_CASES_FOR_IMPROVEMENT_SQL } fr
 import type { OperatorActivitySource } from "./operatorActivityLinks.js";
 const COMPONENTS = ["bot", "worker", "api", "console"] as const;
 export class OperatorDashboardRepository {
-  constructor(private readonly pool: DbPool) {}
+  constructor(private readonly pool: DbPool, private readonly botUserId: string | null = null) {}
   async activityDetail(input: { kind: string; id: string; revision: string }) {
     const snapshot = await this.snapshot({ revision: input.revision, includeActivityDetails: true });
     const activity = deriveOperatorActivity(snapshot);
@@ -28,7 +28,7 @@ export class OperatorDashboardRepository {
       return deployment ? { ...detail, release: await releaseActivityDetail(this.pool, deployment) } : detail;
     }
     if (input.kind === "message" && input.id.startsWith("message-")) return {
-      ...detail, message: await messageActivityDetail(this.pool, input.id.slice("message-".length)),
+      ...detail, message: await messageActivityDetail(this.pool, input.id.slice("message-".length), this.botUserId),
     };
     if (input.kind === "improvement" && input.id.startsWith("improvement-"))
       return { ...detail, traceEvents: await improvementActivityTrace(this.pool, story.relatedImprovementCaseIds) };
@@ -305,6 +305,13 @@ export class OperatorDashboardRepository {
            WHERE status NOT IN ('queued','running')
              AND task_type <> 'post-deploy-canary'
              AND updated_at >= $1::timestamptz - interval '7 days'
+             AND (
+               improvement_case_id IS NOT NULL
+               OR created_at >= coalesce(
+                 (SELECT applied_at FROM schema_migrations WHERE version = '039_improvement_cases'),
+                 '-infinity'::timestamptz
+               )
+             )
            ORDER BY updated_at DESC,created_at DESC
          )
          SELECT task.task_id,task.task_type,task.title,task.status,task.status_message,task.current_step,task.error,
@@ -386,7 +393,7 @@ export class OperatorDashboardRepository {
            ORDER BY candidate.started_at DESC,candidate.run_id DESC LIMIT 1
          ) run ON true ORDER BY producer.trigger`,
       ),
-      recentMessageActivities(this.pool, now),
+      recentMessageActivities(this.pool, now, this.botUserId),
     ]);
 
     const heartbeatRows = heartbeats.rows.map((row) => ({

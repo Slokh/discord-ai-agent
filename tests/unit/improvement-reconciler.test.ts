@@ -367,6 +367,77 @@ describe("improvement reconciler", () => {
     }));
   });
 
+  it("blocks verification when a private replay cannot reproduce retained context", async () => {
+    const now = new Date("2026-08-05T12:00:00.000Z");
+    const verifying = improvementCase("imp-unreplayable", "verifying", now);
+    const verifyingRecord = {
+      ...record(verifying, signal(verifying.caseId, "member_report")),
+      verificationReceipts: [{
+        receiptId: "receipt-unreplayable",
+        caseId: verifying.caseId,
+        contractId: "contract-unreplayable",
+        contractVersion: 1,
+        revision: "revision-one",
+        deploymentId: "deployment-one",
+        executionId: null,
+        status: "inconclusive",
+        checks: [{
+          index: 0,
+          checkHash: "check-one",
+          check: { kind: "answer_text", value: "source", expectation: "required" },
+          adapterId: "private_replay",
+          retryTrigger: null,
+          status: "inconclusive",
+          proofSource: "private_eval",
+          summary: "The contract cannot be replayed faithfully from retained private context.",
+          referenceType: "private_eval_case",
+          referenceId: "case-one",
+          proofMetadata: { outcomeCode: "private_replay_context_unavailable" },
+        }],
+        applicationKey: "application-unreplayable",
+        evidenceId: null,
+        applied: true,
+        actorId: "private-replay",
+        createdAt: now,
+      }],
+    };
+    const updateImprovementCaseHealth = vi.fn(async (input: any) => ({
+      health: { ...input, lastProgressAt: now, checkedAt: now }, changed: true, progressed: true,
+    }));
+    const repo = {
+      listImprovementCasesForReconciliation: vi.fn(async () => []),
+      getImprovementCase: vi.fn(async () => verifyingRecord),
+      getAgentTask: vi.fn(),
+      applyImprovementTriage: vi.fn(),
+      recordImprovementReconciliationDecision: vi.fn(async () => ({ recorded: true })),
+      getImprovementReporterClarificationState: vi.fn(async () => clarificationState()),
+      ensureImprovementReporterConversationsForCase: vi.fn(async () => 0),
+      listActiveImprovementPullRequestWork: vi.fn(async () => []),
+      reconcileImprovementPullRequestWorkAttempt: vi.fn(),
+      latestDeploymentVerification: vi.fn(async () => null),
+      verifyImprovementCasesForDeployment: vi.fn(),
+      listImprovementCaseIdsNeedingHealth: vi.fn(async () => [verifying.caseId]),
+      updateImprovementCaseHealth,
+      listImprovementProofProducerHealth: vi.fn(async () => []),
+    };
+
+    await runImprovementReconciliationOnce({
+      repo: repo as never,
+      config: { improvementStalledAfterMs: 1_000 } as unknown as AppConfig,
+      runtime: { getExecution: vi.fn(), listEvents: vi.fn() } as never,
+      deliveries: { getByExecutionId: vi.fn() } as never,
+      now,
+    });
+
+    expect(updateImprovementCaseHealth).toHaveBeenCalledWith(expect.objectContaining({
+      state: "blocked",
+      blocker: "verification_replay_unavailable",
+      nextAction: "operator_revise_verification_contract",
+      retryTrigger: null,
+      progressKey: "verification:application-unreplayable:replay-unavailable",
+    }));
+  });
+
   it("coalesces an unhealthy proof producer and routes waiting cases through recovery", async () => {
     const now = new Date("2026-08-05T12:00:00.000Z");
     const verifying = improvementCase("imp-producer-wait", "verifying", now);

@@ -235,6 +235,17 @@ function evaluateCheck(input: {
     if (!proof) return result(base, "inconclusive", "unavailable", "The post-deploy private replay has not produced this check's proof.");
     const conclusion = proof.checkResults.find((candidate) => candidate.checkHash === base.checkHash);
     if (!conclusion) return result(base, "inconclusive", "private_eval", "The latest private replay did not contain a conclusion for this check.", proof.referenceType, proof.referenceId, proof);
+    if (proof.metadata?.outcomeCode === "private_replay_context_unavailable") {
+      return result(
+        { ...base, retryTrigger: null },
+        "inconclusive",
+        "private_eval",
+        "The contract cannot be replayed faithfully from retained private context.",
+        proof.referenceType,
+        proof.referenceId,
+        proof,
+      );
+    }
     return result(base, conclusion.status, "private_eval", replaySummary(conclusion.status), proof.referenceType, proof.referenceId, proof);
   }
   if (adapter.id === "revision_quality") {

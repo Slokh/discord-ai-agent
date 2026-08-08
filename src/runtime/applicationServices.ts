@@ -12,6 +12,12 @@ import { OpenRouterClient } from "../models/openrouter.js";
 import { PrivyTempoWalletProvider } from "../payments/privyTempoWalletProvider.js";
 import { WalletService } from "../payments/walletService.js";
 
+export function createOperatorDashboardServices(config: AppConfig) {
+  const pool = createPool(config);
+  const operatorDashboard = new OperatorDashboardRepository(pool, config.discord.clientId || null);
+  return { pool, operatorDashboard, close: () => pool.end() };
+}
+
 /** Process-agnostic composition root for application-owned services. */
 export function createApplicationServices(input: {
   config: AppConfig;
@@ -25,7 +31,7 @@ export function createApplicationServices(input: {
   const rng = new RngRepository(pool);
   const payments = new PaymentRepository(pool);
   const deliveryObligations = new DeliveryObligationsRepository(pool);
-  const operatorDashboard = new OperatorDashboardRepository(pool);
+  const operatorDashboard = new OperatorDashboardRepository(pool, config.discord.clientId || null);
   const serviceHeartbeats = new ServiceHeartbeatRepository(pool);
   const openRouter = new OpenRouterClient(config.openRouter);
   const walletProvider = input.enableWalletRuntime && config.payments.walletEnabled

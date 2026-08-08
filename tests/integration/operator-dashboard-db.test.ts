@@ -125,6 +125,22 @@ describe.skipIf(!runDbTests)("operator dashboard database projection", () => {
          ('task-canary-complete','post-deploy-canary','Completed sandbox canary','Verify callback','system','completed','completed')`,
     );
     await pool.query(
+      `INSERT INTO agent_tasks(
+         task_id,task_type,title,request,requested_by,status,error,created_at,started_at,completed_at,updated_at
+       ) VALUES
+         (
+           'task-legacy-orphan','code_update','Legacy orphaned failure','Old private request','operator','failed','old failure',
+           (SELECT applied_at - interval '2 minutes' FROM schema_migrations WHERE version = '039_improvement_cases'),
+           (SELECT applied_at - interval '90 seconds' FROM schema_migrations WHERE version = '039_improvement_cases'),
+           (SELECT applied_at - interval '1 minute' FROM schema_migrations WHERE version = '039_improvement_cases'),
+           now()
+         ),
+         (
+           'task-current-orphan','code_update','Current standalone failure','Current private request','operator','failed','current failure',
+           now(),now(),now(),now()
+         )`,
+    );
+    await pool.query(
       `INSERT INTO improvement_cases(case_id,scope,privacy,title,status,classification,severity,automation_state,automation_blocker)
        VALUES ('imp-dashboard','repository','private','Dashboard visibility','actionable','product_gap','high','blocked','waiting_for_proof')`,
     );
@@ -237,6 +253,10 @@ describe.skipIf(!runDbTests)("operator dashboard database projection", () => {
     }));
     expect(snapshot.activity.map((story) => story.kind)).toEqual(expect.arrayContaining(["runtime", "improvement"]));
     expect(snapshot.activity.filter((story) => story.kind === "runtime")).toHaveLength(2);
+    expect(snapshot.activity).toContainEqual(expect.objectContaining({
+      id: "task-task-current-orphan", kind: "code_change", status: "failed",
+    }));
+    expect(snapshot.activity).not.toContainEqual(expect.objectContaining({ id: "task-task-legacy-orphan" }));
     expect(JSON.stringify({ executions: snapshot.executions, tasks: snapshot.tasks, activity: snapshot.activity })).not.toContain("canary");
     expect(snapshot.activity.find((story) => story.id === "runtime-agent-execution-attempt-2")).toMatchObject({
       title: "Recovered prompt",
@@ -410,7 +430,7 @@ describe.skipIf(!runDbTests)("operator dashboard database projection", () => {
     await pool.query(
       `INSERT INTO agent_tasks(task_id,task_type,title,request,requested_by,status,current_step,updated_at)
        SELECT 'bulk-code-task-' || item,'code_update','Bulk code task ' || item,'Implement change','test',
-              'completed','completed',now() - item * interval '1 minute'
+              'completed','completed',now()
        FROM generate_series(1,45) item`,
     );
     await pool.query(

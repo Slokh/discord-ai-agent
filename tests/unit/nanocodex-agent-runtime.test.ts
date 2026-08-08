@@ -45,6 +45,9 @@ describe("NanoCodex agent runtime executor", () => {
       expect(input.instructions).not.toContain("Current Discord requester: Kartik");
       expect(input.prompt).toContain("Current Discord requester: Kartik");
       expect(input.prompt).toContain("Current NanoCodex model for this turn: `openai/gpt-5.6-luna`");
+      expect(input.prompt).toContain("Configured Discord chat default: `openai/gpt-5.6-luna` (Luna).");
+      expect(input.prompt).toContain("Sol is available only as an authorized server override; it is not selected automatically.");
+      expect(input.prompt).toContain("Configured code-update model: `openai/gpt-5.6-terra` (Terra).");
       expect(input.prompt).toContain("USER: hello");
       expect(input.tools.map((tool: any) => tool.function.name)).toEqual(expect.arrayContaining(["loadSkillContext", "drawRandom", "web__run"]));
       await expect(input.executeTool({ callId: "bad-1", name: "notRegistered", arguments: {} })).resolves.toEqual({

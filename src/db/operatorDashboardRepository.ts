@@ -1,7 +1,7 @@
 import type { DbPool } from "./pool.js";
 import { deriveOperatorActivity } from "../console/activity.js";
 import { releaseActivityDetail } from "./operatorActivityDetailRepository.js";
-import { latestMessageActivity, messageActivityDetail } from "./operatorMessageActivityRepository.js";
+import { messageActivityDetail, recentMessageActivities } from "./operatorMessageActivityRepository.js";
 const COMPONENTS = ["bot", "worker", "api", "console"] as const;
 export class OperatorDashboardRepository {
   constructor(private readonly pool: DbPool) {}
@@ -24,8 +24,8 @@ export class OperatorDashboardRepository {
       const deployment = snapshot.deployments.find((candidate) => `release-${candidate.deploymentId}` === input.id);
       return deployment ? { ...detail, release: await releaseActivityDetail(this.pool, deployment) } : detail;
     }
-    if (input.kind === "message" && input.id === "message-latest") return {
-      ...detail, message: await messageActivityDetail(this.pool, String(snapshot.latestMessage?.id)),
+    if (input.kind === "message" && input.id.startsWith("message-")) return {
+      ...detail, message: await messageActivityDetail(this.pool, input.id.slice("message-".length)),
     };
     if (input.kind !== "conversation") return detail;
     const executionId = executionIdFromActivityId(input.id);
@@ -186,7 +186,7 @@ export class OperatorDashboardRepository {
         [now],
       )
       : Promise.resolve({ rows: [] });
-    const [heartbeats, executions, tasks, cases, caseCounts, runtimeEvents, taskEvents, caseEvents, deployments, producers, latestMessages] = await Promise.all([
+    const [heartbeats, executions, tasks, cases, caseCounts, runtimeEvents, taskEvents, caseEvents, deployments, producers, messages] = await Promise.all([
       heartbeatQuery,
       this.pool.query(
         `SELECT execution.execution_id,execution.session_id,execution.task_id,execution.status,
@@ -377,7 +377,7 @@ export class OperatorDashboardRepository {
            ORDER BY candidate.started_at DESC,candidate.run_id DESC LIMIT 1
          ) run ON true ORDER BY producer.trigger`,
       ),
-      latestMessageActivity(this.pool),
+      recentMessageActivities(this.pool, now),
     ]);
 
     const heartbeatRows = heartbeats.rows.map((row) => ({
@@ -453,7 +453,7 @@ export class OperatorDashboardRepository {
         createdAt: date(row.created_at), startedAt: nullableDate(row.started_at), updatedAt: date(row.updated_at),
       })),
       improvements: { counts: improvementCounts, cases: improvementRows },
-      latestMessage: latestMessages,
+      messages,
       deployments: deployments.rows.map((row) => ({
         revision: String(row.revision), deploymentId: String(row.deployment_id), verifiedAt: date(row.verified_at),
       })),

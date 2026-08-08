@@ -195,10 +195,10 @@ describe.skipIf(!runDbTests)("operator dashboard database projection", () => {
     expect(snapshot.improvements.cases[0]).toMatchObject({ caseId: "imp-dashboard", automationState: "blocked", pullRequestUrl: "https://github.com/owner/repo/pull/1" });
     expect(snapshot.deployments[0]).toMatchObject({ revision: "revision-a", deploymentId: "deployment-a" });
     expect(snapshot.producers).toHaveLength(5);
-    expect(snapshot.latestMessage).toMatchObject({
+    expect(snapshot.messages).toContainEqual(expect.objectContaining({
       id: "source-b", preview: "Current member prompt", embedded: true,
       sourceUrl: "https://discord.com/channels/guild-a/channel-a/source-b",
-    });
+    }));
     expect(snapshot.activity.map((story) => story.kind)).toEqual(expect.arrayContaining(["runtime", "improvement"]));
     expect(snapshot.activity.filter((story) => story.kind === "runtime")).toHaveLength(2);
     expect(JSON.stringify({ executions: snapshot.executions, tasks: snapshot.tasks, activity: snapshot.activity })).not.toContain("canary");
@@ -273,10 +273,10 @@ describe.skipIf(!runDbTests)("operator dashboard database projection", () => {
     });
 
     const message = await new OperatorDashboardRepository(pool).activityDetail({
-      kind: "message", id: "message-latest", revision: "revision-a",
+      kind: "message", id: "message-source-b", revision: "revision-a",
     });
     expect(message).toMatchObject({
-      story: { kind: "message", id: "message-latest", status: "embedded", title: "Current member prompt" },
+      story: { kind: "message", id: "message-source-b", status: "embedded", title: "Current member prompt" },
       message: {
         id: "source-b", content: "Current member prompt", embedded: true,
         model: "text-embedding-3-small", dimensions: 1536, inputVersion: 2,
@@ -284,7 +284,7 @@ describe.skipIf(!runDbTests)("operator dashboard database projection", () => {
     });
     const projectedActivity = deriveOperatorActivity(snapshot);
     expect(projectedActivity.recent).toContainEqual(expect.objectContaining({
-      kind: "message", id: "message-latest", status: "embedded",
+      kind: "message", id: "message-source-b", status: "embedded",
     }));
     expect(projectedActivity.active.concat(projectedActivity.recent)).not.toContainEqual(
       expect.objectContaining({ rollupKey: "embedding" }),

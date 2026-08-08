@@ -67,8 +67,7 @@ export function deriveOperatorActivity(snapshot: DashboardRecord): { active: Act
     correlateImprovementWork(records(snapshot.activity).map(projectRecentStory)),
     records(record(snapshot.improvements).cases),
   ).filter((story) => story.rollupKey !== "embedding");
-  const latestMessage = record(snapshot.latestMessage);
-  if (latestMessage.id) projected.push(messageStory(latestMessage));
+  projected.push(...records(snapshot.messages).map(messageStory));
   for (const deployment of records(snapshot.deployments).slice(0, 3)) projected.push(releaseStory(deployment));
   const rolledUp = rollupSystemStories(projected);
   const sorted = rolledUp.sort((left, right) => timestamp(right.occurredAt) - timestamp(left.occurredAt));
@@ -82,7 +81,7 @@ export function deriveOperatorActivity(snapshot: DashboardRecord): { active: Act
 function messageStory(message: DashboardRecord): ActivityStory {
   const embedded = Boolean(message.embedded);
   return storyDefaults({
-    id: "message-latest",
+    id: `message-${string(message.id)}`,
     kind: "message",
     category: "system",
     title: string(message.preview, "Message content unavailable"),

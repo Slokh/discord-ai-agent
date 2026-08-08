@@ -1,13 +1,14 @@
 import type { DbPool } from "./pool.js";
 
-export async function latestMessageActivity(pool: DbPool) {
+export async function recentMessageActivities(pool: DbPool, now: Date) {
   const result = await pool.query(
     `WITH recent_messages AS MATERIALIZED (
        SELECT id,guild_id,channel_id,author_id,content,created_at
        FROM messages
-       WHERE deleted_at IS NULL AND normalized_content <> ''
+       WHERE deleted_at IS NULL
+         AND normalized_content <> ''
+         AND created_at >= $1::timestamptz - interval '24 hours'
        ORDER BY created_at DESC,id DESC
-       LIMIT 1000
      )
      SELECT message.id,message.guild_id,message.channel_id,
             left(message.content,240) AS preview,message.created_at,
@@ -24,14 +25,14 @@ export async function latestMessageActivity(pool: DbPool) {
          SELECT 1 FROM privacy_deletions privacy WHERE privacy.user_id = message.author_id
        )
      ORDER BY message.created_at DESC,message.id DESC
-     LIMIT 1`,
+    `,
+    [now],
   );
-  const row = result.rows[0];
-  return row ? {
+  return result.rows.map((row) => ({
     id: String(row.id), preview: String(row.preview), createdAt: date(row.created_at),
     embedded: Boolean(row.embedded), embeddedAt: nullableDate(row.embedded_at),
     sourceUrl: discordUrl(row.guild_id, row.channel_id, row.id),
-  } : null;
+  }));
 }
 
 export async function messageActivityDetail(pool: DbPool, messageId: string) {

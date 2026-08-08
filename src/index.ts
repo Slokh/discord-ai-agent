@@ -1,5 +1,5 @@
 import { Client, GatewayIntentBits, Partials } from "discord.js";
-import { assertDiscordConfig, assertExecutionConfig, assertOpenRouterConfig, assertPaymentConfig, assertTaskCallbackConfig, loadConfig } from "./config/env.js";
+import { assertConsoleAuthConfig, assertDiscordConfig, assertExecutionConfig, assertOpenRouterConfig, assertPaymentConfig, assertTaskCallbackConfig, loadConfig } from "./config/env.js";
 import { startSandboxCallbackServer } from "./execution/callbackServer.js";
 import { runMigrations } from "./db/migrate.js";
 import { createExecutionBackend } from "./execution/backend.js";
@@ -40,6 +40,7 @@ async function main() {
   if (startsApi) assertTaskCallbackConfig(config);
   if (startsTaskWorker) assertExecutionConfig(config);
   if (startsPaymentRuntime && config.payments.walletEnabled) assertPaymentConfig(config);
+  if (startsConsole && config.nodeEnv === "production") assertConsoleAuthConfig(config);
 
   logger.info(
     {

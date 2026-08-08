@@ -8,15 +8,20 @@ export function createProductionDevelopmentSource(input: {
 }): DashboardSnapshotSource {
   return {
     activityDetail: (detail) => input.production.activityDetail(detail),
-    snapshot: async ({ revision }) => {
-      const snapshot = await input.production.snapshot({ revision });
-      const summary = record(snapshot.summary);
-      if (summary?.serviceTelemetryAvailable === true) return snapshot;
+    activityPage: (request) => {
+      if (!input.production.activityPage) throw new Error("Production Console does not provide activity pages.");
+      return input.production.activityPage(request);
+    },
+    overview: async ({ revision }) => {
+      if (!input.production.overview) throw new Error("Production Console does not provide an overview.");
+      const overview = await input.production.overview({ revision });
+      const summary = record(overview.summary);
+      if (summary?.serviceTelemetryAvailable === true) return overview;
 
       const services = servicesFromKubernetes(await input.readKubernetes());
-      if (!services.length) return snapshot;
+      if (!services.length) return overview;
       return {
-        ...snapshot,
+        ...overview,
         services,
         summary: {
           ...summary,

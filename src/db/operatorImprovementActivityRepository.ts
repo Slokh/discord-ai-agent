@@ -52,6 +52,93 @@ const REPEATED_CASE_EVENTS = new Set([
   "reconciliation.stalled",
 ]);
 
+export async function improvementActivityContext(pool: DbPool, caseIds: string[], focusCaseId: string) {
+  const [cases, signals, evidence, contracts, work, receipts] = await Promise.all([
+    pool.query(
+      `SELECT case_id,classification,severity,owning_domain,resolution,first_seen_at,last_seen_at
+       FROM improvement_cases
+       WHERE case_id = ANY($1::text[])
+       ORDER BY CASE WHEN case_id = $2 THEN 0 ELSE 1 END,first_seen_at ASC`,
+      [caseIds, focusCaseId],
+    ),
+    pool.query(
+      `SELECT source,app_revision,metadata->>'detectionCode' AS detection_code,active,observed_at
+       FROM improvement_signals
+       WHERE case_id = ANY($1::text[])
+       ORDER BY active DESC,observed_at ASC,signal_id ASC
+       LIMIT 12`,
+      [caseIds],
+    ),
+    pool.query(
+      `SELECT kind,disposition,summary,created_at
+       FROM improvement_evidence
+       WHERE case_id = ANY($1::text[])
+       ORDER BY CASE disposition WHEN 'supports' THEN 0 WHEN 'contradicts' THEN 1 ELSE 2 END,
+                created_at DESC,evidence_id DESC
+       LIMIT 6`,
+      [caseIds],
+    ),
+    pool.query(
+      `SELECT expected_behavior,checks,source_revision,created_at
+       FROM improvement_contracts
+       WHERE case_id = ANY($1::text[]) AND active = true
+       ORDER BY CASE WHEN case_id = $2 THEN 0 ELSE 1 END,version DESC
+       LIMIT 1`,
+      [caseIds, focusCaseId],
+    ),
+    pool.query(
+      `SELECT status,pull_request_url,pull_request_number,merge_revision,completed_at
+       FROM improvement_work_attempts
+       WHERE case_id = ANY($1::text[])
+         AND (pull_request_url IS NOT NULL OR merge_revision IS NOT NULL)
+       ORDER BY completed_at DESC NULLS LAST,created_at DESC
+       LIMIT 1`,
+      [caseIds],
+    ),
+    pool.query(
+      `SELECT status,revision,deployment_id,checks,created_at
+       FROM improvement_verification_receipts
+       WHERE case_id = ANY($1::text[])
+       ORDER BY applied DESC,created_at DESC,receipt_id DESC
+       LIMIT 1`,
+      [caseIds],
+    ),
+  ]);
+  const caseRow = cases.rows[0];
+  const contractRow = contracts.rows[0];
+  const workRow = work.rows[0];
+  const receiptRow = receipts.rows[0];
+  return {
+    case: caseRow ? {
+      classification: String(caseRow.classification), severity: String(caseRow.severity),
+      owningDomain: nullable(caseRow.owning_domain), resolution: nullable(caseRow.resolution),
+      firstSeenAt: asDate(caseRow.first_seen_at), lastSeenAt: asDate(caseRow.last_seen_at),
+    } : null,
+    signals: signals.rows.map((row) => ({
+      source: String(row.source), appRevision: nullable(row.app_revision),
+      detectionCode: nullable(row.detection_code), active: Boolean(row.active), observedAt: asDate(row.observed_at),
+    })),
+    evidence: evidence.rows.map((row) => ({
+      kind: String(row.kind), disposition: String(row.disposition), summary: String(row.summary),
+      createdAt: asDate(row.created_at),
+    })),
+    contract: contractRow ? {
+      expectedBehavior: String(contractRow.expected_behavior), checks: safeChecks(contractRow.checks),
+      sourceRevision: nullable(contractRow.source_revision), createdAt: asDate(contractRow.created_at),
+    } : null,
+    work: workRow ? {
+      status: String(workRow.status), pullRequestUrl: safeGitHubUrl(workRow.pull_request_url),
+      pullRequestNumber: finiteNumber(workRow.pull_request_number), mergeRevision: nullable(workRow.merge_revision),
+      completedAt: nullableDate(workRow.completed_at),
+    } : null,
+    verification: receiptRow ? {
+      status: String(receiptRow.status), revision: String(receiptRow.revision),
+      deploymentId: String(receiptRow.deployment_id), checks: safeVerificationChecks(receiptRow.checks),
+      createdAt: asDate(receiptRow.created_at),
+    } : null,
+  };
+}
+
 export async function improvementActivityTrace(pool: DbPool, caseIds: string[]): Promise<TraceEvent[]> {
   const [caseEvents, attempts, runtimeGroups] = await Promise.all([
     pool.query(
@@ -239,4 +326,50 @@ function humanEventName(name: string) {
 
 function asDate(value: unknown): Date {
   return value instanceof Date ? value : new Date(String(value));
+}
+
+function nullable(value: unknown): string | null {
+  return value == null || String(value).trim() === "" ? null : String(value);
+}
+
+function nullableDate(value: unknown): Date | null {
+  return value == null ? null : asDate(value);
+}
+
+function finiteNumber(value: unknown): number | null {
+  if (value === null || value === undefined) return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function safeChecks(value: unknown) {
+  return Array.isArray(value) ? value.flatMap((candidate) => {
+    if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) return [];
+    const check = candidate as Record<string, unknown>;
+    const kind = nullable(check.kind);
+    if (!kind) return [];
+    return [{ kind, reference: nullable(check.reference) }];
+  }) : [];
+}
+
+function safeVerificationChecks(value: unknown) {
+  return Array.isArray(value) ? value.flatMap((candidate) => {
+    if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) return [];
+    const check = candidate as Record<string, unknown>;
+    return [{
+      status: nullable(check.status) ?? "unknown",
+      summary: nullable(check.summary),
+      kind: candidateCheckKind(check.check),
+    }];
+  }) : [];
+}
+
+function candidateCheckKind(value: unknown) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  return nullable((value as Record<string, unknown>).kind);
+}
+
+function safeGitHubUrl(value: unknown): string | null {
+  const url = nullable(value);
+  return url && /^https:\/\/github\.com\//.test(url) ? url : null;
 }

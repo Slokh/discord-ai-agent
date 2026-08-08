@@ -75,6 +75,14 @@ helm.sh/chart: {{ .Chart.Name }}-{{ .Chart.Version | replace "+" "_" }}
   valueFrom: { secretKeyRef: { name: {{ .Values.secret.existingSecretName }}, key: DISCORD_GUILD_ID } }
 {{- end -}}
 
+{{- define "discord-ai-agent.consoleAuthEnv" -}}
+{{- include "discord-ai-agent.discordIdentityEnv" . }}
+- name: DISCORD_CLIENT_SECRET
+  valueFrom: { secretKeyRef: { name: {{ .Values.secret.existingSecretName }}, key: DISCORD_CLIENT_SECRET } }
+- name: CONSOLE_SESSION_SECRET
+  valueFrom: { secretKeyRef: { name: {{ .Values.secret.existingSecretName }}, key: CONSOLE_SESSION_SECRET } }
+{{- end -}}
+
 {{- define "discord-ai-agent.openRouterEnv" -}}
 - name: OPENROUTER_API_KEY
   valueFrom: { secretKeyRef: { name: {{ .Values.secret.existingSecretName }}, key: OPENROUTER_API_KEY } }

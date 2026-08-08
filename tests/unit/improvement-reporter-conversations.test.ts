@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { ImprovementReporterConversation } from "../../src/db/types.js";
 import {
   handleImprovementClarificationReply,
-  resolveImprovementReporterThread,
+  replyToOriginalReport,
   renderImprovementReporterConversation,
   shouldDeliverImprovementReporterConversation,
 } from "../../src/discord/improvementReporterConversations.js";
@@ -18,13 +18,11 @@ describe("improvement reporter conversations", () => {
     expect(rendered.content).toContain("Reply here with the answer");
   });
 
-  it("renders withdrawal, progress, and verified resolution from the case lifecycle", () => {
-    expect(renderImprovementReporterConversation(conversation({ signalActive: false })).content).toContain("stopped tracking");
-    expect(renderImprovementReporterConversation(conversation({ caseStatus: "in_progress" })).content).toContain("fix is in progress");
+  it("renders only the verified production resolution", () => {
     expect(renderImprovementReporterConversation(conversation({ caseStatus: "resolved" })).content).toContain("verified in production");
   });
 
-  it("opens a conversation only for reporter input or repair work, then keeps it alive", () => {
+  it("delivers only reporter questions and the final deployed resolution", () => {
     expect(shouldDeliverImprovementReporterConversation(conversation({ caseStatus: "open" }))).toBe(false);
     expect(shouldDeliverImprovementReporterConversation(conversation({ caseStatus: "needs_evidence" }))).toBe(false);
     expect(shouldDeliverImprovementReporterConversation(conversation({ caseStatus: "actionable" }))).toBe(false);
@@ -33,19 +31,19 @@ describe("improvement reporter conversations", () => {
       caseStatus: "needs_evidence",
       clarificationQuestion: "What result did you expect?",
     }))).toBe(true);
-    expect(shouldDeliverImprovementReporterConversation(conversation({ caseStatus: "in_progress" }))).toBe(true);
-    expect(shouldDeliverImprovementReporterConversation(conversation({ caseStatus: "verifying" }))).toBe(true);
+    expect(shouldDeliverImprovementReporterConversation(conversation({ caseStatus: "in_progress" }))).toBe(false);
+    expect(shouldDeliverImprovementReporterConversation(conversation({ caseStatus: "verifying" }))).toBe(false);
     expect(shouldDeliverImprovementReporterConversation(conversation({ caseStatus: "resolved" }))).toBe(true);
     expect(shouldDeliverImprovementReporterConversation(conversation({
       caseStatus: "dismissed",
       signalActive: false,
-      deliveryKind: "thread",
-      deliveryChannelId: "thread-1",
+      deliveryKind: "channel",
+      deliveryChannelId: "channel-1",
       deliveryMessageId: "message-1",
-    }))).toBe(true);
+    }))).toBe(false);
   });
 
-  it("accepts a natural guild-thread follow-up without requiring a message reply", async () => {
+  it("accepts the reporter's explicit reply to the channel clarification", async () => {
     const answerImprovementReporterClarification = vi.fn(async () => ({ conversationId: "conversation-1", caseId: "case-1", signalId: "answer-1" }));
     const enqueueImprovementReconciliation = vi.fn(async () => "job-1");
     const handled = await handleImprovementClarificationReply({
@@ -54,11 +52,10 @@ describe("improvement reporter conversations", () => {
     }, {
       inGuild: () => true,
       guildId: "guild-1",
-      channelId: "thread-1",
-      channel: { isThread: () => true },
+      channelId: "channel-1",
       id: "follow-up-1",
       author: { id: "member-1", bot: false },
-      reference: null,
+      reference: { messageId: "question-message" },
       content: "Yes, include tax.",
     } as never);
 
@@ -66,16 +63,16 @@ describe("improvement reporter conversations", () => {
     expect(answerImprovementReporterClarification).toHaveBeenCalledWith({
       authorId: "member-1",
       guildId: "guild-1",
-      channelId: "thread-1",
+      channelId: "channel-1",
       messageId: "follow-up-1",
-      referencedMessageId: null,
+      referencedMessageId: "question-message",
       answer: "Yes, include tax.",
     });
     expect(enqueueImprovementReconciliation).toHaveBeenCalledOnce();
   });
 
-  it("requires an explicit reply for the fallback DM", async () => {
-    const answerImprovementReporterClarification = vi.fn(async () => ({ conversationId: "conversation-1", caseId: "case-1", signalId: "answer-1" }));
+  it("ignores DMs and non-reply channel messages", async () => {
+    const answerImprovementReporterClarification = vi.fn();
     const handled = await handleImprovementClarificationReply({
       repo: { answerImprovementReporterClarification } as never,
     }, {
@@ -86,58 +83,25 @@ describe("improvement reporter conversations", () => {
       reference: { messageId: "question-message" },
       content: "Yes, include tax.",
     } as never);
-    expect(handled).toBe(true);
-    expect(answerImprovementReporterClarification).toHaveBeenCalledWith(expect.objectContaining({
-      guildId: null,
-      channelId: "dm-channel",
-      messageId: "dm-answer",
-      referencedMessageId: "question-message",
+    expect(handled).toBe(false);
+    expect(answerImprovementReporterClarification).not.toHaveBeenCalled();
+  });
+
+  it("mentions the reporter in an explicit reply to the original report", async () => {
+    const reply = vi.fn(async () => ({ id: "question-message", channelId: "channel-1" }));
+    const fetchMessage = vi.fn(async () => ({ inGuild: () => true, guildId: "guild-1", reply }));
+    const client = { channels: { fetch: vi.fn(async () => ({ messages: { fetch: fetchMessage } })) } };
+
+    await expect(replyToOriginalReport(client as never, conversation(), "What result did you expect?")).resolves.toMatchObject({
+      kind: "channel",
+      message: { id: "question-message", channelId: "channel-1" },
+    });
+    expect(client.channels.fetch).toHaveBeenCalledWith("channel-1");
+    expect(fetchMessage).toHaveBeenCalledWith("message-1");
+    expect(reply).toHaveBeenCalledWith(expect.objectContaining({
+      content: "<@member-1> What result did you expect?",
+      allowedMentions: { parse: [], users: ["member-1"] },
     }));
-  });
-
-  it("creates a standalone public thread in the configured bot channel", async () => {
-    const thread = { id: "thread-1", isThread: () => true };
-    const create = vi.fn(async () => thread);
-    const client = {
-      channels: { fetch: vi.fn(async () => ({
-        type: 0,
-        guildId: "guild-1",
-        guild: { members: { fetch: vi.fn(async () => ({ id: "member-1" })) } },
-        permissionsFor: vi.fn(() => ({ has: vi.fn(() => true) })),
-        threads: { create },
-      })) },
-    };
-    await expect(resolveImprovementReporterThread(client as never, conversation(), "hub-channel")).resolves.toBe(thread);
-    expect(client.channels.fetch).toHaveBeenCalledWith("hub-channel");
-    expect(create).toHaveBeenCalledWith(expect.objectContaining({
-      name: "🐛 report follow-up",
-      type: 11,
-      autoArchiveDuration: 60,
-    }));
-  });
-
-  it("declines hub delivery when the channel is unconfigured or outside the report guild", async () => {
-    const fetch = vi.fn(async () => ({ type: 0, guildId: "other-guild" }));
-    const client = { channels: { fetch } };
-    await expect(resolveImprovementReporterThread(client as never, conversation(), null)).resolves.toBeNull();
-    expect(fetch).not.toHaveBeenCalled();
-    await expect(resolveImprovementReporterThread(client as never, conversation(), "hub-channel")).resolves.toBeNull();
-  });
-
-  it("requires the reporter to view the hub and send in its threads", async () => {
-    const create = vi.fn();
-    const client = {
-      channels: { fetch: vi.fn(async () => ({
-        type: 0,
-        guildId: "guild-1",
-        guild: { members: { fetch: vi.fn(async () => ({ id: "member-1" })) } },
-        permissionsFor: vi.fn(() => ({ has: vi.fn(() => false) })),
-        threads: { create },
-      })) },
-    };
-
-    await expect(resolveImprovementReporterThread(client as never, conversation(), "hub-channel")).resolves.toBeNull();
-    expect(create).not.toHaveBeenCalled();
   });
 });
 

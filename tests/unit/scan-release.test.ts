@@ -7,6 +7,7 @@ const privateEmojiId = ["152129", "940721", "4084337"].join("");
 const fixtureSnowflake = ["987654", "321987", "654321"].join("");
 const repeatedSnowflake = "1".repeat(18);
 const sequentialSnowflake = ["123456789012", "345678"].join("");
+const publicConsoleHostname = `console.${["mind", "cool"].join("")}.dev`;
 
 describe("release scanner", () => {
   it("reports each new private-data rule with rule ids", () => {
@@ -81,5 +82,18 @@ describe("release scanner", () => {
     expect(JSON.parse(policy)).toEqual(expect.objectContaining({
       publicRepositories: expect.arrayContaining([`${ownerName}/discord-ai-agent`, `${ownerName}/nanocodex`]),
     }));
+  });
+
+  it("allows only tracked public hostnames through private-name scanning", async () => {
+    expect(scanContent("src/console/constants.ts", `https://${publicConsoleHostname}`)).toEqual([]);
+    expect(scanContent("docs/example.md", `private ${["mind", "cool"].join("")} service`)).toEqual([
+      expect.objectContaining({ ruleId: "private-channel-name", line: 1 }),
+    ]);
+    expect(scanContent("docs/example.md", `https://${publicConsoleHostname} private ${["mind", "cool"].join("")} service`)).toEqual([
+      expect.objectContaining({ ruleId: "private-channel-name", line: 1 }),
+    ]);
+
+    const policy = await import("node:fs/promises").then((fs) => fs.readFile("release-public-hostnames.json", "utf8"));
+    expect(JSON.parse(policy)).toEqual({ publicHostnames: [publicConsoleHostname] });
   });
 });

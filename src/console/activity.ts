@@ -1,7 +1,6 @@
 type DashboardRecord = Record<string, unknown>;
 
 type StoryTone = "active" | "success" | "warning" | "danger" | "neutral";
-type LifecycleState = "complete" | "active" | "failed" | "pending";
 export type ActivityWorkState = "active" | "waiting" | "blocked" | "terminal" | null;
 
 export type ActivityStory = {
@@ -9,6 +8,7 @@ export type ActivityStory = {
   kind: "conversation" | "code_change" | "improvement" | "release" | "message" | "system";
   category: "product" | "failure" | "system";
   title: string;
+  authorLabel: string | null;
   status: string;
   tone: StoryTone;
   workState: ActivityWorkState;
@@ -33,11 +33,10 @@ export type ActivityStory = {
   failureCount: number | null;
   p95DurationMs: number | null;
   runs: Array<{ id: string; title: string; status: string; tone: StoryTone; durationMs: number | null; occurredAt: unknown }>;
-  lifecycle: Array<{ label: string; state: LifecycleState }>;
   technicalEvents: Array<{ id: string; name: string; label: string; level: string; createdAt: unknown }>;
 };
 
-export type ActivitySummary = Omit<ActivityStory, "runs" | "lifecycle" | "technicalEvents">;
+export type ActivitySummary = Omit<ActivityStory, "runs" | "technicalEvents">;
 
 export function summarizeOperatorActivity(activity: { active: ActivityStory[]; recent: ActivityStory[] }): {
   active: ActivitySummary[];
@@ -70,7 +69,7 @@ export function deriveOperatorActivity(snapshot: DashboardRecord): { active: Act
     records(record(snapshot.improvements).cases),
   )).filter((story) => story.rollupKey !== "embedding");
   projected.push(...records(snapshot.messages).map(messageStory));
-  for (const deployment of records(snapshot.deployments).slice(0, 3)) projected.push(releaseStory(deployment));
+  for (const deployment of records(snapshot.deployments)) projected.push(releaseStory(deployment));
   const rolledUp = rollupSystemStories(projected);
   const sorted = rolledUp.sort((left, right) => timestamp(right.occurredAt) - timestamp(left.occurredAt));
   return foldActiveImprovementWork({
@@ -89,6 +88,7 @@ function messageStory(message: DashboardRecord): ActivityStory {
     kind: "message",
     category: "system",
     title: string(message.preview, "Message content unavailable"),
+    authorLabel: nullableString(message.authorLabel),
     status: embedded ? "embedded" : skipped ? "embedding_skipped" : "embedding_pending",
     tone: embedded ? "success" : skipped ? "neutral" : "warning",
     workState: embedded || skipped ? "terminal" : "waiting",
@@ -116,7 +116,6 @@ export function retainOpenImprovementActivity(
 function summarizeStory(story: ActivityStory): ActivitySummary {
   const summary: Partial<ActivityStory> = { ...story };
   delete summary.runs;
-  delete summary.lifecycle;
   delete summary.technicalEvents;
   return summary as ActivitySummary;
 }
@@ -145,7 +144,6 @@ function activeTaskStory(task: DashboardRecord, execution?: DashboardRecord): Ac
     improvementCaseId: nullableString(task.improvementCaseId),
     failureReason: nullableString(task.failureReason),
     rollupKey: system ? "improvement_report" : null,
-    lifecycle: system ? systemLifecycle(status) : codeLifecycle(status, currentStep, Boolean(task.pullRequestUrl), task.verifyPassed),
     technicalEvents: latestEvent ? [technicalEvent(`active-task-${string(task.taskId)}`, latestEvent, "info", task.updatedAt)] : [],
   });
 }
@@ -159,6 +157,7 @@ function activeExecutionStory(execution: DashboardRecord): ActivityStory {
     kind: system ? "system" : nullableString(execution.taskId) ? "code_change" : "conversation",
     category: system ? "system" : "product",
     title: string(execution.title, system ? "Background work" : "Prompt"),
+    authorLabel: system ? null : nullableString(execution.authorLabel),
     status,
     tone: "active",
     workState: "active",
@@ -170,7 +169,6 @@ function activeExecutionStory(execution: DashboardRecord): ActivityStory {
     responseKind: nullableString(execution.responseKind),
     hasParent: Boolean(execution.hasParent),
     rollupKey: nullableString(execution.rollupKey),
-    lifecycle: system ? systemLifecycle(status) : conversationLifecycle(status, nullableString(execution.deliveryState)),
     technicalEvents: latestEvent ? [technicalEvent(`active-execution-${string(execution.executionId)}`, latestEvent, "info", execution.updatedAt)] : [],
   });
 }
@@ -198,6 +196,7 @@ function projectRecentStory(source: DashboardRecord): ActivityStory {
     kind,
     category: system ? "system" : outcome.tone === "danger" || outcome.tone === "warning" ? "failure" : "product",
     title: string(source.title, "Activity"),
+    authorLabel: kind === "conversation" ? nullableString(source.authorLabel) : null,
     status: outcome.status,
     tone: outcome.tone,
     workState: kind === "improvement" ? improvementWorkState(source) : null,
@@ -217,11 +216,6 @@ function projectRecentStory(source: DashboardRecord): ActivityStory {
     relatedImprovementCaseIds: strings(source.relatedImprovementCaseIds),
     failureReason: nullableString(source.failureReason),
     rollupKey: nullableString(source.rollupKey),
-    lifecycle: kind === "code_change"
-      ? codeLifecycle(executionStatus, null, Boolean(source.pullRequestUrl), source.verifyPassed)
-      : kind === "improvement"
-        ? improvementLifecycle(events, executionStatus)
-        : kind === "system" ? systemLifecycle(executionStatus) : conversationLifecycle(executionStatus, deliveryState),
     technicalEvents: events,
   });
 }
@@ -338,7 +332,6 @@ function mergeImprovementStory(canonical: ActivityStory, related: ActivityStory)
     canonical.category = related.category;
     canonical.summary = related.summary;
   }
-  canonical.lifecycle = [...canonical.lifecycle, ...related.lifecycle];
   mergeImprovementEvidence(canonical, related);
 }
 
@@ -399,10 +392,6 @@ function mergeOpenImprovements(stories: ActivityStory[], cases: DashboardRecord[
       pullRequestUrl: nullableString(improvement.pullRequestUrl),
       improvementCaseId: caseId,
       relatedImprovementCaseIds: [...new Set([caseId, ...strings(improvement.relatedImprovementCaseIds)])],
-      lifecycle: [{
-        label: humanize(string(improvement.status, "open")),
-        state: workState === "blocked" ? "failed" : workState === "waiting" ? "pending" : "active",
-      }],
     });
     stories.push(story);
     byCaseId.set(caseId, story);
@@ -502,11 +491,6 @@ function rollupSystemStories(stories: ActivityStory[]): ActivityStory[] {
         id: story.id, title: story.title, status: story.status, tone: story.tone,
         durationMs: story.durationMs, occurredAt: story.occurredAt,
       })),
-      lifecycle: [
-        { label: `${sorted.length} runs`, state: "complete" },
-        { label: failures ? `${failures} failed` : "No failures", state: failures ? "failed" : "complete" },
-        ...(p95 == null ? [] : [{ label: `p95 ${formatDuration(p95)}`, state: "complete" as const }]),
-      ],
     }));
   }
   return ungrouped;
@@ -525,74 +509,16 @@ function releaseStory(deployment: DashboardRecord): ActivityStory {
     summary: "Production rollout verified",
     occurredAt: deployment.verifiedAt,
     startedAt: deployment.verifiedAt,
-    lifecycle: [
-      { label: "Built", state: "complete" },
-      { label: "Deployed", state: "complete" },
-      { label: "Verified", state: "complete" },
-    ],
   });
-}
-
-function conversationLifecycle(status: string, deliveryState: string | null): ActivityStory["lifecycle"] {
-  const failed = isFailure(status);
-  const active = ["queued", "running"].includes(status);
-  const delivery: { label: string; state: LifecycleState } = deliveryState === "delivered"
-    ? { label: failed ? "Error delivered" : "Delivered", state: "complete" }
-    : deliveryState === "abandoned"
-      ? { label: "Delivery failed", state: "failed" }
-      : deliveryState === "pending"
-        ? { label: "Delivery pending", state: active ? "pending" : "active" }
-        : { label: "Delivery not observed", state: "pending" };
-  return [
-    { label: "Received", state: "complete" },
-    { label: active ? "Processing" : "Processed", state: failed ? "failed" : active ? "active" : "complete" },
-    delivery,
-  ];
-}
-
-function systemLifecycle(status: string): ActivityStory["lifecycle"] {
-  if (isFailure(status)) return [
-    { label: "Scheduled", state: "complete" }, { label: "Processed", state: "failed" }, { label: "Recorded", state: "pending" },
-  ];
-  if (["queued", "running"].includes(status)) return [
-    { label: "Scheduled", state: "complete" }, { label: "Processing", state: "active" }, { label: "Recorded", state: "pending" },
-  ];
-  return [
-    { label: "Scheduled", state: "complete" }, { label: "Processed", state: "complete" }, { label: "Recorded", state: "complete" },
-  ];
-}
-
-function codeLifecycle(status: string, currentStep: string | null, hasPullRequest: boolean, verifyPassed: unknown): ActivityStory["lifecycle"] {
-  const active = ["queued", "running"].includes(status);
-  const failed = isFailure(status);
-  return [
-    { label: "Started", state: active || !failed ? "complete" : "failed" },
-    { label: currentStep ? humanize(currentStep) : "Implemented", state: failed ? "failed" : active ? "active" : "complete" },
-    { label: "Pull request", state: hasPullRequest ? "complete" : failed ? "pending" : active ? "pending" : "complete" },
-    { label: "Verified", state: verifyPassed === true || isSuccess(status) ? "complete" : failed ? "failed" : "pending" },
-  ];
-}
-
-function improvementLifecycle(events: ActivityStory["technicalEvents"], status: string): ActivityStory["lifecycle"] {
-  const seen = new Set<string>();
-  const steps = [...events].reverse().flatMap((event) => {
-    const label = improvementMilestone(event.name);
-    if (seen.has(label)) return [];
-    seen.add(label);
-    const eventFailed = event.name.endsWith("failed") || event.name.endsWith("stalled") || event.name.endsWith("inconclusive");
-    return [{ label, state: eventFailed ? "failed" as const : "complete" as const }];
-  });
-  if (steps.length) return steps.slice(-7);
-  return [{ label: humanize(status), state: status === "needs_evidence" ? "pending" : "complete" }];
 }
 
 function storyDefaults(input: Partial<ActivityStory> & Pick<ActivityStory, "id" | "kind" | "category" | "title" | "status" | "tone" | "summary" | "occurredAt" | "startedAt">): ActivityStory {
   return {
-    durationMs: null, latencyTone: null, attempts: null, branchName: null, pullRequestUrl: null, workState: null,
+    authorLabel: null, durationMs: null, latencyTone: null, attempts: null, branchName: null, pullRequestUrl: null, workState: null,
     sourceUrl: null, responseUrl: null, responseKind: null, hasParent: false, improvementCaseId: null,
     relatedImprovementCaseIds: [], failureReason: null, rollupKey: null,
     runCount: null, successCount: null, failureCount: null, p95DurationMs: null,
-    runs: [], lifecycle: [], technicalEvents: [], ...input,
+    runs: [], technicalEvents: [], ...input,
   };
 }
 

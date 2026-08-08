@@ -13,11 +13,13 @@ export type EnvironmentVariableDefinition = {
 /** The only environment variables consumed by the application runtime. */
 export const environmentVariables = [
   { name: "DISCORD_TOKEN", group: "core", description: "Discord bot token.", requiredFor: "Discord bot and worker roles", secret: true, operator: true },
-  { name: "DISCORD_CLIENT_ID", group: "core", description: "Discord application ID.", requiredFor: "Discord bot and worker roles", operator: true },
-  { name: "DISCORD_GUILD_ID", group: "core", description: "Private community guild ID.", requiredFor: "Discord bot and worker roles", operator: true },
+  { name: "DISCORD_CLIENT_ID", group: "core", description: "Discord application ID.", requiredFor: "Discord bot, worker, and hosted Console roles", operator: true },
+  { name: "DISCORD_CLIENT_SECRET", group: "core", description: "Discord OAuth client secret.", requiredFor: "hosted Console authentication", secret: true, operator: true },
+  { name: "DISCORD_GUILD_ID", group: "core", description: "Private community guild ID.", requiredFor: "Discord bot, worker, and hosted Console roles", operator: true },
   { name: "DATABASE_URL", group: "core", description: "Postgres connection string with pgvector available.", requiredFor: "all roles", example: "postgres://discord_ai_agent:discord_ai_agent@localhost:5433/discord_ai_agent", secret: true, operator: true },
   { name: "OPENROUTER_API_KEY", group: "core", description: "OpenRouter credential for model and provider-backed tools.", requiredFor: "agent execution", secret: true, operator: true },
   { name: "TASK_SIGNING_SECRET", group: "core", description: "Shared HMAC secret for isolated task callbacks.", requiredFor: "code updates", secret: true, operator: true },
+  { name: "CONSOLE_SESSION_SECRET", group: "core", description: "HMAC secret for hosted Console sessions and OAuth state.", requiredFor: "hosted Console authentication", secret: true, operator: true },
 
   { name: "GITHUB_TOKEN", group: "github", description: "GitHub token used for code-update publication when an App is not configured.", requiredFor: "code updates (token mode)", secret: true, operator: true },
   { name: "GITHUB_APP_ID", group: "github", description: "GitHub App ID.", requiredFor: "code updates (App mode)", operator: true },
@@ -37,7 +39,7 @@ export const environmentVariables = [
   { name: "APP_REVISION", group: "deployment", description: "Immutable deployed git revision.", requiredFor: "release workflow" },
   { name: "RELEASE_VERIFICATION_ID", group: "deployment", description: "Unique public identifier for this rollout's post-deploy promotion.", requiredFor: "release workflow" },
   { name: "PREVIOUS_APP_REVISION", group: "deployment", description: "Previously deployed git revision.", requiredFor: "release announcements" },
-  { name: "DISCORD_BOT_CHANNEL_ID", group: "deployment", description: "Single Discord text channel for deployment announcements and improvement-report threads.", requiredFor: "deployment announcements and improvement conversations", operator: true },
+  { name: "DISCORD_BOT_CHANNEL_ID", group: "deployment", description: "Single Discord text channel for deployment announcements.", requiredFor: "deployment announcements", operator: true },
   { name: "POD_NAMESPACE", group: "deployment", description: "Namespace where isolated code-update Jobs are created.", requiredFor: "Kubernetes worker" },
   { name: "SANDBOX_IMAGE", group: "deployment", description: "Immutable code-update sandbox image reference.", requiredFor: "Kubernetes worker" },
 ] as const satisfies readonly EnvironmentVariableDefinition[];

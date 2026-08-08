@@ -168,8 +168,8 @@ function readProductionDeployments() {
   ])));
 }
 
-export async function warmProductionConnection(source: Pick<ReturnType<typeof createProductionSnapshotSource>, "snapshot">) {
-  await source.snapshot({ revision: "ignored" });
+export async function warmProductionConnection(source: Pick<ReturnType<typeof createProductionSnapshotSource>, "overview">) {
+  await source.overview?.({ revision: "ignored" });
 }
 
 function startTunnel(localPort: number) {
@@ -185,7 +185,7 @@ async function waitForProduction(source: ReturnType<typeof createProductionSnaps
   for (let attempt = 0; attempt < 40; attempt += 1) {
     if (tunnel.exitCode != null) throw new Error(`Production console tunnel exited with code ${tunnel.exitCode}.`);
     try {
-      await source.snapshot({ revision: "ignored" });
+      await source.overview?.({ revision: "ignored" });
       return;
     } catch (error) {
       lastError = error;

@@ -25,10 +25,9 @@ describe.skipIf(!runDbTests)("improvement reporter conversation database behavio
     await database.cleanup();
   });
 
-  it("stores a natural thread follow-up as same-case evidence and reopens reassessment", async () => {
+  it("stores the reporter's explicit channel reply as same-case evidence and reopens reassessment", async () => {
     const guildId = `guild-${randomUUID()}`;
     const reporterId = `user-${randomUUID()}`;
-    const answeringMemberId = `user-${randomUUID()}`;
     await repo.upsertGuild({ id: guildId, name: "clarifications" });
     const reported = await repo.recordImprovementSignal({
       source: "member_report",
@@ -82,16 +81,25 @@ describe.skipIf(!runDbTests)("improvement reporter conversation database behavio
     });
     await repo.markImprovementReporterConversationRendered({
       conversationId: pending!.conversationId,
-      deliveryKind: "thread",
-      deliveryChannelId: "thread-a",
+      deliveryKind: "channel",
+      deliveryChannelId: "channel-a",
       deliveryMessageId: "question-message-a",
       signature: "question-a",
     });
-    const answered = await repo.answerImprovementReporterClarification({
-      authorId: answeringMemberId,
+    await expect(repo.answerImprovementReporterClarification({
+      authorId: `user-${randomUUID()}`,
       guildId,
-      channelId: "thread-a",
+      channelId: "channel-a",
+      messageId: "unrelated-follow-up",
+      referencedMessageId: "question-message-a",
+      answer: "Another member should not answer this question.",
+    })).resolves.toBeNull();
+    const answered = await repo.answerImprovementReporterClarification({
+      authorId: reporterId,
+      guildId,
+      channelId: "channel-a",
       messageId: "follow-up-a",
+      referencedMessageId: "question-message-a",
       answer: "Yes, the total should include tax.",
     });
     expect(answered).toMatchObject({ caseId: reported.case.caseId, conversationId: pending!.conversationId });
@@ -101,10 +109,11 @@ describe.skipIf(!runDbTests)("improvement reporter conversation database behavio
       clarificationTaskId: null,
     });
     await expect(repo.answerImprovementReporterClarification({
-      authorId: answeringMemberId,
+      authorId: reporterId,
       guildId,
-      channelId: "thread-a",
+      channelId: "channel-a",
       messageId: "follow-up-a-duplicate",
+      referencedMessageId: "question-message-a",
       answer: "duplicate",
     })).resolves.toBeNull();
 
@@ -113,22 +122,15 @@ describe.skipIf(!runDbTests)("improvement reporter conversation database behavio
     expect(after?.signals).toEqual(expect.arrayContaining([
       expect.objectContaining({
         signalId: answered?.signalId,
-        reporterId: answeringMemberId,
-        channelId: "thread-a",
+        reporterId,
+        channelId: "channel-a",
         messageId: "follow-up-a",
         details: "Yes, the total should include tax.",
-        metadata: expect.objectContaining({ clarificationForConversationId: pending!.conversationId, deliveryKind: "thread" }),
+        metadata: expect.objectContaining({ clarificationForConversationId: pending!.conversationId, deliveryKind: "channel" }),
       }),
     ]));
     expect(buildImprovementTriageDossier(after!, []).snapshotKey).not.toBe(dossier.snapshotKey);
     expect(after?.events.find((event) => event.eventName === "clarification.answered")?.metadata).not.toHaveProperty("answer");
-
-    await repo.requestUserDeletion(answeringMemberId);
-    const scrubbedAnswer = await pool.query(
-      "SELECT clarification_answer, answer_signal_id, answered_at FROM improvement_reporter_conversations WHERE conversation_id = $1",
-      [pending!.conversationId],
-    );
-    expect(scrubbedAnswer.rows[0]).toEqual({ clarification_answer: null, answer_signal_id: null, answered_at: null });
 
     await repo.requestUserDeletion(reporterId);
     const conversations = await pool.query(
@@ -181,6 +183,29 @@ describe.skipIf(!runDbTests)("improvement reporter conversation database behavio
     await repo.withdrawImprovementSignal({ sourceKey: first.signal.sourceKey, actorId: firstReporter });
     await expect(repo.listRenderableImprovementReporterConversations(10)).resolves.toEqual([
       expect.objectContaining({ caseId: first.case.caseId, reporterId: secondReporter, signalActive: true }),
+    ]);
+  });
+
+  it("keeps repair progress silent and renders only the final resolved outcome", async () => {
+    const guildId = `guild-${randomUUID()}`;
+    const reporterId = `user-${randomUUID()}`;
+    await repo.upsertGuild({ id: guildId, name: "silent repair" });
+    const recorded = await repo.recordImprovementSignal({
+      source: "member_report", sourceKey: `source-${randomUUID()}`, reporterKind: "member", reporterId,
+      guildId, channelId: "source-channel", messageId: "source-message", summary: "Reported issue",
+    });
+    await repo.ensureImprovementReporterConversation({
+      caseId: recorded.case.caseId, signalId: recorded.signal.signalId, reporterId,
+      guildId, channelId: "source-channel", messageId: "source-message",
+    });
+
+    await pool.query("UPDATE improvement_cases SET status = 'in_progress', updated_at = now() WHERE case_id = $1", [recorded.case.caseId]);
+    await expect(repo.listRenderableImprovementReporterConversations(10)).resolves.toEqual([]);
+    await pool.query("UPDATE improvement_cases SET status = 'verifying', updated_at = now() WHERE case_id = $1", [recorded.case.caseId]);
+    await expect(repo.listRenderableImprovementReporterConversations(10)).resolves.toEqual([]);
+    await pool.query("UPDATE improvement_cases SET status = 'resolved', resolved_at = now(), updated_at = now() WHERE case_id = $1", [recorded.case.caseId]);
+    await expect(repo.listRenderableImprovementReporterConversations(10)).resolves.toEqual([
+      expect.objectContaining({ caseId: recorded.case.caseId, reporterId, caseStatus: "resolved", deliveryKind: null }),
     ]);
   });
 

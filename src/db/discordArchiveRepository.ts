@@ -112,7 +112,8 @@ export async function upsertGuildMember(pool: DbPool, input: {
     await pool.query(
       `
         INSERT INTO guild_members(guild_id, user_id, display_name, nickname, roles, joined_at, raw, updated_at)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, now())
+        SELECT $1, $2, $3, $4, $5, $6, $7, now()
+        WHERE NOT EXISTS (SELECT 1 FROM privacy_deletions WHERE user_id = $2)
         ON CONFLICT(guild_id, user_id) DO UPDATE SET
           display_name = EXCLUDED.display_name,
           nickname = EXCLUDED.nickname,
@@ -120,6 +121,7 @@ export async function upsertGuildMember(pool: DbPool, input: {
           joined_at = EXCLUDED.joined_at,
           raw = EXCLUDED.raw,
           updated_at = now()
+        WHERE NOT EXISTS (SELECT 1 FROM privacy_deletions WHERE user_id = EXCLUDED.user_id)
       `,
       [
         input.guildId,
@@ -141,7 +143,8 @@ export async function upsertMessage(pool: DbPool, input: PersistedMessage) {
       isBot: input.authorIsBot,
       raw: input.authorRaw
     });
-    if (input.memberDisplayName || input.memberNickname || input.memberRoles?.length || input.memberJoinedAt || input.memberRaw) {
+    const privacyDeleted = await isUserPrivacyDeleted(pool, input.authorId);
+    if (!privacyDeleted && (input.memberDisplayName || input.memberNickname || input.memberRoles?.length || input.memberJoinedAt || input.memberRaw)) {
       await upsertGuildMember(pool, {
         guildId: input.guildId,
         userId: input.authorId,
@@ -153,7 +156,6 @@ export async function upsertMessage(pool: DbPool, input: PersistedMessage) {
       });
     }
 
-    const privacyDeleted = await isUserPrivacyDeleted(pool, input.authorId);
     const content = privacyDeleted ? "" : input.content;
     const normalizedContent = privacyDeleted ? "" : input.normalizedContent;
 
@@ -311,6 +313,7 @@ export async function requestUserDeletion(pool: DbPool, userId: string) {
       `,
       [userId]
     );
+    await pool.query("DELETE FROM guild_members WHERE user_id = $1", [userId]);
     await pool.query(
       `
         UPDATE messages

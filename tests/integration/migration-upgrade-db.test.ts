@@ -206,6 +206,39 @@ describe.skipIf(!runDbTests)("forward migration upgrades", () => {
       for (const version of ["044_improvement_reporter_conversations", "045_improvement_lifecycle_health", "046_scheduled_reminders", "047_recurring_reminders", "048_reminder_reply_lookup", "049_scheduled_agent_requests", "050_schedule_run_health", "051_schedule_health_verification", "052_improvement_proof_producer_runs", "053_improvement_proof_producer_activation", "054_improvement_reconciler_watchdog", "055_improvement_verification_progress", "056_service_runtime_heartbeats"]) {
         await client.query(await readFile(path.resolve(`migrations/${version}.sql`), "utf8"));
       }
+      await client.query(`
+        INSERT INTO improvement_signals(
+          signal_id,case_id,source,source_key,reporter_kind,reporter_id,guild_id,channel_id,message_id,summary
+        ) VALUES
+          ('legacy-question-signal','linked-case','member_report','legacy-question','member','reporter','guild','source-channel','source-question','Question report'),
+          ('legacy-final-signal','linked-case','member_report','legacy-final','member','reporter','guild','source-channel','source-final','Resolved report');
+        INSERT INTO improvement_reporter_conversations(
+          conversation_id,case_id,guild_id,source_channel_id,source_message_id,
+          delivery_kind,delivery_channel_id,delivery_message_id,
+          clarification_task_id,clarification_question,last_rendered_signature,last_rendered_at
+        ) VALUES
+          ('legacy-question','linked-case','guild','source-channel','source-question','thread','old-thread','old-question','assessment','What happened?','question-signature',now()),
+          ('legacy-final','linked-case','guild','source-channel','source-final','dm','old-dm','old-final',NULL,NULL,'final-signature',now());
+        INSERT INTO improvement_reporter_conversation_signals(conversation_id,signal_id,reporter_id) VALUES
+          ('legacy-question','legacy-question-signal','reporter'),
+          ('legacy-final','legacy-final-signal','reporter');
+      `);
+      for (const version of ["057_console_latest_message", "058_improvement_bot_update_case_dedupe", "059_skip_console_only_announcements", "060_discord_delivery_source_message_index", "061_improvement_replies_in_source_channel"]) {
+        await client.query(await readFile(path.resolve(`migrations/${version}.sql`), "utf8"));
+      }
+      await expect(client.query(`
+        SELECT conversation_id,delivery_kind,delivery_channel_id,delivery_message_id,last_rendered_signature,last_rendered_at
+        FROM improvement_reporter_conversations ORDER BY conversation_id
+      `)).resolves.toEqual(expect.objectContaining({ rows: [
+        expect.objectContaining({
+          conversation_id: "legacy-final", delivery_kind: "channel", delivery_channel_id: "source-channel",
+          delivery_message_id: "old-final", last_rendered_signature: "final-signature",
+        }),
+        expect.objectContaining({
+          conversation_id: "legacy-question", delivery_kind: null, delivery_channel_id: null,
+          delivery_message_id: null, last_rendered_signature: null, last_rendered_at: null,
+        }),
+      ] }));
       await expect(client.query("SELECT reminder_id, requester_id, scheduled_for, status, recurrence, occurrence_sequence, paused_at, delivery_kind, last_run_at, last_run_status, last_run_execution_id, consecutive_failures, auto_paused_at FROM scheduled_reminders LIMIT 0"))
         .resolves.toEqual(expect.objectContaining({ rows: [] }));
       await expect(client.query("SELECT to_regclass('scheduled_reminders_delivery_message_idx') AS relation"))

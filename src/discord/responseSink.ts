@@ -4,6 +4,7 @@ import type { Logger } from "pino";
 import { cleanResponse, formatDiscordMarkdownTables } from "../tools/responseFormatting.js";
 import { splitForDiscord } from "../util/text.js";
 import type { AgentFile } from "../tools/types.js";
+import { CONSOLE_PUBLIC_URL } from "../console/constants.js";
 import { plainDiscordComponentsV2Payload, validateDiscordAttachmentNames, type PreparedDiscordPresentation } from "./components/renderer.js";
 import { discordEdit, discordReact, discordRemoveReaction, discordReply, discordSend } from "./api.js";
 
@@ -372,7 +373,7 @@ export function formatDiscordResponseFooter(footer?: DiscordResponseFooter | nul
     if (trimmed) lines.push(`-# ${trimmed}`);
   }
   if (typeof footer?.durationMs === "number" && Number.isFinite(footer.durationMs)) {
-    lines.push(`-# ${formatFooterDuration(footer.durationMs)}`);
+    lines.push(`-# ${formatFooterDuration(footer.durationMs)} · [console](<${CONSOLE_PUBLIC_URL}>)`);
   }
   return lines.length > 0 ? lines.join("\n") : null;
 }

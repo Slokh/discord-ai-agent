@@ -83,16 +83,16 @@ describe("DiscordResponseSink", () => {
     });
 
     expect(sourceMessage.reply).toHaveBeenCalledWith({
-      content: "done\n\n-# 💸 [transfer](<https://explore.tempo.xyz/tx/abc>)\n-# 12.4s",
+      content: "done\n\n-# 💸 [transfer](<https://explore.tempo.xyz/tx/abc>)\n-# 12.4s · [console](<https://console.mindcool.dev>)",
       allowedMentions: suppressedMentions
     });
   });
 
   it.each([
-    [0, "-# 0.0s"],
-    [12_440, "-# 12.4s"],
-    [59_950, "-# 1m0s"],
-    [91_600, "-# 1m32s"],
+    [0, "-# 0.0s · [console](<https://console.mindcool.dev>)"],
+    [12_440, "-# 12.4s · [console](<https://console.mindcool.dev>)"],
+    [59_950, "-# 1m0s · [console](<https://console.mindcool.dev>)"],
+    [91_600, "-# 1m32s · [console](<https://console.mindcool.dev>)"],
   ])("formats %dms as a compact elapsed-time footer", (durationMs, expected) => {
     expect(formatDiscordResponseFooter({ durationMs })).toBe(expected);
   });

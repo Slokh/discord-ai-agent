@@ -4,7 +4,7 @@ import type { ImprovementCaseStatus, ImprovementReporterConversation } from "./t
 
 const MAX_DELIVERY_ATTEMPTS = 3;
 
-/** Ensures every reported message or detector-identified affected member has one shared follow-up conversation. */
+/** Ensures every reported message or detector-identified affected member has one channel-scoped follow-up. */
 export async function ensureImprovementReporterConversationsForCase(pool: DbPool, caseId: string) {
   const result = await pool.query(
     `WITH raw_candidates AS (
@@ -177,15 +177,12 @@ export async function listRenderableImprovementReporterConversations(pool: DbPoo
        AND any_reporter.reporter_id IS NOT NULL
        AND (conversation.next_delivery_at IS NULL OR conversation.next_delivery_at <= now())
        AND (
-         conversation.delivery_kind IS NOT NULL
-         OR (
-           active_reporter.reporter_id IS NOT NULL
-           AND (
-             (case_row.status = 'needs_evidence'
-               AND conversation.clarification_question IS NOT NULL
-               AND conversation.clarification_answer IS NULL)
-             OR case_row.status IN ('in_progress', 'verifying', 'resolved')
-           )
+         active_reporter.reporter_id IS NOT NULL
+         AND (
+           (case_row.status = 'needs_evidence'
+             AND conversation.clarification_question IS NOT NULL
+             AND conversation.clarification_answer IS NULL)
+           OR case_row.status = 'resolved'
          )
        )
        AND (
@@ -207,7 +204,7 @@ export async function listRenderableImprovementReporterConversations(pool: DbPoo
 
 export async function markImprovementReporterConversationRendered(pool: DbPool, input: {
   conversationId: string;
-  deliveryKind: "thread" | "dm";
+  deliveryKind: "channel";
   deliveryChannelId: string;
   deliveryMessageId: string;
   signature: string;
@@ -249,7 +246,7 @@ export async function markImprovementReporterConversationDeliveryFailed(pool: Db
   };
 }
 
-/** Converts a thread follow-up or explicit fallback-DM reply into same-case private evidence. */
+/** Converts the reporter's explicit channel reply to a clarification into same-case private evidence. */
 export async function answerImprovementReporterClarification(pool: DbPool, input: {
   authorId: string;
   guildId?: string | null;
@@ -277,22 +274,16 @@ export async function answerImprovementReporterClarification(pool: DbPool, input
          AND conversation.clarification_answer IS NULL
          AND case_row.merged_into_case_id IS NULL
          AND case_row.status IN ('open', 'needs_evidence')
-         AND (
-           (conversation.delivery_kind = 'thread'
-             AND conversation.guild_id = $2
-             AND conversation.delivery_channel_id = $3)
-           OR
-           (conversation.delivery_kind = 'dm'
-             AND $2 IS NULL
-             AND conversation.delivery_channel_id = $3
-             AND conversation.delivery_message_id = $4
-             AND EXISTS (
-               SELECT 1 FROM improvement_reporter_conversation_signals mapping
-               JOIN improvement_signals signal ON signal.signal_id = mapping.signal_id
-               WHERE mapping.conversation_id = conversation.conversation_id
-                 AND mapping.reporter_id = $1
-                 AND signal.active = true
-             ))
+         AND conversation.delivery_kind = 'channel'
+         AND conversation.guild_id = $2
+         AND conversation.delivery_channel_id = $3
+         AND conversation.delivery_message_id = $4
+         AND EXISTS (
+           SELECT 1 FROM improvement_reporter_conversation_signals mapping
+           JOIN improvement_signals signal ON signal.signal_id = mapping.signal_id
+           WHERE mapping.conversation_id = conversation.conversation_id
+             AND mapping.reporter_id = $1
+             AND signal.active = true
          )
        FOR UPDATE OF conversation, case_row`,
       [input.authorId, input.guildId ?? null, input.channelId, input.referencedMessageId ?? null],
@@ -379,7 +370,7 @@ function rowToReporterConversation(row: Record<string, unknown>): ImprovementRep
     signalActive: Boolean(row.signal_active),
     caseStatus: String(row.case_status) as ImprovementCaseStatus,
     caseResolution: nullable(row.case_resolution),
-    deliveryKind: row.delivery_kind == null ? null : String(row.delivery_kind) as "thread" | "dm",
+    deliveryKind: row.delivery_kind == null ? null : "channel",
     deliveryChannelId: nullable(row.delivery_channel_id),
     deliveryMessageId: nullable(row.delivery_message_id),
     clarificationTaskId: nullable(row.clarification_task_id),

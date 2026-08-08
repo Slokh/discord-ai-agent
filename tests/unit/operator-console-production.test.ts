@@ -12,28 +12,29 @@ import { consoleDatabaseUrl, requireConsoleDatabaseProvisionConfirmation } from 
 import { EventEmitter } from "node:events";
 
 describe("production operator console access", () => {
-  it("streams a versioned production snapshot through loopback", async () => {
+  it("streams versioned production Console resources through loopback", async () => {
     const fetchSnapshot = vi.fn(async (url: string) => new Response(JSON.stringify(
-      url.includes("/api/activity/")
-        ? { schemaVersion: 1, kind: "conversation", story: { id: "runtime-execution-a" }, messages: [{ id: "message-a" }] }
-        : { schemaVersion: 2, environment: "production", revision: "revision-a" },
+      url.includes("/api/activity/conversation/")
+        ? { schemaVersion: 2, environment: "production", kind: "conversation", messages: [{ id: "message-a" }] }
+        : url.includes("/api/activity")
+          ? { schemaVersion: 3, environment: "production", active: [], recent: [] }
+          : { schemaVersion: 3, environment: "production", revision: "revision-a" },
     ), { status: 200 }));
     const source = createProductionSnapshotSource({
       baseUrl: "http://127.0.0.1:18081",
       fetchSnapshot,
     });
 
-    await expect(source.snapshot({ revision: "ignored" })).resolves.toMatchObject({
+    await expect(source.overview?.({ revision: "ignored" })).resolves.toMatchObject({
       environment: "production",
       revision: "revision-a",
     });
     expect(fetchSnapshot).toHaveBeenCalledWith(
-      "http://127.0.0.1:18081/api/snapshot",
+      "http://127.0.0.1:18081/api/overview",
       expect.objectContaining({ cache: "no-store" }),
     );
     await expect(source.activityDetail({ kind: "conversation", id: "runtime-execution-a", revision: "ignored" })).resolves.toMatchObject({
       kind: "conversation",
-      story: { id: "runtime-execution-a" },
       messages: [{ id: "message-a" }],
     });
     expect(fetchSnapshot).toHaveBeenCalledWith(
@@ -45,15 +46,15 @@ describe("production operator console access", () => {
   it("rejects non-production, incompatible, and non-loopback sources", async () => {
     const localSource = createProductionSnapshotSource({
       baseUrl: "http://localhost:18081",
-      fetchSnapshot: async () => new Response(JSON.stringify({ schemaVersion: 1, environment: "development" })),
+      fetchSnapshot: async () => new Response(JSON.stringify({ schemaVersion: 3, environment: "development" })),
     });
-    await expect(localSource.snapshot({ revision: "ignored" })).rejects.toThrow("non-production");
+    await expect(localSource.overview?.({ revision: "ignored" })).rejects.toThrow("non-production");
 
     const incompatibleSource = createProductionSnapshotSource({
       baseUrl: "http://localhost:18081",
-      fetchSnapshot: async () => new Response(JSON.stringify({ schemaVersion: 3, environment: "production" })),
+      fetchSnapshot: async () => new Response(JSON.stringify({ schemaVersion: 2, environment: "production" })),
     });
-    await expect(incompatibleSource.snapshot({ revision: "ignored" })).rejects.toThrow("Unsupported");
+    await expect(incompatibleSource.overview?.({ revision: "ignored" })).rejects.toThrow("invalid overview");
     expect(() => createProductionSnapshotSource({ baseUrl: "https://console.example.com" })).toThrow("loopback");
   });
 
@@ -105,12 +106,12 @@ describe("production operator console access", () => {
   });
 
   it("warms the established production connection before opening the local UI", async () => {
-    const snapshot = vi.fn(async () => ({ environment: "production" }));
+    const overview = vi.fn(async () => ({ environment: "production" }));
 
-    await warmProductionConnection({ snapshot });
+    await warmProductionConnection({ overview });
 
-    expect(snapshot).toHaveBeenCalledOnce();
-    expect(snapshot).toHaveBeenCalledWith({ revision: "ignored" });
+    expect(overview).toHaveBeenCalledOnce();
+    expect(overview).toHaveBeenCalledWith({ revision: "ignored" });
   });
 
   it("uses labelled Kubernetes readiness while the deployed heartbeat schema is unavailable", async () => {
@@ -128,7 +129,7 @@ describe("production operator console access", () => {
     const source = createProductionDevelopmentSource({
       production: {
         activityDetail: async () => null,
-        snapshot: async () => ({
+        overview: async () => ({
           environment: "production",
           services: [],
           summary: { serviceTelemetryAvailable: false, healthyServices: 0, serviceCount: 4 },
@@ -137,7 +138,7 @@ describe("production operator console access", () => {
       readKubernetes: async () => kubernetes,
     });
 
-    const snapshot = await source.snapshot({ revision: "ignored" });
+    const snapshot = await source.overview!({ revision: "ignored" });
 
     expect(snapshot.summary).toMatchObject({
       serviceTelemetryAvailable: true,
@@ -157,7 +158,7 @@ describe("production operator console access", () => {
     const source = createProductionDevelopmentSource({
       production: {
         activityDetail: async () => null,
-        snapshot: async () => ({
+        overview: async () => ({
           services: [{ component: "worker", status: "healthy" }],
           summary: { serviceTelemetryAvailable: true, healthyServices: 1, serviceCount: 1 },
         }),
@@ -165,7 +166,7 @@ describe("production operator console access", () => {
       readKubernetes,
     });
 
-    await expect(source.snapshot({ revision: "ignored" })).resolves.toMatchObject({
+    await expect(source.overview?.({ revision: "ignored" })).resolves.toMatchObject({
       summary: { healthyServices: 1, serviceCount: 1 },
     });
     expect(readKubernetes).not.toHaveBeenCalled();

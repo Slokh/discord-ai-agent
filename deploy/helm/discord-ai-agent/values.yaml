@@ -57,6 +57,16 @@ console:
   port: 8081
   service:
     type: ClusterIP
+  tunnel:
+    # Enable only after the existing Secret contains CLOUDFLARE_TUNNEL_TOKEN
+    # and its remote route maps console.mindcool.dev to
+    # http://discord-ai-agent-console:8081.
+    enabled: false
+    image: cloudflare/cloudflared:2026.7.0
+    replicas: 2
+    resources:
+      requests: { cpu: 20m, memory: 32Mi }
+      limits: { cpu: 200m, memory: 128Mi }
   resources:
     requests: { cpu: 50m, memory: 96Mi }
     limits: { cpu: 250m, memory: 256Mi }

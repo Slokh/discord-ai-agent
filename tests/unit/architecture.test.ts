@@ -53,6 +53,17 @@ describe("architecture guardrails", () => {
     expect(deployment).toMatch(/startupProbe:[\s\S]*periodSeconds: 5[\s\S]*failureThreshold: 24[\s\S]*readinessProbe:/);
   });
 
+  it("keeps hosted Console ingress outbound-only and explicitly gated", async () => {
+    const tunnel = await fs.readFile(path.join(process.cwd(), "deploy/helm/discord-ai-agent/templates/console-tunnel.yaml"), "utf8");
+    const consoleDeployment = await fs.readFile(path.join(process.cwd(), "deploy/helm/discord-ai-agent/templates/console.yaml"), "utf8");
+    const values = await fs.readFile(path.join(process.cwd(), "deploy/helm/discord-ai-agent/values.yaml"), "utf8");
+    expect(values).toContain("cloudflare/cloudflared:");
+    expect(tunnel).toContain("CLOUDFLARE_TUNNEL_TOKEN");
+    expect(tunnel).toContain("automountServiceAccountToken: false");
+    expect(consoleDeployment).toContain('include "discord-ai-agent.consoleAuthEnv"');
+    expect(consoleDeployment).not.toContain("kind: Ingress");
+  });
+
   it("keeps broad sandbox HTTPS egress away from private and metadata networks", async () => {
     const policy = await fs.readFile(path.join(process.cwd(), "deploy/helm/discord-ai-agent/templates/networkpolicy.yaml"), "utf8");
     for (const cidr of ["10.0.0.0/8", "100.64.0.0/10", "127.0.0.0/8", "169.254.0.0/16", "172.16.0.0/12", "192.168.0.0/16"]) {

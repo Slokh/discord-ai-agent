@@ -131,7 +131,7 @@ export type ImprovementReporterConversation = {
   signalActive: boolean;
   caseStatus: ImprovementCaseStatus;
   caseResolution: string | null;
-  deliveryKind: "thread" | "dm" | null;
+  deliveryKind: "channel" | null;
   deliveryChannelId: string | null;
   deliveryMessageId: string | null;
   clarificationTaskId: string | null;

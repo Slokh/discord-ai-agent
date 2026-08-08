@@ -7,6 +7,7 @@ describe("operator activity story projection", () => {
     const result = deriveOperatorActivity({
       executions: [{
         executionId: "execution-prompt", taskId: null, title: "Answer a member", status: "running",
+        authorLabel: "Member A",
         requestPreview: "What changed?", latestEvent: "agent.model.call.started", hasParent: true,
         startedAt: "2026-08-06T12:00:00.000Z", updatedAt: "2026-08-06T12:02:00.000Z",
       }, {
@@ -29,6 +30,7 @@ describe("operator activity story projection", () => {
     expect(result.active[0]?.technicalEvents[0]).toMatchObject({ label: "Tool completed" });
     expect(result.active[1]).toMatchObject({
       id: "execution-execution-prompt", kind: "conversation", summary: "What changed?", tone: "active", hasParent: true,
+      authorLabel: "Member A",
     });
   });
 
@@ -37,6 +39,7 @@ describe("operator activity story projection", () => {
       executions: [], tasks: [], deployments: [],
       activity: [{
         id: "runtime-session-a", kind: "runtime", title: "Recovered conversation", status: "succeeded",
+        authorLabel: "Member B",
         occurredAt: "2026-08-06T12:05:00.000Z", startedAt: "2026-08-06T12:00:00.000Z",
         durationMs: 300_000, attempts: 2, deliveryState: "delivered",
         events: [
@@ -48,7 +51,7 @@ describe("operator activity story projection", () => {
 
     expect(result.recent[0]).toMatchObject({
       kind: "conversation", category: "product", tone: "success", summary: "Reply delivered",
-      latencyTone: "very_slow",
+      latencyTone: "very_slow", authorLabel: "Member B",
     });
     expect(result.recent[0]?.technicalEvents).toEqual(expect.arrayContaining([
       expect.objectContaining({ level: "error", label: "Model call failed" }),
@@ -94,6 +97,18 @@ describe("operator activity story projection", () => {
 
     expect(result.recent[0]).toMatchObject({ kind: "release", title: "Release abcdef1234", tone: "success" });
     expect(result.recent[1]).toMatchObject({ kind: "system", category: "system", summary: "Background work completed" });
+  });
+
+  it("keeps every release supplied by the seven-day repository window", () => {
+    const deployments = Array.from({ length: 5 }, (_, index) => ({
+      deploymentId: `deploy-${index}`,
+      revision: `revision-${index}`,
+      verifiedAt: `2026-08-0${index + 1}T12:00:00.000Z`,
+    }));
+
+    const result = deriveOperatorActivity({ executions: [], tasks: [], activity: [], deployments });
+
+    expect(result.recent.filter((story) => story.kind === "release")).toHaveLength(5);
   });
 
   it("keeps automated improvement assessment work out of the product feed", () => {
@@ -191,7 +206,7 @@ describe("operator activity story projection", () => {
       kind: "improvement", improvementCaseId: "case-a", summary: "Verification passed",
       branchName: "kartik/fix", pullRequestUrl: "https://github.com/owner/repo/pull/2", durationMs: 40_000,
     });
-    expect(result.recent[0]?.lifecycle.map((step) => step.label)).toEqual(["Reported", "Verification passed"]);
+    expect(result.recent[0]).not.toHaveProperty("lifecycle");
   });
 
   it("folds linked assessment attempts into their improvement instead of showing duplicate failures", () => {
@@ -316,13 +331,14 @@ describe("operator activity story projection", () => {
       active: [],
       recent: [{
         id: "improvement-case-a", kind: "improvement", improvementCaseId: "case-a", title: "Improve delivery",
+        authorLabel: null,
         status: "actionable", tone: "neutral", category: "product", workState: null, summary: "Marked actionable",
         occurredAt: "2026-08-06T12:00:00.000Z", startedAt: "2026-08-06T11:00:00.000Z",
         durationMs: null, latencyTone: null, attempts: null, branchName: null, pullRequestUrl: null,
         sourceUrl: null, responseUrl: null, responseKind: null, hasParent: false, failureReason: null, rollupKey: null,
         relatedImprovementCaseIds: ["case-a"],
         runCount: null, successCount: null, failureCount: null, p95DurationMs: null,
-        runs: [], lifecycle: [], technicalEvents: [],
+        runs: [], technicalEvents: [],
       }],
     }, { cases: [{
       caseId: "case-a", title: "Improve delivery", status: "needs_evidence", severity: "medium",

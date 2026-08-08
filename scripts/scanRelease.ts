@@ -22,12 +22,15 @@ type DeniedTerm = {
 };
 
 type ReleaseRepositoryPolicy = { publicRepositories?: unknown };
+type ReleaseHostnamePolicy = { publicHostnames?: unknown };
 
 // This tracked manifest is the only place public repository identities are
 // exempted from private-owner scanning. Adding a dependency fork is a small,
 // reviewable policy change rather than a new scanner branch or environment
 // variable.
 const publicOwnerRepositoryPaths = releasePublicRepositoryPaths();
+const publicHostnames = releasePublicHostnames();
+const privateChannelName = ["mind", "cool"].join("");
 
 function releasePublicRepositoryPaths() {
   const parsed = JSON.parse(readFileSync("release-public-repositories.json", "utf8")) as ReleaseRepositoryPolicy;
@@ -40,6 +43,19 @@ function releasePublicRepositoryPaths() {
     }
     const repository = value.toLowerCase();
     return [repository, `github.com/${repository}`];
+  });
+}
+
+function releasePublicHostnames() {
+  const parsed = JSON.parse(readFileSync("release-public-hostnames.json", "utf8")) as ReleaseHostnamePolicy;
+  if (!Array.isArray(parsed.publicHostnames) || parsed.publicHostnames.length === 0) {
+    throw new Error("release-public-hostnames.json must declare at least one public hostname.");
+  }
+  return parsed.publicHostnames.map((value) => {
+    if (typeof value !== "string" || !/^(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}$/.test(value)) {
+      throw new Error(`Invalid public hostname policy entry: ${JSON.stringify(value)}`);
+    }
+    return value.toLowerCase();
   });
 }
 
@@ -65,7 +81,13 @@ const deniedTerms: DeniedTerm[] = [
   deny("private-member-handle", ["no", "idid"]),
   deny("private-member-handle", ["two", "seven2"]),
   deny("private-member-handle", ["brave", "_pony", "_66639"]),
-  deny("private-channel-name", ["mind", "cool"]),
+  {
+    ...deny("private-channel-name", [privateChannelName]),
+    allowLine: (line) => !publicHostnames.reduce(
+      (remaining, hostname) => remaining.replaceAll(hostname, ""),
+      line.toLowerCase(),
+    ).includes(privateChannelName),
+  },
   deny("private-alias", ["connor", "phones"]),
   deny("private-phrase", ["Diar", "beetus"]),
   deny("private-phrase", ["bato", "mon"]),

@@ -25,7 +25,7 @@ describe("operator console", () => {
           active: false,
           generatedAt: new Date("2026-08-06T12:00:00.000Z"),
           revision: "revision-a",
-          story: { id, kind, title: "Example prompt", lifecycle: [{ label: "Delivered", state: "complete" }], technicalEvents: [{ name: "agent.execution.completed" }] },
+          story: { id, kind, title: "Example prompt", technicalEvents: [{ name: "agent.execution.completed" }] },
           messages: [{ id: "message-a", role: "member", content: "Hello" }],
         }
         : null,
@@ -77,7 +77,12 @@ describe("operator console", () => {
     expect(pageHtml).not.toContain('id="filter-failed-count"');
     expect(pageHtml).toContain('id="filter-done-count"');
     expect(pageHtml).toContain('id="activity-type-trigger" type="button" aria-haspopup="listbox"');
-    expect(pageHtml).toContain('id="activity-type-options" class="activity-type-options" role="listbox" aria-label="Filter activity by type" hidden');
+    expect(pageHtml).toContain('id="activity-type-options" class="activity-type-options" role="listbox" aria-multiselectable="true" aria-label="Filter activity by type" hidden');
+    expect(pageHtml).toContain('id="activity-type-label">Relevant</span>');
+    expect(pageHtml).not.toContain('data-activity-type="all"');
+    expect(pageHtml).toContain('data-activity-type="conversation" aria-selected="true"');
+    expect(pageHtml).toContain('data-activity-type="improvement" aria-selected="true"');
+    expect(pageHtml).toContain('data-activity-type="code_change" aria-selected="true"');
     expect(pageHtml).toContain("Prompts &amp; replies");
     expect(pageHtml).toContain("Messages");
     expect(pageHtml).not.toContain('id="activity-search-trigger"');
@@ -108,6 +113,7 @@ describe("operator console", () => {
     expect(stylesheetText).toContain(".story-title-row .story-meta{flex:1;margin-top:0;overflow:hidden}");
     expect(stylesheetText).toContain(".story-detail-row{display:flex;align-items:baseline;gap:8px;min-width:0");
     expect(stylesheetText).toContain(".story-detail-row .story-title{display:block;font-weight:400}");
+    expect(stylesheetText).toContain(".story-author{flex:none;max-width:110px");
     expect(stylesheetText).toContain(".status-segment:hover .status-tooltip");
     expect(stylesheetText).toContain(".timeline{display:block");
     expect(stylesheetText).toContain(".console-workspace{display:grid;grid-template-columns:minmax(340px,400px) minmax(0,1fr)");
@@ -142,9 +148,9 @@ describe("operator console", () => {
     expect(stylesheetText).toContain('.story-status-indicator[data-state="failed"]');
     expect(stylesheetText).toContain("@keyframes status-pulse");
     expect(stylesheetText).toContain('.activity-filters button[aria-pressed="true"]');
-    expect(stylesheetText).toContain(".detail-event");
+    expect(stylesheetText).not.toContain(".conversation-section");
     expect(stylesheetText).toContain(".story-latency.very_slow");
-    expect(stylesheetText).toContain(".detail-run-list");
+    expect(stylesheetText).not.toContain(".context-history-toggle");
     expect(stylesheetText).toContain(".activity-detail-view.is-switching.preserving-detail #activity-detail");
     expect(stylesheetText).toContain("@keyframes detail-progress");
     expect(stylesheetText).toContain(".loading-target.is-ready");
@@ -162,7 +168,9 @@ describe("operator console", () => {
     expect(clientScript).toContain('datetime="');
     expect(clientScript).toContain('activityFilter=["all","running","waiting","issues","done"]');
     expect(clientScript).toContain('filter==="issues"?["blocked","failed"].includes(lifecycle)');
-    expect(clientScript).toContain('activityType=["all","conversation","message","improvement","code_change","release","system"]');
+    expect(clientScript).toContain('defaultActivityTypes=["conversation","improvement","code_change"]');
+    expect(clientScript).toContain('let activityTypes=new Set');
+    expect(clientScript).toContain('isDefaultActivityTypes()?"Relevant"');
     expect(clientScript).toContain("renderActivityDetail");
     expect(clientScript).toContain("detailLoadingShell");
     expect(clientScript).toContain('view.classList.add("is-switching")');
@@ -191,6 +199,13 @@ describe("operator console", () => {
     expect(clientScript).toContain('aria-current="true"');
     expect(clientScript).not.toContain("<h2>Context</h2>");
     expect(clientScript).toContain("const detailTrace=");
+    expect(clientScript).toContain("const improvementTraceItems=");
+    expect(clientScript).toContain('type:"trigger"');
+    expect(clientScript).toContain('type:"evidence"');
+    expect(clientScript).toContain('type:"contract"');
+    expect(clientScript).toContain('type:"proof"');
+    expect(clientScript).toContain("items.push(...improvementTraceItems(detail))");
+    expect(clientScript).not.toContain('id="improvement-story-title"');
     expect(clientScript).toContain("message.directParent");
     expect(clientScript).toContain("trace-toggle");
     expect(clientScript).toContain("aria-expanded");
@@ -226,11 +241,24 @@ describe("operator console", () => {
     expect(clientScript).toContain('<span class="sr-only">Duration </span>');
     expect(clientScript).toContain('Math.round(Number(value||0)/1000))+"s"');
     expect(clientScript).toContain("storyTiming(story,active)");
+    expect(clientScript).toContain("storyAuthor(story)");
+    expect(clientScript).toContain('<span class="sr-only">Author </span>');
+    expect(clientScript).toContain('story.authorLabel||"Unknown author"');
+    expect(clientScript).toContain("[story.title,story.authorLabel,story.summary");
     expect(clientScript).toContain("const detailMetrics=");
     expect(clientScript).toContain("const detailSpecialLinks=");
-    expect(clientScript).toContain("const messageDetail=");
+    expect(clientScript).toContain("const messageTraceItems=");
+    expect(clientScript).toContain("discordText(item.summary,item.message.mentions,item.message.roles)");
+    expect(clientScript).toContain('roles&&roles[id]?String(roles[id]):"role"');
+    expect(clientScript).toContain('mentions&&mentions[id]?String(mentions[id]):"user"');
+    expect(clientScript).toContain("const releaseTraceItems=");
+    expect(clientScript).not.toContain("const messageDetail=");
+    expect(clientScript).toContain("items.push(...messageTraceItems(detail))");
+    expect(clientScript).toContain("items.push(...releaseTraceItems(detail))");
     expect(clientScript).toContain('story.kind==="message"?"Message":story.title');
     expect(clientScript).toContain('type:"check"');
+    expect(clientScript).toContain('type:"embedding"');
+    expect(clientScript).toContain('type:"release"');
     expect(clientScript).not.toContain('type:"batch"');
     expect(stylesheetText).toContain(".detail-hero .detail-metrics.metrics-5{grid-template-columns:repeat(5,minmax(0,1fr))}");
     expect(stylesheetText).toContain(".detail-hero .detail-metrics.metrics-6{grid-template-columns:repeat(6,minmax(0,1fr))}");
@@ -248,8 +276,10 @@ describe("operator console", () => {
     expect(stylesheetText).toContain(".trace-row{display:grid");
     expect(clientScript).toContain('return story.attempts+" attempts"');
     expect(clientScript).toContain("discord\\.com\\/channels");
-    expect(clientScript).toContain('url.searchParams.set("type",activityType)');
-    expect(clientScript).toContain('url.searchParams.delete("type")');
+    expect(clientScript).toContain('url.searchParams.set("types"');
+    expect(clientScript).toContain('url.searchParams.delete("types")');
+    expect(clientScript).toContain("toggleActivityType");
+    expect(clientScript).toContain("if(activityTypes.size===1)return");
     expect(clientScript).toContain("openTypeMenu");
     expect(clientScript).toContain("closeTypeMenu");
     expect(clientScript).toContain('["ArrowDown","ArrowUp"]');
@@ -257,6 +287,10 @@ describe("operator console", () => {
     expect(clientScript).toContain('setAttribute("aria-selected"');
     expect(clientScript).toContain("if(refreshInFlight)return refreshInFlight");
     expect(clientScript).toContain("activityDetailVersion");
+    expect(clientScript).toContain("AbortController");
+    expect(clientScript).toContain("Data stale · reconnecting automatically");
+    expect(clientScript).toContain("activityNextCursor");
+    expect(clientScript).toContain("ensureRouteStory");
     expect(clientScript).toContain("detailState.version===version");
     expect(clientScript).toContain("await refreshSnapshot()");
     expect(clientScript).toContain('renderChanged("activity"');
@@ -265,27 +299,27 @@ describe("operator console", () => {
     expect(clientScript).toContain('setAttribute("aria-busy","false")');
     expect(clientScript).not.toContain("setInterval(()=>");
 
-    const snapshot = await fetch(`${baseUrl}/api/snapshot`);
-    expect(snapshot.headers.get("cache-control")).toBe("no-store");
-    await expect(snapshot.json()).resolves.toMatchObject({
-      schemaVersion: 2,
+    const overview = await fetch(`${baseUrl}/api/overview`);
+    expect(overview.headers.get("cache-control")).toBe("no-store");
+    await expect(overview.json()).resolves.toMatchObject({
+      schemaVersion: 3,
       environment: "test",
       revision: "revision-a",
       summary: { serviceCount: 4, activeActivity: 0 },
-      activity: { active: [], recent: [expect.objectContaining({ id: "runtime-example" })] },
     });
-    const snapshotPayload = await fetch(`${baseUrl}/api/snapshot`).then((response) => response.json()) as { activity: { recent: Array<Record<string, unknown>> } };
-    expect(snapshotPayload.activity.recent[0]).not.toHaveProperty("technicalEvents");
-    expect(snapshotPayload.activity.recent[0]).not.toHaveProperty("lifecycle");
-    expect(snapshotPayload.activity.recent[0]).not.toHaveProperty("runs");
+    const activityPayload = await fetch(`${baseUrl}/api/activity?types=conversation`).then((response) => response.json()) as { recent: Array<Record<string, unknown>> };
+    expect(activityPayload.recent[0]).toMatchObject({ id: "runtime-example" });
+    expect(activityPayload.recent[0]).not.toHaveProperty("technicalEvents");
+    expect(activityPayload.recent[0]).not.toHaveProperty("lifecycle");
+    expect(activityPayload.recent[0]).not.toHaveProperty("runs");
 
-    const mutation = await fetch(`${baseUrl}/api/snapshot`, { method: "POST" });
+    const mutation = await fetch(`${baseUrl}/api/overview`, { method: "POST" });
     expect(mutation.status).toBe(405);
 
     const conversation = await fetch(`${baseUrl}/api/activity/conversation/runtime-example`);
     expect(conversation.status).toBe(200);
     await expect(conversation.json()).resolves.toMatchObject({
-      schemaVersion: 1,
+      schemaVersion: 2,
       kind: "conversation",
       story: { id: "runtime-example", technicalEvents: [{ name: "agent.execution.completed" }] },
       messages: [{ id: "message-a", content: "Hello" }],
@@ -325,6 +359,58 @@ describe("operator console", () => {
     expect(reloadClient).toContain("window.location.reload()");
   });
 
+  it("paginates, filters, searches, and compresses the activity index", async () => {
+    const config = loadConfig(["node", "test", "console"]);
+    config.consoleServer = { host: "127.0.0.1", port: 0 };
+    const activity = Array.from({ length: 3 }, (_, index) => ({
+      id: `runtime-${index}`, kind: "runtime", title: `${index === 2 ? "Needle" : "Prompt"} ${"detail ".repeat(120)}`,
+      status: index === 1 ? "failed" : "succeeded", occurredAt: new Date(Date.UTC(2026, 7, 6, 12, index)),
+      startedAt: new Date(Date.UTC(2026, 7, 6, 11, index)), deliveryState: "delivered", events: [],
+    }));
+    const runtime = await startOperatorConsole({
+      config,
+      repository: {
+        activityDetail: async () => null,
+        snapshot: async () => ({
+          generatedAt: new Date(), revision: "revision-a", services: [], summary: {}, executions: [], tasks: [],
+          improvements: { counts: {}, cases: [] }, deployments: [], producers: [], activity,
+        }),
+      },
+    });
+    close = runtime.close;
+    const address = runtime.server.address();
+    if (!address || typeof address === "string") throw new Error("Console did not bind a TCP port.");
+    const baseUrl = `http://127.0.0.1:${address.port}`;
+
+    const first = await fetch(`${baseUrl}/api/activity?types=conversation&limit=1`).then((response) => response.json()) as Record<string, unknown>;
+    expect(first).toMatchObject({ total: 3, recent: [expect.objectContaining({ id: "runtime-2" })], nextCursor: expect.any(String) });
+    const second = await fetch(`${baseUrl}/api/activity?types=conversation&limit=1&cursor=${encodeURIComponent(String(first.nextCursor))}`).then((response) => response.json()) as Record<string, unknown>;
+    expect(second).toMatchObject({ recent: [expect.objectContaining({ id: "runtime-1" })] });
+    await expect(fetch(`${baseUrl}/api/activity?types=conversation&filter=issues`).then((response) => response.json()))
+      .resolves.toMatchObject({ total: 1, counts: expect.objectContaining({ issues: 1 }) });
+    await expect(fetch(`${baseUrl}/api/activity?types=conversation&search=needle`).then((response) => response.json()))
+      .resolves.toMatchObject({ total: 1, recent: [expect.objectContaining({ id: "runtime-2" })] });
+    const compressed = await fetch(`${baseUrl}/api/activity?types=conversation&limit=100`, { headers: { "accept-encoding": "gzip" } });
+    expect(compressed.headers.get("content-encoding")).toBe("gzip");
+    await expect(compressed.json()).resolves.toMatchObject({ total: 3 });
+  });
+
+  it("loads detail without invoking the complete projection", async () => {
+    const config = loadConfig(["node", "test", "console"]);
+    config.consoleServer = { host: "127.0.0.1", port: 0 };
+    const snapshot = vi.fn(async () => { throw new Error("full projection should not run"); });
+    const activityDetail = vi.fn(async () => ({ kind: "message", id: "message-a", message: { id: "a" } }));
+    const runtime = await startOperatorConsole({ config, repository: { snapshot, activityDetail } });
+    close = runtime.close;
+    const address = runtime.server.address();
+    if (!address || typeof address === "string") throw new Error("Console did not bind a TCP port.");
+
+    await expect(fetch(`http://127.0.0.1:${address.port}/api/activity/message/message-a`).then((response) => response.json()))
+      .resolves.toMatchObject({ schemaVersion: 2, message: { id: "a" } });
+    expect(activityDetail).toHaveBeenCalledOnce();
+    expect(snapshot).not.toHaveBeenCalled();
+  });
+
   it("coalesces only overlapping snapshot reads", async () => {
     const config = loadConfig(["node", "test", "console"]);
     config.consoleServer = { host: "127.0.0.1", port: 0 };
@@ -348,14 +434,15 @@ describe("operator console", () => {
     close = runtime.close;
     const address = runtime.server.address();
     if (!address || typeof address === "string") throw new Error("Console did not bind a TCP port.");
-    const url = `http://127.0.0.1:${address.port}/api/snapshot`;
+    const overviewUrl = `http://127.0.0.1:${address.port}/api/overview`;
+    const activityUrl = `http://127.0.0.1:${address.port}/api/activity`;
 
-    const first = fetch(url);
-    const second = fetch(url);
+    const first = fetch(overviewUrl);
+    const second = fetch(activityUrl);
     await vi.waitFor(() => expect(snapshot).toHaveBeenCalledOnce());
     releaseFirst?.();
     await Promise.all([first, second]);
-    await fetch(url);
+    await fetch(overviewUrl);
 
     expect(snapshot).toHaveBeenCalledTimes(2);
   });

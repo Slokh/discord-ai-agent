@@ -53,6 +53,7 @@ The task request remains authoritative. Generated diagnoses, previous attempts, 
 ## Git policy
 
 - New automated branches use the `agent/` prefix.
+- Branch suffixes hash the full durable task ID so unrelated retries cannot collide even when their human-readable endings match.
 - Pushes to the configured base or protected branch names are refused.
 - Existing open PR work may target its existing head branch only after the PR state is verified.
 - A merged PR is immutable; follow-up work starts from current base and opens a new PR.
@@ -64,7 +65,7 @@ GitHub App installation credentials are preferred in production. A local PAT sho
 
 ## Kubernetes isolation
 
-This backend creates one Job, Secret, and ConfigMap per task. The worker service account can manage those resources; the sandbox service account has no Kubernetes API permissions. Callback tokens bind task and sandbox-run identity, timestamp, and body. Terminal callbacks are accepted once. Before failed Job cleanup, reconciliation retains the pod phase, termination reason, exit code, signal, and restart count as typed task evidence, plus a bounded redacted log tail as a private runtime artifact.
+This backend creates one Job, Secret, and ConfigMap per task. The worker service account can manage those resources and has read-only Pod and Pod-log access for failed-task diagnostics; the sandbox service account has no Kubernetes API permissions. Callback tokens bind task and sandbox-run identity, timestamp, and body. Terminal callbacks are accepted once. Before failed Job cleanup, reconciliation retains the pod phase, termination reason, exit code, signal, and restart count as typed task evidence, plus a bounded redacted log tail as a private runtime artifact.
 
 NetworkPolicy should allow only DNS, the internal callback API, and the external hosts required for GitHub, OpenRouter, and package installation. A task uses only ephemeral local cache state; correctness never depends on cache persistence.
 

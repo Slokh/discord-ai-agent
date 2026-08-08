@@ -1,9 +1,10 @@
+import { createHash } from "node:crypto";
 import path from "node:path";
 import { slugify } from "../util/text.js";
 
 const CODE_UPDATE_BRANCH_PREFIX = "agent";
 const CODE_UPDATE_BRANCH_SLUG_MAX_CHARS = 40;
-const CODE_UPDATE_BRANCH_SUFFIX_CHARS = 4;
+const CODE_UPDATE_BRANCH_SUFFIX_CHARS = 8;
 const MAX_PUBLIC_DIFF_CHARS = 40_000;
 const CODE_UPDATE_BRANCH_STOP_WORDS = new Set([
   "a",
@@ -238,7 +239,7 @@ function trimSlug(slug: string, maxChars: number) {
 
 function codeUpdateBranchSuffix(taskId: string | undefined) {
   if (!taskId) return "";
-  return taskId.replace(/[^a-z0-9]/gi, "").slice(-CODE_UPDATE_BRANCH_SUFFIX_CHARS).toLowerCase();
+  return createHash("sha256").update(taskId).digest("hex").slice(0, CODE_UPDATE_BRANCH_SUFFIX_CHARS);
 }
 
 function looksLikeKebabTitle(value: string) {

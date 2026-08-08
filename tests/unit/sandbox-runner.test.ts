@@ -132,6 +132,18 @@ describe("sandboxRunner", () => {
     expect(prompt).toContain("Never copy private evidence");
   });
 
+  it("uses later deployment verification as scoped incident recovery evidence", () => {
+    const prompt = codeUpdatePrompt({
+      taskType: "improvement_report",
+      taskId: "task-assess-deployment",
+      requestedBy: "improvement-reconciler",
+      taskRequest: JSON.stringify({ assessmentMode: "operational_incident" }),
+    });
+
+    expect(prompt).toContain("latestDeploymentVerification");
+    expect(prompt).toContain("Do not treat deployment success alone as proof that unrelated runtime behavior recovered");
+  });
+
   it("allows diagnosis to finish clean but not ordinary code updates", () => {
     expect(acceptsCleanNanoCodexResult("diagnosis", 0, "diagnosis complete")).toBe(true);
     expect(acceptsCleanNanoCodexResult("improvement_report", 0, "assessment complete")).toBe(true);
@@ -155,7 +167,10 @@ describe("sandboxRunner", () => {
 
   it("uses concise agent-prefixed branch names for code updates", () => {
     expect(codeUpdateBranchName("Use loading reaction instead of Thinking reply", "task-demo-1234-abcd5678")).toBe(
-      "agent/use-loading-reaction-thinking-reply-5678"
+      "agent/use-loading-reaction-thinking-db4fa649"
+    );
+    expect(codeUpdateBranchName("Retry improvement", "improvement-x-retry-2")).not.toBe(
+      codeUpdateBranchName("Retry improvement", "improvement-y-retry-2"),
     );
   });
 

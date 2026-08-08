@@ -75,6 +75,15 @@ worker:
     requests: { cpu: 250m, memory: 512Mi }
     limits: { cpu: "2", memory: 2Gi }
 
+# The watchdog must run independently of the worker that owns reconciliation.
+improvementWatchdog:
+  schedule: "*/15 * * * *"
+  startingDeadlineSeconds: 600
+  activeDeadlineSeconds: 300
+  resources:
+    requests: { cpu: 50m, memory: 128Mi }
+    limits: { cpu: 250m, memory: 256Mi }
+
 migrations:
   enabled: true
 

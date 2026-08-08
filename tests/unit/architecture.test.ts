@@ -98,6 +98,22 @@ describe("architecture guardrails", () => {
     expect(deployment).not.toContain("upload-artifact");
   });
 
+  it("runs the improvement watchdog independently on the cluster cadence", async () => {
+    const watchdog = await fs.readFile(
+      path.join(process.cwd(), "deploy/helm/discord-ai-agent/templates/improvement-watchdog.yaml"),
+      "utf8",
+    );
+    const values = await fs.readFile(path.join(process.cwd(), "deploy/helm/discord-ai-agent/values.yaml"), "utf8");
+
+    expect(watchdog).toContain("kind: CronJob");
+    expect(watchdog).toContain("concurrencyPolicy: Forbid");
+    expect(watchdog).toContain("dist/scripts/improvementWatchdog.js");
+    expect(watchdog).toContain("--record-detection");
+    expect(watchdog).toContain("--enforce");
+    expect(values).toContain('schedule: "*/15 * * * *"');
+    expect(values).toContain("activeDeadlineSeconds: 300");
+  });
+
   it("keeps the post-deploy canary invisible to Discord members", async () => {
     const canary = await fs.readFile(path.join(process.cwd(), "scripts/postDeployCanary.ts"), "utf8");
     expect(canary).toContain('discordRequest<{ id: string; bot?: boolean }>("/users/@me"');

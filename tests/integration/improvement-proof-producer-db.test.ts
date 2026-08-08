@@ -164,45 +164,4 @@ describe.skipIf(!runDbTests)("improvement proof-producer liveness", () => {
     ]));
   });
 
-  it("projects one bot-channel update per unhealthy producer episode", async () => {
-    const recorded = await repo.recordImprovementSignal({
-      source: "runtime_detection",
-      sourceKey: "test-reconciler-watchdog-alert",
-      reporterKind: "automation",
-      summary: "The improvement reconciler missed its heartbeat.",
-      scope: "deployment",
-    });
-    const update = await repo.enqueueImprovementBotUpdate({
-      caseId: recorded.case.caseId,
-      sourceKey: "test-reconciler-watchdog-alert",
-      producerTrigger: "improvement_reconciliation",
-      livenessReason: "missed_sla",
-    });
-    await repo.enqueueImprovementBotUpdate({
-      caseId: recorded.case.caseId,
-      sourceKey: "test-reconciler-watchdog-alert",
-      producerTrigger: "improvement_reconciliation",
-      livenessReason: "missed_sla",
-    });
-    await expect(repo.listRenderableImprovementBotUpdates()).resolves.toContainEqual(expect.objectContaining({
-      updateId: update.updateId,
-      caseId: recorded.case.caseId,
-      producerTrigger: "improvement_reconciliation",
-      livenessReason: "missed_sla",
-      caseStatus: "open",
-    }));
-    await repo.markImprovementBotUpdateRendered({
-      updateId: update.updateId,
-      deliveryChannelId: "test-bot-channel",
-      deliveryMessageId: "test-bot-message",
-      signature: "open",
-    });
-    await expect(repo.listRenderableImprovementBotUpdates()).resolves.not.toContainEqual(expect.objectContaining({ updateId: update.updateId }));
-    await repo.transitionImprovementCase({ caseId: recorded.case.caseId, to: "dismissed", actorKind: "automation", resolution: "Recovered without a code change." });
-    await expect(repo.listRenderableImprovementBotUpdates()).resolves.toContainEqual(expect.objectContaining({
-      updateId: update.updateId,
-      caseStatus: "dismissed",
-      caseResolution: "Recovered without a code change.",
-    }));
-  });
 });

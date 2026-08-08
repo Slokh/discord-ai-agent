@@ -43,7 +43,7 @@ type ImprovementReconciliationRepository = Pick<
   | "verifyImprovementCasesForDeployment"
   | "listImprovementCaseIdsNeedingHealth"
   | "updateImprovementCaseHealth"
-> & Partial<Pick<DiscordAiAgentRepository, "listImprovementProofProducerHealth" | "recordImprovementSignal" | "enqueueImprovementBotUpdate">>;
+> & Partial<Pick<DiscordAiAgentRepository, "listImprovementProofProducerHealth" | "recordImprovementSignal">>;
 
 type RuntimeReader = ImprovementAssessmentRuntimeReader;
 type DeliveryReader = Pick<DeliveryObligationsRepository, "getByExecutionId">;

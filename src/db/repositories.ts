@@ -12,7 +12,6 @@ import * as embeddings from "./embeddingRepository.js";
 import * as improvements from "./improvementRepository.js";
 import * as improvementHealth from "./improvementHealthRepository.js";
 import * as improvementEffectiveness from "./improvementEffectivenessRepository.js";
-import * as improvementBotUpdates from "./improvementBotUpdateRepository.js";
 import * as improvementProofProducers from "./improvementProofProducerRepository.js";
 import * as improvementReporterConversations from "./improvementReporterConversationRepository.js";
 import * as improvementWork from "./improvementWorkRepository.js";
@@ -28,7 +27,6 @@ export type { DiscordEmojiCultureProfile, DiscordEmojiUsageExample } from "./dis
 export type { GuildAgentSettings } from "./agentSettingsRepository.js";
 export type { UserPreference } from "./userPreferenceRepository.js";
 export type { ScheduledReminder, ReminderDeliveryKind, ReminderStatus, ScheduleRunStatus } from "./reminderRepository.js";
-export type { ImprovementBotUpdate } from "./improvementBotUpdateRepository.js";
 
 type PoolFunction = (pool: DbPool, ...args: any[]) => any;
 type BoundRepository<T extends Record<string, unknown>> = {
@@ -60,7 +58,6 @@ export function createAppDatabase(pool: DbPool) {
     ...bindRepository(pool, improvements),
     ...bindRepository(pool, improvementHealth),
     ...bindRepository(pool, improvementEffectiveness),
-    ...bindRepository(pool, improvementBotUpdates),
     ...bindRepository(pool, improvementProofProducers),
     ...bindRepository(pool, improvementReporterConversations),
     ...bindRepository(pool, improvementWork),

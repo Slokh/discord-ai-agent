@@ -124,6 +124,23 @@ describe("operator activity story projection", () => {
     expect(result.recent.find((story) => story.id === "embed-failed")).toMatchObject({ tone: "danger", summary: "Background work failed" });
   });
 
+  it("keeps every eligible story instead of applying a final category ceiling", () => {
+    const conversations = Array.from({ length: 55 }, (_, index) => ({
+      id: `conversation-${index}`, kind: "runtime", title: `Prompt ${index}`, status: "succeeded",
+      occurredAt: new Date(Date.UTC(2026, 7, 6, 12, index)).toISOString(), events: [],
+    }));
+    const system = Array.from({ length: 25 }, (_, index) => ({
+      id: `system-${index}`, kind: "system", title: `System job ${index}`, status: "succeeded",
+      rollupKey: `job-${index}`, occurredAt: new Date(Date.UTC(2026, 7, 6, 11, index)).toISOString(), events: [],
+    }));
+
+    const result = deriveOperatorActivity({ executions: [], tasks: [], deployments: [], activity: [...conversations, ...system] });
+
+    expect(result.recent).toHaveLength(80);
+    expect(result.recent.filter((story) => story.kind === "conversation")).toHaveLength(55);
+    expect(result.recent.filter((story) => story.kind === "system")).toHaveLength(25);
+  });
+
   it("keeps one improvement story per case and folds linked code work into it", () => {
     const result = deriveOperatorActivity({
       executions: [], tasks: [], deployments: [],

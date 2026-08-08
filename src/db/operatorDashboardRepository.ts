@@ -38,7 +38,7 @@ export class OperatorDashboardRepository {
     if (!context) return { ...detail, executionId, messages: [] };
     const sourceMessageId = nullable(context.source_message_id);
     const guildId = nullable(context.guild_id);
-    const [archive, runtime] = await Promise.all([
+    const [archive, runtime, trace] = await Promise.all([
       sourceMessageId
         ? this.pool.query(
           `WITH RECURSIVE chain AS (
@@ -82,6 +82,15 @@ export class OperatorDashboardRepository {
          ORDER BY created_at ASC,message_id ASC
          LIMIT 20`,
         [String(context.session_id), executionId],
+      ),
+      this.pool.query(
+        `SELECT id,sequence,kind,level,event_name,summary,metadata,duration_ms,
+                span_id,parent_span_id,created_at
+         FROM agent_runtime_events
+         WHERE execution_id = $1
+         ORDER BY sequence ASC,id ASC
+         LIMIT 200`,
+        [executionId],
       ),
     ]);
     const fallbackIds = archive.rows
@@ -148,7 +157,7 @@ export class OperatorDashboardRepository {
       seen.add(id);
     }
     messages.sort((left, right) => left.createdAt.getTime() - right.createdAt.getTime());
-    return { ...detail, executionId, messages };
+    return { ...detail, executionId, messages, traceEvents: trace.rows.map(dashboardTraceEvent) };
   }
 
   async snapshot(input: { revision: string; now?: Date; includeActivityDetails?: boolean }) {
@@ -246,13 +255,6 @@ export class OperatorDashboardRepository {
              AND execution.status NOT IN ('queued','running')
              AND coalesce(nullif(execution.metadata->>'qualityCohort',''),nullif(session.metadata->>'qualityCohort','')) IS DISTINCT FROM 'synthetic'
              AND execution.updated_at >= $1::timestamptz - interval '24 hours'
-         ), recent_executions AS (
-           SELECT * FROM (
-             SELECT execution_rollup.*,
-                    row_number() OVER (PARTITION BY is_system ORDER BY story_updated_at DESC) AS category_rank
-             FROM execution_rollup
-           ) ranked
-           WHERE category_rank <= CASE WHEN is_system THEN 12 ELSE 24 END
          )
          SELECT recent.execution_id,recent.session_id,recent.attempt,recent.story_started_at,recent.story_updated_at,recent.is_system,
                 coalesce(nullif(execution.metadata->>'title',''),session.title) AS title,
@@ -265,7 +267,7 @@ export class OperatorDashboardRepository {
                 (source_message.referenced_message_id IS NOT NULL) AS has_parent,
                 event.id,event.event_name,event.level,event.created_at,
                 event.group_event_count
-         FROM recent_executions recent
+         FROM execution_rollup recent
          JOIN agent_runtime_executions execution ON execution.execution_id = recent.execution_id
          JOIN agent_runtime_sessions session ON session.session_id = recent.session_id
          LEFT JOIN discord_delivery_obligations delivery ON delivery.execution_id = recent.execution_id
@@ -290,7 +292,6 @@ export class OperatorDashboardRepository {
              AND task_type <> 'post-deploy-canary'
              AND updated_at >= $1::timestamptz - interval '7 days'
            ORDER BY updated_at DESC,created_at DESC
-           LIMIT 24
          )
          SELECT task.task_id,task.task_type,task.title,task.status,task.status_message,task.current_step,
                 task.branch_name,task.pr_url,task.verify_passed,task.improvement_case_id,
@@ -322,7 +323,6 @@ export class OperatorDashboardRepository {
              AND event.event_name NOT IN ('signal.received','signal.withdrawn','signal.reactivated','case.coalesced','evidence.attached','reconciliation.health_changed')
            GROUP BY event.case_id
            ORDER BY story_updated_at DESC
-           LIMIT 20
          )
          SELECT recent.case_id,recent.story_updated_at,
                 case_row.title,case_row.status,case_row.first_seen_at,
@@ -495,6 +495,77 @@ function record(value: unknown): Record<string, unknown> {
   return value != null && typeof value === "object" && !Array.isArray(value)
     ? value as Record<string, unknown>
     : {};
+}
+
+const TRACE_METADATA_KEYS = new Set([
+  "purpose", "requestedModel", "model", "reasoningEffort", "messageCount", "toolCount", "offeredTools",
+  "maxTokens", "timeoutMs", "toolChoice", "finishReason", "usage", "estimatedCostUsd", "outputChars",
+  "requestedToolCalls", "serverToolUse", "urlCitationCount", "toolName", "status", "fileCount", "tableCount",
+  "errorCode", "errorName", "retryable", "latencyBudgetMs", "latencyBudgetExceeded", "successfulMutationCount",
+  "resumed", "instructionBytes", "turnContextBytes", "toolSchemaBytes", "sizeBytes", "binary",
+]);
+
+function dashboardTraceEvent(row: Record<string, unknown>) {
+  const eventName = String(row.event_name);
+  const level = String(row.level || "info");
+  const metadata = record(row.metadata);
+  return {
+    id: `trace-event-${row.id}`,
+    sequence: number(row.sequence),
+    type: traceEventType(eventName),
+    title: traceEventTitle(eventName, metadata),
+    summary: nullable(row.summary),
+    status: level === "error" || /failed|failure|stalled/.test(eventName)
+      ? "failed"
+      : level === "warn" ? "blocked" : /started|queued/.test(eventName) ? "running" : "done",
+    level,
+    code: eventName,
+    durationMs: row.duration_ms == null ? null : number(row.duration_ms),
+    spanId: nullable(row.span_id),
+    parentSpanId: nullable(row.parent_span_id),
+    metadata: dashboardTraceMetadata(metadata),
+    occurredAt: date(row.created_at),
+  };
+}
+
+function traceEventType(eventName: string) {
+  if (eventName.includes(".model.")) return "model";
+  if (eventName.includes(".tool.")) return "tool";
+  if (eventName.includes("context") || eventName.includes("contract_prepared")) return "context";
+  if (eventName.startsWith("discord.delivery")) return "delivery";
+  if (eventName.includes("artifact")) return "artifact";
+  if (eventName.includes("command") || eventName.includes("git") || eventName.includes("task")) return "task";
+  if (eventName.includes("response") || eventName.includes("assistant.message")) return "response";
+  return "event";
+}
+
+function traceEventTitle(eventName: string, metadata: Record<string, unknown>) {
+  const toolName = nullable(metadata.toolName);
+  if (eventName === "agent.tool.started") return toolName ? `${toolName} started` : "Tool started";
+  if (eventName === "agent.tool.complete") return toolName ? `${toolName} completed` : "Tool completed";
+  if (eventName === "agent.model.call.started") return "Model call started";
+  if (eventName === "agent.model.call.completed") return "Model call completed";
+  if (eventName === "agent.model.call.failed") return "Model call failed";
+  if (eventName === "agent.execution.context_ready" || eventName === "agent.nanocodex.contract_prepared") return "Context assembled";
+  if (eventName === "agent.execution.response_stored") return "Response stored";
+  if (eventName === "discord.delivery.intent_stored") return "Discord delivery queued";
+  return eventName.split(".").slice(-2).map((part) => part.replaceAll("_", " ")).join(" ").replace(/^./, (value) => value.toUpperCase());
+}
+
+function dashboardTraceMetadata(metadata: Record<string, unknown>) {
+  return Object.fromEntries([...TRACE_METADATA_KEYS]
+    .filter((key) => metadata[key] != null)
+    .map((key) => [key, safeTraceValue(metadata[key])]));
+}
+
+function safeTraceValue(value: unknown, depth = 0): unknown {
+  if (value == null || typeof value === "string" || typeof value === "number" || typeof value === "boolean") return value;
+  if (depth >= 2) return undefined;
+  if (Array.isArray(value)) return value.slice(0, 12).map((item) => safeTraceValue(item, depth + 1)).filter((item) => item !== undefined);
+  const item = record(value);
+  return Object.fromEntries(Object.entries(item).slice(0, 16)
+    .map(([key, nested]) => [key, safeTraceValue(nested, depth + 1)])
+    .filter(([, nested]) => nested !== undefined));
 }
 
 function safeDiscordUrl(value: unknown): string | null {

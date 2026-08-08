@@ -49,7 +49,15 @@ export async function applyImprovementAssessmentCompletion(input: {
     await linkRepairedTask(input.repo, input.caseId, input.taskId);
     return { result, applied: true };
   }
-  if (!["open", "needs_evidence"].includes(record.case.status)) return { result, applied: false };
+  const dismissibleDisposition = ["expected_behavior", "not_reproducible", "already_fixed"].includes(result.disposition);
+  if (record.case.status === "actionable" && result.disposition === "insufficient_evidence") {
+    await awaitingHuman(input.repo, input.caseId, "actionable_reassessment_requires_operator_judgment", input.taskId);
+    return { result, applied: false };
+  }
+  if (
+    !["open", "needs_evidence"].includes(record.case.status)
+    && !(record.case.status === "actionable" && dismissibleDisposition)
+  ) return { result, applied: false };
 
   if (result.disposition === "confirmed_fixed") {
     if (input.taskStatus !== "succeeded" || !input.prUrl || !executableAssessmentContract) {
@@ -74,7 +82,7 @@ export async function applyImprovementAssessmentCompletion(input: {
     return { result, applied: outcome.applied };
   }
 
-  if (["expected_behavior", "not_reproducible", "already_fixed"].includes(result.disposition)) {
+  if (dismissibleDisposition) {
     const outcome = await input.repo.applyImprovementTriage({
       ...improvementTriageApplication(dossier, {
         verdict: "not_reproduced",

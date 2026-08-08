@@ -57,6 +57,58 @@ describe("autonomous improvement assessment", () => {
     expect(repo.recordImprovementReconciliationDecision).not.toHaveBeenCalled();
   });
 
+  it("dismisses an actionable incident when later evidence proves it recovered", async () => {
+    const base = scheduleIncidentRecord();
+    const record = { ...base, case: { ...base.case, status: "actionable" as const } };
+    const taskId = improvementAssessmentTaskId(record.case.caseId, buildImprovementTriageDossier(record, []).snapshotKey);
+    const repo = assessmentRepo(record as ReturnType<typeof improvementRecord>);
+    const outcome = await applyImprovementAssessmentCompletion({
+      repo: repo as never,
+      taskId,
+      caseId: record.case.caseId,
+      taskStatus: "no_changes",
+      metadata: { improvementAssessment: {
+        disposition: "already_fixed",
+        summary: "A later verified deployment satisfied the registered recovery check.",
+        regression: null,
+        usesTrustedDetectorContract: true,
+      } },
+    });
+
+    expect(outcome.applied).toBe(true);
+    expect(repo.applyImprovementTriage).toHaveBeenCalledWith(expect.objectContaining({
+      verdict: "not_reproduced",
+      targetStatus: "dismissed",
+      actorKind: "automation",
+    }));
+  });
+
+  it("routes ambiguous actionable reassessment to operator judgment", async () => {
+    const base = improvementRecord();
+    const record = { ...base, case: { ...base.case, status: "actionable" as const } };
+    const taskId = improvementAssessmentTaskId(record.case.caseId, buildImprovementTriageDossier(record, []).snapshotKey);
+    const repo = assessmentRepo(record as ReturnType<typeof improvementRecord>);
+    const outcome = await applyImprovementAssessmentCompletion({
+      repo: repo as never,
+      taskId,
+      caseId: record.case.caseId,
+      taskStatus: "no_changes",
+      metadata: { improvementAssessment: {
+        disposition: "insufficient_evidence",
+        summary: "The retained evidence cannot distinguish the two outcomes.",
+        regression: null,
+      } },
+    });
+
+    expect(outcome.applied).toBe(false);
+    expect(repo.recordImprovementReconciliationDecision).toHaveBeenCalledWith(expect.objectContaining({
+      eventName: "reconciliation.awaiting_operator",
+      reason: "actionable_reassessment_requires_operator_judgment",
+      metadata: { taskId },
+    }));
+    expect(repo.applyImprovementTriage).not.toHaveBeenCalled();
+  });
+
   it("accepts the detector-owned schedule recovery contract after autonomous repair", async () => {
     const record = scheduleIncidentRecord();
     const dossier = buildImprovementTriageDossier(record, []);

@@ -260,12 +260,16 @@ async function reconcileAutonomousAssessment(
   const taskId = improvementAssessmentTaskId(record.case.caseId, dossier.snapshotKey, attempt);
   const signals = record.signals.filter((signal) => signal.active);
   const operationalIncident = signals.some((signal) => improvementDetectorPolicyForSignal(signal)?.authority === "autonomous_assessment");
+  const latestDeploymentVerification = operationalIncident
+    ? await input.repo.latestDeploymentVerification()
+    : null;
   const request = await renderPrivateAssessmentEvidence(record.case.caseId, signals, input.runtime, input.repo, {
     assessmentMode: operationalIncident ? "operational_incident" : "reported_friction",
     proposedContract: operationalIncident && dossier.proposedContract ? {
       expectedBehavior: dossier.proposedContract.expectedBehavior,
       checks: dossier.proposedContract.checks,
     } : null,
+    latestDeploymentVerification,
   });
   const first = signals[0];
   await input.enqueueImprovementTask({

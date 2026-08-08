@@ -117,7 +117,11 @@ describe("improvement reconciler", () => {
       messageContext: vi.fn(async () => []),
       listActiveImprovementPullRequestWork: vi.fn(async () => []),
       reconcileImprovementPullRequestWorkAttempt: vi.fn(),
-      latestDeploymentVerification: vi.fn(async () => null),
+      latestDeploymentVerification: vi.fn(async () => ({
+        revision: "recovered-revision",
+        deploymentId: "recovered-deployment",
+        verifiedAt: new Date("2026-08-05T11:55:00.000Z"),
+      })),
       verifyImprovementCasesForDeployment: vi.fn(),
       listImprovementCaseIdsNeedingHealth: vi.fn(async () => []),
       updateImprovementCaseHealth: vi.fn(),
@@ -139,6 +143,11 @@ describe("improvement reconciler", () => {
     expect(request).toMatchObject({
       assessmentMode: "operational_incident",
       proposedContract: { checks: [{ kind: "schedule_health" }] },
+      latestDeploymentVerification: {
+        revision: "recovered-revision",
+        deploymentId: "recovered-deployment",
+        verifiedAt: "2026-08-05T11:55:00.000Z",
+      },
       signals: [{ metadata: { operationalEvidence: { status: "delivering" } } }],
     });
     expect(recordImprovementReconciliationDecision).toHaveBeenCalledWith(expect.objectContaining({

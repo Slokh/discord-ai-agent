@@ -40,6 +40,13 @@ describe("architecture guardrails", () => {
     expect(serviceAccounts.match(/automountServiceAccountToken: false/g)).toHaveLength(2);
   });
 
+  it("limits sandbox failure diagnostics to read-only pod access", async () => {
+    const rbac = await fs.readFile(path.join(process.cwd(), "deploy/helm/discord-ai-agent/templates/rbac.yaml"), "utf8");
+    expect(rbac).toContain('resources: ["pods"]\n    verbs: ["get", "list"]');
+    expect(rbac).toContain('resources: ["pods/log"]\n    verbs: ["get"]');
+    expect(rbac).not.toMatch(/resources: \["pods(?:\/log)?"\]\n\s+verbs: \[[^\]]*(?:create|update|patch|delete)/);
+  });
+
   it("allows the Console to finish cold startup before liveness restarts it", async () => {
     const deployment = await fs.readFile(path.join(process.cwd(), "deploy/helm/discord-ai-agent/templates/console.yaml"), "utf8");
     expect(deployment).toContain("startupProbe:");

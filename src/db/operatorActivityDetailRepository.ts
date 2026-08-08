@@ -68,7 +68,7 @@ export async function releaseActivityDetail(
 }
 
 export async function embeddingActivityDetail(pool: DbPool) {
-  const [runs, coverage, models] = await Promise.all([
+  const [runs, eligible, models] = await Promise.all([
     pool.query(
       `SELECT execution.execution_id,execution.status,
               coalesce(nullif(execution.metadata->>'title',''),session.title) AS title,
@@ -87,26 +87,27 @@ export async function embeddingActivityDetail(pool: DbPool) {
        LIMIT 50`,
     ),
     pool.query(
-      `SELECT count(*) FILTER (WHERE message.deleted_at IS NULL AND message.normalized_content <> '')::int AS eligible,
-              count(embedding.message_id) FILTER (WHERE message.deleted_at IS NULL AND message.normalized_content <> '')::int AS embedded,
-              count(*) FILTER (WHERE message.deleted_at IS NULL AND message.normalized_content <> '' AND embedding.message_id IS NULL)::int AS unembedded,
-              max(embedding.embedded_at) AS latest_embedded_at
-       FROM messages message
-       LEFT JOIN message_embeddings embedding ON embedding.message_id = message.id`,
+      `SELECT count(*)::int AS eligible
+       FROM messages
+       WHERE deleted_at IS NULL AND normalized_content <> ''`,
     ),
     pool.query(
-      `SELECT model,dimensions,input_version,count(*)::int AS count,max(embedded_at) AS latest_embedded_at
+      `SELECT model,dimensions,input_version,count(*)::int AS count,max(embedded_at) AS latest_embedded_at,
+              sum(count(*)) OVER ()::int AS total_embedded,
+              max(max(embedded_at)) OVER () AS overall_latest_embedded_at
        FROM message_embeddings
        GROUP BY model,dimensions,input_version
        ORDER BY count(*) DESC,model ASC
        LIMIT 5`,
     ),
   ]);
-  const coverageRow = coverage.rows[0] ?? {};
+  const eligibleCount = number(eligible.rows[0]?.eligible);
+  const embeddedCount = number(models.rows[0]?.total_embedded);
   return {
     coverage: {
-      eligible: number(coverageRow.eligible), embedded: number(coverageRow.embedded),
-      unembedded: number(coverageRow.unembedded), latestEmbeddedAt: nullableDate(coverageRow.latest_embedded_at),
+      eligible: eligibleCount, embedded: embeddedCount,
+      unembedded: Math.max(0, eligibleCount - embeddedCount),
+      latestEmbeddedAt: nullableDate(models.rows[0]?.overall_latest_embedded_at),
     },
     models: models.rows.map((row) => ({
       model: String(row.model), dimensions: number(row.dimensions), inputVersion: number(row.input_version),

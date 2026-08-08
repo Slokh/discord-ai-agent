@@ -28,6 +28,7 @@ export async function startOperatorConsole(input: {
 }): Promise<{ close: () => Promise<void>; server: Server }> {
   const reloadClients = new Set<import("node:http").ServerResponse>();
   let snapshotInFlight: Promise<Record<string, unknown>> | null = null;
+  const activityDetailInFlight = new Map<string, Promise<Record<string, unknown> | null>>();
   const server = createServer(async (request, response) => {
     try {
       const path = new URL(request.url ?? "/", "http://console.internal").pathname;
@@ -43,7 +44,15 @@ export async function startOperatorConsole(input: {
       if (activityApi) {
         const kind = decodeURIComponent(activityApi[1]!);
         const id = decodeURIComponent(activityApi[2]!);
-        const detail = await input.repository.activityDetail({ kind, id, revision: input.config.appRevision });
+        const detailKey = `${kind}:${id}`;
+        let detailRequest = activityDetailInFlight.get(detailKey);
+        if (!detailRequest) {
+          detailRequest = input.repository.activityDetail({ kind, id, revision: input.config.appRevision }).finally(() => {
+            if (activityDetailInFlight.get(detailKey) === detailRequest) activityDetailInFlight.delete(detailKey);
+          });
+          activityDetailInFlight.set(detailKey, detailRequest);
+        }
+        const detail = await detailRequest;
         if (!detail) return send(response, 404, "application/json; charset=utf-8", JSON.stringify({ error: "activity_not_found" }));
         return send(response, 200, "application/json; charset=utf-8", JSON.stringify({
           ...detail,

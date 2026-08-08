@@ -6,7 +6,7 @@ import type {
 import type { DiscordAiAgentRepository } from "../db/repositories.js";
 import type { ImprovementContractCheck } from "../db/types.js";
 
-export const IMPROVEMENT_ASSESSMENT_EVIDENCE_VERSION = 6;
+export const IMPROVEMENT_ASSESSMENT_EVIDENCE_VERSION = 7;
 
 const MAX_RUNS = 5;
 const MAX_REPORTED_MESSAGE_CONTEXTS = 5;

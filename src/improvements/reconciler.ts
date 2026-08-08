@@ -235,7 +235,12 @@ async function reconcileAutonomousAssessment(
     if (existing.status === "queued" || existing.status === "running") {
       return { status: "deferred", reason: "assessment_running" };
     }
-    if (existing.status === "no_changes") continue;
+    if (existing.status === "no_changes") {
+      if (assessmentAwaitingOperator(record.events, taskId)) {
+        return { status: "deferred", reason: "operator_judgment" };
+      }
+      continue;
+    }
     if (existing.status === "succeeded") {
       const work = record.workAttempts.find((candidate) => candidate.taskId === taskId);
       if (work?.status === "failed") continue;
@@ -291,6 +296,16 @@ async function reconcileAutonomousAssessment(
     metadata: { taskId, snapshotKey: dossier.snapshotKey, attempt, maxAttempts: MAX_ASSESSMENT_ATTEMPTS, evidenceSchemaVersion: IMPROVEMENT_ASSESSMENT_EVIDENCE_VERSION },
   });
   return { status: "deferred", reason: attempt === 1 ? "assessment_running" : "assessment_retry_queued" };
+}
+
+function assessmentAwaitingOperator(
+  events: Array<{ eventName: string; metadata: Record<string, unknown> }>,
+  taskId: string,
+) {
+  return events.some((event) =>
+    event.eventName === "reconciliation.awaiting_operator"
+    && event.metadata.taskId === taskId,
+  );
 }
 
 async function reconcileAutomatedRepair(

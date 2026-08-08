@@ -578,6 +578,47 @@ describe("improvement reconciler", () => {
     }));
   });
 
+  it("does not retry an assessment whose ambiguity was routed to operator judgment", async () => {
+    const now = new Date("2026-08-05T12:00:00.000Z");
+    const reported = improvementCase("imp-operator", "actionable", now);
+    const baseRecord = record(reported, signal(reported.caseId, "member_report"));
+    const snapshotKey = buildSnapshotKey(baseRecord);
+    const taskId = improvementAssessmentTaskId(reported.caseId, snapshotKey);
+    const reportedRecord = {
+      ...baseRecord,
+      events: [{ eventName: "reconciliation.awaiting_operator", metadata: { taskId } }],
+    };
+    const enqueueImprovementTask = vi.fn();
+    const repo = {
+      listImprovementCasesForReconciliation: vi.fn(async ({ statuses }: { statuses: string[] }) => statuses.includes("actionable") ? [reported] : []),
+      getImprovementCase: vi.fn(async () => reportedRecord),
+      getAgentTask: vi.fn(async () => ({ taskId, status: "no_changes", updatedAt: now })),
+      applyImprovementTriage: vi.fn(),
+      recordImprovementReconciliationDecision: vi.fn(async () => ({ recorded: true })),
+      getImprovementReporterClarificationState: vi.fn(async () => clarificationState()),
+      ensureImprovementReporterConversationsForCase: vi.fn(async () => 0),
+      listActiveImprovementPullRequestWork: vi.fn(async () => []),
+      reconcileImprovementPullRequestWorkAttempt: vi.fn(),
+      latestDeploymentVerification: vi.fn(async () => null),
+      verifyImprovementCasesForDeployment: vi.fn(),
+      listImprovementCaseIdsNeedingHealth: vi.fn(async () => []),
+      updateImprovementCaseHealth: vi.fn(),
+      messageContext: vi.fn(async () => []),
+    };
+
+    const result = await runImprovementReconciliationOnce({
+      repo: repo as never,
+      config: { improvementStalledAfterMs: 1_000 } as unknown as AppConfig,
+      runtime: { getExecution: vi.fn(), listMessagesForExecution: vi.fn(), listEvents: vi.fn() } as never,
+      deliveries: { getByExecutionId: vi.fn() } as never,
+      enqueueImprovementTask: enqueueImprovementTask as never,
+      now,
+    });
+
+    expect(result.triage).toEqual([{ caseId: reported.caseId, status: "deferred", reason: "operator_judgment" }]);
+    expect(enqueueImprovementTask).not.toHaveBeenCalled();
+  });
+
   it("retries report-authorized repair work after the case becomes actionable", async () => {
     const now = new Date("2026-08-05T12:00:00.000Z");
     const actionable = improvementCase("imp-actionable-retry", "actionable", now);

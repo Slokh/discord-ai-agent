@@ -9,6 +9,7 @@ import type { ExecutionBackend, ExecutionContext } from "../execution/backend.js
 import type { DiscordAiAgentRepository } from "../db/repositories.js";
 import type { DbPool } from "../db/pool.js";
 import { startConversationCompactionMaintenance } from "../db/conversationCompaction.js";
+import { startEmbeddingBacklogMaintenance } from "../memory/embeddingBacklogMaintenance.js";
 import { startArtifactRetentionMaintenance } from "../observability/artifactRetention.js";
 import {
   finishBackgroundJobRuntime,
@@ -181,6 +182,7 @@ export async function startJobs(input: {
   const agentRuntimeReconciler = agentRuntimeWorkerEnabled
     ? startAgentRuntimeReconciler({ repo: input.agentRuntimeRepo })
     : null;
+  let embeddingBacklogMaintenance: { stop: () => void } | null = null;
   const agentRuntimeRepo = input.agentRuntimeRepo;
   const runtime: JobRuntime = {
     boss,
@@ -250,6 +252,7 @@ export async function startJobs(input: {
       artifactRetentionMaintenance?.stop();
       dataRetentionMaintenance?.stop();
       conversationCompactionMaintenance?.stop();
+      embeddingBacklogMaintenance?.stop();
       agentRuntimeReconciler?.stop();
       await boss.stop({ graceful: true, timeout: 100_000 });
     }
@@ -660,6 +663,14 @@ export async function startJobs(input: {
     });
   } else if (agentRuntimeWorkerEnabled) {
     logger.warn({ queue: AGENT_RUNTIME_EXECUTION_JOB }, "Agent runtime execution worker requested without a runner");
+  }
+
+  if (embeddingWorkerEnabled && input.repo) {
+    embeddingBacklogMaintenance = startEmbeddingBacklogMaintenance({
+      repo: input.repo,
+      config: input.config,
+      enqueue: (messageId) => runtime.enqueueMessageEmbedding(messageId),
+    });
   }
 
   return runtime;

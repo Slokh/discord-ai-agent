@@ -315,7 +315,7 @@ function correlateImprovementWork(stories: ActivityStory[]): ActivityStory[] {
   return stories.filter((story) => {
     if (secondaryImprovements.has(story)) return false;
     if (story.kind === "improvement") return true;
-    if (story.kind !== "code_change" && story.kind !== "conversation") return true;
+    if (story.kind !== "code_change" && story.kind !== "conversation" && story.kind !== "system") return true;
     const caseId = storyCaseIds(story)[0];
     const improvement = caseId ? improvementByRoot.get(find(caseId)) : undefined;
     if (!improvement) return true;
@@ -425,7 +425,7 @@ function foldActiveImprovementWork(activity: { active: ActivityStory[]; recent: 
     : []));
   const pinned = new Set<ActivityStory>();
   const active = activity.active.filter((story) => {
-    if (story.kind !== "code_change" || !story.improvementCaseId) return true;
+    if (!story.improvementCaseId || !["code_change", "system"].includes(story.kind)) return true;
     const improvement = improvementByCase.get(story.improvementCaseId);
     if (!improvement) return true;
     improvement.pullRequestUrl ??= story.pullRequestUrl;

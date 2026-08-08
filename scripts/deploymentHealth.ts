@@ -23,7 +23,7 @@ export type DeploymentHealth = {
 
 export function evaluateDeploymentHealth(
   payload: KubernetesList,
-  input: { release: string; expectedRevision: string },
+  input: { release: string; expectedRevision: string; allowExistingRestarts?: boolean },
 ): DeploymentHealth {
   const items = Array.isArray(payload.items) ? payload.items.filter(isRecord) : [];
   const deployments = items.filter((item) => item.kind === "Deployment");
@@ -74,7 +74,7 @@ export function evaluateDeploymentHealth(
       restarts += numberValue(containerStatus?.restartCount);
       if (containerStatus?.ready !== true) issues.push(`${stringValue(record(pod.metadata).name) || expectedName} is not ready.`);
     }
-    if (restarts > 0) issues.push(`${expectedName} current pods restarted ${restarts} time(s).`);
+    if (!input.allowExistingRestarts && restarts > 0) issues.push(`${expectedName} current pods restarted ${restarts} time(s).`);
     return { component, desired, ready, updated, available, restarts };
   });
   return { healthy: issues.length === 0, revision: input.expectedRevision, components, issues };
@@ -94,12 +94,44 @@ export async function verifyDeploymentStability(input: {
   const intervalMs = Math.max(250, Math.trunc(input.intervalMs ?? 5_000));
   const checks = Math.max(1, Math.ceil(Math.max(0, input.stabilitySeconds) * 1_000 / intervalMs) + 1);
   let health: DeploymentHealth | null = null;
+  let baseline: Map<string, number> | null = null;
   for (let check = 0; check < checks; check += 1) {
-    health = evaluateDeploymentHealth(readSnapshot(), { release: input.release, expectedRevision: input.expectedRevision });
+    const snapshot = readSnapshot();
+    health = evaluateDeploymentHealth(snapshot, {
+      release: input.release,
+      expectedRevision: input.expectedRevision,
+      allowExistingRestarts: true,
+    });
     if (!health.healthy) throw new Error(health.issues.join("\n"));
+    const restarts = currentPodRestarts(snapshot, input.expectedRevision);
+    if (baseline) {
+      const restarted = [...restarts].some(([pod, count]) => baseline?.get(pod) !== count) ||
+        [...baseline.keys()].some((pod) => !restarts.has(pod));
+      if (restarted) throw new Error("Current pods restarted or were replaced during the stability window.");
+    } else {
+      baseline = restarts;
+    }
     if (check + 1 < checks) await sleep(intervalMs);
   }
   return health!;
+}
+
+function currentPodRestarts(payload: KubernetesList, expectedRevision: string) {
+  const restarts = new Map<string, number>();
+  for (const item of Array.isArray(payload.items) ? payload.items.filter(isRecord) : []) {
+    if (item.kind !== "Pod" || record(item.metadata).deletionTimestamp) continue;
+    const metadata = record(item.metadata);
+    const component = stringValue(record(metadata.labels)["app.kubernetes.io/component"]);
+    if (!(REQUIRED_COMPONENTS as readonly string[]).includes(component)) continue;
+    const containers = records(record(item.spec).containers);
+    const statuses = records(record(item.status).containerStatuses);
+    const container = containers.find((value) => value.name === component) ?? containers[0];
+    if (imageTag(stringValue(container?.image)) !== expectedRevision) continue;
+    const status = statuses.find((value) => value.name === component) ?? statuses[0];
+    const pod = stringValue(metadata.uid) || stringValue(metadata.name);
+    if (pod && status) restarts.set(`${pod}:${component}`, numberValue(status.restartCount));
+  }
+  return restarts;
 }
 
 function kubernetesSnapshot(namespace: string, release: string): KubernetesList {

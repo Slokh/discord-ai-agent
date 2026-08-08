@@ -478,12 +478,7 @@ export function revisionQualityDetectionInputs(
   if (assessment.status === "fail") {
     for (const violationCode of assessment.violationCodes) {
       const matches = failureClusters.filter((cluster) => clusterMatchesViolation(cluster, violationCode));
-      if (matches.length > 0) {
-        for (const cluster of matches) selected.set(cluster.reference, cluster);
-        continue;
-      }
-      const metric = metricFailureCluster(violationCode);
-      selected.set(metric.reference, metric);
+      for (const cluster of matches) selected.set(cluster.reference, cluster);
     }
   }
   return [...selected.values()].flatMap((cluster) => {
@@ -594,23 +589,6 @@ function clusterMatchesViolation(cluster: RevisionQualityFailureCluster, violati
   if (violation === "abandoned_delivery") return cluster.kind === "delivery" && cluster.status === "abandoned";
   if (violation === "answer_failure_rate" || violation === "answer_failure_increase") return cluster.kind === "answer_status";
   return false;
-}
-
-function metricFailureCluster(code: RevisionHealthViolationCode): RevisionQualityPrivateFailureCluster {
-  return clusterFromDimensions({
-    kind: "quality_metric",
-    category: "observability",
-    eventName: null,
-    errorKind: null,
-    errorCode: null,
-    errorStatus: null,
-    toolName: null,
-    status: code,
-    latencyBudgetMs: null,
-    maxDurationMs: null,
-    executionIds: [],
-    count: 1,
-  });
 }
 
 function groupFailureOccurrences(occurrences: FailureOccurrence[]) {

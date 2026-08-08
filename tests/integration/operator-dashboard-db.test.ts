@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { deriveOperatorActivity } from "../../src/console/activity.js";
 import { OperatorDashboardRepository } from "../../src/db/operatorDashboardRepository.js";
 import type { DbPool } from "../../src/db/pool.js";
 import { ServiceHeartbeatRepository } from "../../src/db/serviceHeartbeatRepository.js";
@@ -65,6 +66,16 @@ describe.skipIf(!runDbTests)("operator dashboard database projection", () => {
          ('agent-session-complete','agent-execution-attempt-1',1,'status','info','agent.execution.started'),
          ('agent-session-complete','agent-execution-attempt-1',2,'status','error','agent.model.call.failed'),
          ('agent-session-complete','agent-execution-attempt-2',1,'status','info','agent.nanocodex.complete')`,
+    );
+    await pool.query(
+      `INSERT INTO agent_runtime_events(
+         session_id,execution_id,sequence,kind,level,event_name,summary,metadata,duration_ms,span_id,parent_span_id
+       ) VALUES (
+         'agent-session-complete','agent-execution-attempt-2',2,'model','info','agent.model.call.completed',
+         'Generate the final reply',
+         '{"model":"model-a","reasoningEffort":"high","usage":{"total_tokens":1234},"estimatedCostUsd":0.0123,"argumentsPreview":"private secret"}',
+         3210,'model-call-a','agent.request'
+       )`,
     );
     await pool.query(
       `INSERT INTO discord_delivery_obligations(
@@ -145,14 +156,14 @@ describe.skipIf(!runDbTests)("operator dashboard database projection", () => {
     expect(snapshot.activity.find((story) => story.id === "runtime-agent-execution-attempt-2")).toMatchObject({
       title: "Recovered prompt",
       attempts: 2,
-      eventCount: 1,
+      eventCount: 2,
       deliveryState: "delivered",
       hasParent: true,
       sourceUrl: "https://discord.com/channels/guild-a/channel-a/source-b",
       responseUrl: "https://discord.com/channels/guild-a/channel-a/reply-b",
       responseKind: "reply",
       events: [
-        expect.objectContaining({ name: "agent.nanocodex.complete" }),
+        expect.objectContaining({ name: "agent.model.call.completed" }),
       ],
     });
     expect(snapshot.activity.filter((story) => story.kind === "improvement")).toHaveLength(1);
@@ -178,7 +189,7 @@ describe.skipIf(!runDbTests)("operator dashboard database projection", () => {
       story: {
         id: "runtime-agent-execution-attempt-2",
         kind: "conversation",
-        technicalEvents: [expect.objectContaining({ name: "agent.nanocodex.complete" })],
+        technicalEvents: expect.arrayContaining([expect.objectContaining({ name: "agent.model.call.completed" })]),
       },
       messages: [
         { id: "attachment-only", role: "member", content: "", unavailable: false, attachments: [{ filename: "file.png", contentType: "image/png", sizeBytes: 2048 }] },
@@ -187,7 +198,16 @@ describe.skipIf(!runDbTests)("operator dashboard database projection", () => {
         { id: "source-b", role: "member", content: "Current member prompt", current: true },
         { id: "reply-b", role: "assistant", content: "Final assistant reply", reply: true },
       ],
+      traceEvents: expect.arrayContaining([
+        expect.objectContaining({ id: expect.any(String), type: "event", code: "agent.nanocodex.complete" }),
+        expect.objectContaining({
+          type: "model", title: "Model call completed", summary: "Generate the final reply",
+          durationMs: 3210, spanId: "model-call-a", parentSpanId: "agent.request",
+          metadata: expect.objectContaining({ model: "model-a", reasoningEffort: "high", estimatedCostUsd: 0.0123 }),
+        }),
+      ]),
     });
+    expect(JSON.stringify(conversation)).not.toContain("private secret");
 
     const improvement = await new OperatorDashboardRepository(pool).activityDetail({
       kind: "improvement",
@@ -216,5 +236,76 @@ describe.skipIf(!runDbTests)("operator dashboard database projection", () => {
       "unavailable", "unavailable", "unavailable", "unavailable",
     ]);
     expect(snapshot.summary).toMatchObject({ serviceCount: 4, serviceTelemetryAvailable: false });
+  });
+
+  it("projects every eligible source before semantic folding", async () => {
+    await pool.query(
+      `INSERT INTO agent_runtime_sessions(
+         session_id,thread_key,title,request,requested_by,status,started_at,completed_at,updated_at
+       )
+       SELECT 'bulk-prompt-session-' || item,'bulk-prompt-thread-' || item,'Bulk prompt ' || item,
+              'Private prompt','test','succeeded',now() - item * interval '1 minute',now(),now() - item * interval '1 minute'
+       FROM generate_series(1,30) item`,
+    );
+    await pool.query(
+      `INSERT INTO agent_runtime_executions(
+         execution_id,session_id,status,started_at,completed_at,updated_at
+       )
+       SELECT 'bulk-prompt-execution-' || item,'bulk-prompt-session-' || item,'succeeded',
+              now() - item * interval '1 minute',now(),now() - item * interval '1 minute'
+       FROM generate_series(1,30) item`,
+    );
+    await pool.query(
+      `INSERT INTO agent_runtime_sessions(
+         session_id,thread_key,title,request,requested_by,status,harness,metadata,started_at,completed_at,updated_at
+       )
+       SELECT 'bulk-system-session-' || item,'bulk-system-thread-' || item,'Bulk system job',
+              'Internal work','system',CASE WHEN item = 14 THEN 'failed' ELSE 'succeeded' END,
+              'background_job',jsonb_build_object('kind','background_job','jobKind','bulk_system'),
+              now() - item * interval '1 minute',now(),now() - item * interval '1 minute'
+       FROM generate_series(1,14) item`,
+    );
+    await pool.query(
+      `INSERT INTO agent_runtime_executions(
+         execution_id,session_id,status,metadata,started_at,completed_at,updated_at
+       )
+       SELECT 'bulk-system-execution-' || item,'bulk-system-session-' || item,
+              CASE WHEN item = 14 THEN 'failed' ELSE 'succeeded' END,
+              jsonb_build_object('jobKind','bulk_system'),now() - item * interval '1 minute',now(),now() - item * interval '1 minute'
+       FROM generate_series(1,14) item`,
+    );
+    await pool.query(
+      `INSERT INTO agent_tasks(task_id,task_type,title,request,requested_by,status,current_step,updated_at)
+       SELECT 'bulk-code-task-' || item,'code_update','Bulk code task ' || item,'Implement change','test',
+              'completed','completed',now() - item * interval '1 minute'
+       FROM generate_series(1,45) item`,
+    );
+    await pool.query(
+      `INSERT INTO improvement_cases(
+         case_id,scope,privacy,title,status,classification,severity,automation_state,first_seen_at,last_seen_at
+       )
+       SELECT 'bulk-case-' || item,'repository','private','Bulk case ' || item,'resolved','product_gap','low','complete',
+              now() - item * interval '1 minute',now() - item * interval '1 minute'
+       FROM generate_series(1,25) item`,
+    );
+    await pool.query(
+      `INSERT INTO improvement_case_events(case_id,event_name,actor_kind,summary,created_at)
+       SELECT 'bulk-case-' || item,'case.created','system','Created',now() - item * interval '1 minute'
+       FROM generate_series(1,25) item`,
+    );
+
+    const snapshot = await new OperatorDashboardRepository(pool).snapshot({ revision: "revision-a" });
+    const activity = deriveOperatorActivity(snapshot);
+
+    expect(snapshot.activity.filter((story) => story.id.startsWith("runtime-bulk-prompt-execution-"))).toHaveLength(30);
+    expect(snapshot.activity.filter((story) => story.id.startsWith("task-bulk-code-task-"))).toHaveLength(45);
+    expect(snapshot.activity.filter((story) => story.id.startsWith("improvement-bulk-case-"))).toHaveLength(25);
+    expect(activity.recent.filter((story) => story.id.startsWith("runtime-bulk-prompt-execution-"))).toHaveLength(30);
+    expect(activity.recent.filter((story) => story.id.startsWith("task-bulk-code-task-"))).toHaveLength(45);
+    expect(activity.recent.filter((story) => story.id.startsWith("improvement-bulk-case-"))).toHaveLength(25);
+    expect(activity.recent).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: "runtime-bulk-system-execution-14", tone: "danger" }),
+      expect.objectContaining({ id: "system-rollup-bulk_system", runCount: 13 }),
+    ]));
   });
 });

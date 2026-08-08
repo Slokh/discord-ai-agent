@@ -12,14 +12,11 @@ export const dashboardPage = `<!doctype html>
     <header class="topbar">
       <div class="dashboard-title"><h1>Console</h1><div id="environment" class="environment">—</div><div id="revision" class="revision" tabindex="0" aria-describedby="release-tooltip"><span id="revision-text">revision —</span><span id="release-tooltip" class="status-tooltip release-tooltip" role="tooltip"></span></div></div>
       <section class="topbar-system" aria-label="System status">
-        <div class="system-state"><span id="system-dot" class="status-dot" aria-hidden="true"></span><strong id="system-label">Checking</strong></div>
         <div class="system-segments">
           <div class="status-segment" tabindex="0" aria-describedby="services-tooltip"><span id="service-summary">— services</span><div id="services-tooltip" class="status-tooltip" role="tooltip"></div></div>
           <div class="status-segment" tabindex="0" aria-describedby="producers-tooltip"><span id="producer-summary">— producers</span><div id="producers-tooltip" class="status-tooltip" role="tooltip"></div></div>
-          <button id="attention-segment" class="status-segment" type="button" aria-label="Show blocked work" aria-controls="activity-panel" aria-pressed="false" aria-describedby="attention-tooltip"><span id="attention-summary">0 attention</span><span id="attention-tooltip" class="status-tooltip" role="tooltip">No items need attention.</span></button>
         </div>
       </section>
-      <div class="freshness"><span id="connection-dot" class="pulse"></span><span id="freshness">Connecting</span></div>
     </header>
 
     <div class="console-content">
@@ -43,8 +40,11 @@ export const dashboardPage = `<!doctype html>
 
     <div id="dashboard-view" class="loading-target" aria-busy="true" inert>
     <div class="console-workspace">
-      <section id="activity-panel" class="panel activity-panel">
-        <div class="section-heading activity-heading"><h2 id="activity-heading-title" tabindex="-1">Activity</h2><div class="activity-heading-meta"><div class="activity-filters" role="group" aria-label="Filter activity"><button type="button" data-activity-filter="all" aria-pressed="true">All <span id="filter-all-count">0</span></button><button type="button" data-activity-filter="active" aria-pressed="false">Active <span id="filter-active-count">0</span></button><button type="button" data-activity-filter="waiting" aria-pressed="false">Waiting <span id="filter-waiting-count">0</span></button><button type="button" data-activity-filter="blocked" aria-pressed="false">Blocked <span id="filter-blocked-count">0</span></button><button type="button" data-activity-filter="failures" aria-pressed="false">Failures <span id="filter-failures-count">0</span></button><button type="button" data-activity-filter="system" aria-pressed="false">System <span id="filter-system-count">0</span></button></div></div></div>
+      <section id="activity-panel" class="panel activity-panel" aria-label="Activity">
+        <div class="activity-filter-controls">
+          <div class="activity-filters" role="group" aria-label="Filter activity by status"><button type="button" data-activity-filter="all" aria-pressed="true">All <span id="filter-all-count">0</span></button><button type="button" data-activity-filter="running" aria-pressed="false">Running <span id="filter-running-count">0</span></button><button type="button" data-activity-filter="waiting" aria-pressed="false">Waiting <span id="filter-waiting-count">0</span></button><button type="button" data-activity-filter="blocked" aria-pressed="false">Blocked <span id="filter-blocked-count">0</span></button><button type="button" data-activity-filter="failed" aria-pressed="false">Failed <span id="filter-failed-count">0</span></button><button type="button" data-activity-filter="done" aria-pressed="false">Done <span id="filter-done-count">0</span></button></div>
+          <div class="activity-type-filter"><span>Type</span><div id="activity-type-menu" class="activity-type-menu"><button id="activity-type-trigger" type="button" aria-haspopup="listbox" aria-expanded="false" aria-controls="activity-type-options"><span id="activity-type-label">All types</span><span class="activity-type-chevron" aria-hidden="true"></span></button><div id="activity-type-options" class="activity-type-options" role="listbox" aria-label="Filter activity by type" hidden><button type="button" role="option" data-activity-type="all" aria-selected="true">All types</button><button type="button" role="option" data-activity-type="conversation" aria-selected="false">Prompts &amp; replies</button><button type="button" role="option" data-activity-type="improvement" aria-selected="false">Improvements</button><button type="button" role="option" data-activity-type="code_change" aria-selected="false">Code changes</button><button type="button" role="option" data-activity-type="release" aria-selected="false">Releases</button><button type="button" role="option" data-activity-type="system" aria-selected="false">System</button></div></div></div>
+        </div>
         <div id="activity-scroll" class="activity-scroll"><div id="active-activity" class="active-activity"></div><div id="activity" class="timeline"></div></div>
       </section>
       <section id="activity-detail-view" class="activity-detail-view workspace-detail">
@@ -53,6 +53,12 @@ export const dashboardPage = `<!doctype html>
       </section>
     </div>
     </div>
+    <dialog id="activity-search" class="activity-search" aria-labelledby="activity-search-title">
+      <h2 id="activity-search-title" class="sr-only">Search activity</h2>
+      <div class="activity-search-input-row"><span class="activity-search-icon" aria-hidden="true"></span><input id="activity-search-input" type="search" autocomplete="off" spellcheck="false" placeholder="Search activity" role="combobox" aria-autocomplete="list" aria-controls="activity-search-results" aria-expanded="false"><kbd>Esc</kbd></div>
+      <div id="activity-search-results" class="activity-search-results" role="listbox" aria-label="Activity search results"></div>
+      <footer class="activity-search-help" aria-hidden="true"><span><kbd>↑</kbd><kbd>↓</kbd> Navigate</span><span><kbd>↵</kbd> Open</span><span><kbd>Esc</kbd> Close</span></footer>
+    </dialog>
     </div>
   </main>
   <script src="/assets/app.js?v=1" defer></script>

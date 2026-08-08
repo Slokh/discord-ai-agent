@@ -70,15 +70,9 @@ export function deriveOperatorActivity(snapshot: DashboardRecord): { active: Act
   for (const deployment of records(snapshot.deployments).slice(0, 3)) projected.push(releaseStory(deployment));
   const rolledUp = rollupSystemStories(projected);
   const sorted = rolledUp.sort((left, right) => timestamp(right.occurredAt) - timestamp(left.occurredAt));
-  const openImprovements = sorted.filter((story) => story.kind === "improvement" && story.workState !== "terminal");
-  const balanced = [
-    ...openImprovements,
-    ...sorted.filter((story) => story.category !== "system" && !openImprovements.includes(story)).slice(0, 40),
-    ...sorted.filter((story) => story.category === "system").slice(0, 20),
-  ].sort((left, right) => timestamp(right.occurredAt) - timestamp(left.occurredAt));
   return foldActiveImprovementWork({
     active: active.sort((left, right) => timestamp(right.occurredAt) - timestamp(left.occurredAt)),
-    recent: balanced,
+    recent: sorted,
   });
 }
 

@@ -111,6 +111,15 @@ describe("architecture guardrails", () => {
     expect(deployment).not.toContain("upload-artifact");
   });
 
+  it("replays improvement contracts as the original requester rather than the reporter", async () => {
+    const exporter = await fs.readFile(
+      path.join(process.cwd(), "scripts/exportImprovementEvals.ts"),
+      "utf8",
+    );
+    expect(exporter).toContain("turn.envelope->>'userId' AS user_id");
+    expect(exporter).not.toContain("candidate.reporter_id AS user_id");
+  });
+
   it("runs the improvement watchdog independently on the cluster cadence", async () => {
     const watchdog = await fs.readFile(
       path.join(process.cwd(), "deploy/helm/discord-ai-agent/templates/improvement-watchdog.yaml"),

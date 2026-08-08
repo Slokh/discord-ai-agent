@@ -19,7 +19,7 @@ try {
     JOIN improvement_cases case_row ON case_row.case_id = contract.case_id
     JOIN LATERAL (
       SELECT candidate.execution_id, turn.artifact_id AS turn_envelope_artifact_id,
-             candidate.guild_id, candidate.channel_id, candidate.reporter_id AS user_id,
+             candidate.guild_id, candidate.channel_id, turn.envelope->>'userId' AS user_id,
              coalesce(nullif(turn.envelope->>'text', ''), nullif(session.request, '')) AS request,
              turn.envelope->'visibleChannelIds' AS visible_channel_ids,
              coalesce(nullif(turn.envelope->>'requestKind', ''), 'message') AS request_kind,
@@ -39,7 +39,8 @@ try {
         ORDER BY artifact.created_at DESC LIMIT 1
       ) turn ON true
       WHERE candidate.case_id = case_row.case_id AND candidate.active = true
-        AND candidate.guild_id IS NOT NULL AND candidate.channel_id IS NOT NULL AND candidate.reporter_id IS NOT NULL
+        AND candidate.guild_id IS NOT NULL AND candidate.channel_id IS NOT NULL
+        AND nullif(turn.envelope->>'userId', '') IS NOT NULL
         AND coalesce(nullif(turn.envelope->>'text', ''), nullif(session.request, '')) IS NOT NULL
         AND jsonb_typeof(turn.envelope->'visibleChannelIds') = 'array'
         AND jsonb_array_length(turn.envelope->'visibleChannelIds') > 0

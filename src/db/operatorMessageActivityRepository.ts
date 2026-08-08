@@ -1,6 +1,6 @@
 import type { DbPool } from "./pool.js";
 
-export async function recentMessageActivities(pool: DbPool, now: Date) {
+export async function recentMessageActivities(pool: DbPool, now: Date, botUserId: string | null = null) {
   const result = await pool.query(
     `WITH recent_messages AS MATERIALIZED (
        SELECT id,guild_id,channel_id,author_id,content,created_at
@@ -12,7 +12,11 @@ export async function recentMessageActivities(pool: DbPool, now: Date) {
      )
      SELECT message.id,message.guild_id,message.channel_id,
             left(message.content,240) AS preview,message.created_at,
-            (embedding.message_id IS NOT NULL) AS embedded,embedding.embedded_at
+            (embedding.message_id IS NOT NULL) AS embedded,embedding.embedded_at,
+            CASE WHEN embedding.message_id IS NULL AND $2::text IS NOT NULL AND (
+              position('<@' || $2 || '>' in message.content) > 0 OR
+              position('<@!' || $2 || '>' in message.content) > 0
+            ) THEN 'bot_mention' END AS embedding_skip_reason
      FROM recent_messages message
      JOIN discord_users author ON author.id = message.author_id
      JOIN channels channel ON channel.id = message.channel_id
@@ -26,19 +30,24 @@ export async function recentMessageActivities(pool: DbPool, now: Date) {
        )
      ORDER BY message.created_at DESC,message.id DESC
     `,
-    [now],
+    [now, botUserId],
   );
   return result.rows.map((row) => ({
     id: String(row.id), preview: String(row.preview), createdAt: date(row.created_at),
     embedded: Boolean(row.embedded), embeddedAt: nullableDate(row.embedded_at),
+    embeddingSkipReason: nullable(row.embedding_skip_reason),
     sourceUrl: discordUrl(row.guild_id, row.channel_id, row.id),
   }));
 }
 
-export async function messageActivityDetail(pool: DbPool, messageId: string) {
+export async function messageActivityDetail(pool: DbPool, messageId: string, botUserId: string | null = null) {
   const result = await pool.query(
     `SELECT message.id,message.guild_id,message.channel_id,message.content,message.created_at,
             embedding.model,embedding.dimensions,embedding.input_version,embedding.embedded_at,
+            CASE WHEN embedding.message_id IS NULL AND $2::text IS NOT NULL AND (
+              position('<@' || $2 || '>' in message.content) > 0 OR
+              position('<@!' || $2 || '>' in message.content) > 0
+            ) THEN 'bot_mention' END AS embedding_skip_reason,
             coalesce(attachment_rows.items,'[]'::jsonb) AS attachments
      FROM messages message
      LEFT JOIN message_embeddings embedding ON embedding.message_id = message.id
@@ -50,7 +59,7 @@ export async function messageActivityDetail(pool: DbPool, messageId: string) {
      ) attachment_rows ON true
      WHERE message.id = $1 AND message.deleted_at IS NULL
      LIMIT 1`,
-    [messageId],
+    [messageId, botUserId],
   );
   const row = result.rows[0];
   if (!row) return null;
@@ -58,6 +67,7 @@ export async function messageActivityDetail(pool: DbPool, messageId: string) {
     id: String(row.id), content: String(row.content), createdAt: date(row.created_at),
     sourceUrl: discordUrl(row.guild_id, row.channel_id, row.id),
     embedded: row.embedded_at != null, embeddedAt: nullableDate(row.embedded_at),
+    embeddingSkipReason: nullable(row.embedding_skip_reason),
     model: nullable(row.model), dimensions: row.dimensions == null ? null : number(row.dimensions),
     inputVersion: row.input_version == null ? null : number(row.input_version),
     attachments: Array.isArray(row.attachments) ? row.attachments.slice(0, 10).map((attachment: Record<string, unknown>) => ({

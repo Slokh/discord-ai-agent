@@ -24,13 +24,21 @@ npm run improve -- --target local show <case-id>
 
 The CLI requires `--target local|production`; production additionally requires `--confirm-production`. Run it only in the environment whose configured database you intend to inspect. Production images omit npm, so invoke `node dist/scripts/improve.js --target production --confirm-production <command>` inside a configured application pod.
 
-For dashboard presentation work, keep production as the data plane while serving the branch's UI locally:
+For Console work, serve both the branch's UI and projection API locally while reading the live production data plane:
 
 ```bash
 npm run console:dev
 ```
 
-This command restarts the branch's local page, styles, and client server on edits at `http://127.0.0.1:8081`, then reloads connected browser tabs through a development-only same-origin event stream. `/api/snapshot` is streamed in memory from the deployed console through a separate loopback-only Kubernetes tunnel. The launcher completes a readiness request and then explicitly warms one persistent production connection before opening the local UI; the Console's keep-alive window remains longer than its refresh interval so tunnel and database connection setup do not recur on each poll. Application heartbeats remain authoritative; during deployment skew before heartbeat storage exists, development mode explicitly falls back to current Kubernetes deployment readiness instead of presenting unknown services as unhealthy. The workflow does not copy the production database credential or persist the snapshot locally. Use `npm run console:local` when the data projection itself needs local migrations or fixtures; add new production projection fields through a reviewed deployment before depending on them in the local UI.
+This command restarts the branch's local page, styles, client, and read-only projection API on edits at `http://127.0.0.1:8081`, then reloads connected browser tabs through a development-only same-origin event stream. A temporary Node TCP relay inside the production Console pod and a loopback-only Kubernetes port-forward connect the local repository to RDS. The dedicated `CONSOLE_DATABASE_URL` is read into process memory only, never printed or persisted, and every connection forces `default_transaction_read_only=on` plus a bounded statement timeout. Startup verifies `transaction_read_only=on` and warms the local projection before accepting browser traffic. No migrations, jobs, heartbeats, Discord clients, or application services other than the operator repository start locally. Application heartbeats remain authoritative; during deployment skew before heartbeat storage exists, development mode explicitly falls back to current Kubernetes deployment readiness instead of presenting unknown services as unhealthy. An unexpected relay, port-forward, or idle database connection failure closes the stale local projection and reconnects with bounded backoff; the relay and tunnel terminate with the watcher.
+
+Provision or rotate the dedicated credential once from a trusted operator workstation:
+
+```bash
+npm run console:provision
+```
+
+The explicit production-confirmed command creates or rotates the login role, grants only connection, schema usage, and table reads, sets read-only and timeout defaults, and stores `CONSOLE_DATABASE_URL` in the existing Kubernetes Secret without logging it. The normal deployed Console continues using the application URL because it owns its heartbeat write; the local development API accepts only the dedicated credential. `npm run console:dev:ui` retains the older local-UI/deployed-API mode for diagnosing tunnel or schema compatibility. Use `npm run console:local` for local migrations or fixtures. Local code that queries columns or tables not yet present in production still requires the owning forward migration to deploy first.
 
 ## Find the owner
 

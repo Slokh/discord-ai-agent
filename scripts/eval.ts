@@ -38,6 +38,7 @@ const evalPromptSchema = z.object({
   improvementCaseId: z.string().min(1).optional(),
   improvementContractId: z.string().min(1).optional(),
   improvementContractVersion: z.number().int().positive().optional(),
+  improvementReplayDisposition: z.enum(["context_unavailable"]).optional(),
   improvementChecks: z.array(improvementContractCheckSchema).default([]),
   prompt: z.string().min(1),
   notes: z.string().optional(),
@@ -121,6 +122,7 @@ export type EvalCaseResult = {
   improvementCaseId?: string;
   improvementContractId?: string;
   improvementContractVersion?: number;
+  improvementReplayDisposition?: "context_unavailable";
   improvementCheckResults?: ImprovementReplayCheckResult[];
   prompt: string;
   status: "passed" | "failed" | "error" | "skipped";
@@ -406,6 +408,7 @@ export async function runEvalPrompts(prompts: EvalPrompt[], args: EvalArgs): Pro
         ...(prompt.improvementCaseId ? { improvementCaseId: prompt.improvementCaseId } : {}),
         ...(prompt.improvementContractId ? { improvementContractId: prompt.improvementContractId } : {}),
         ...(prompt.improvementContractVersion ? { improvementContractVersion: prompt.improvementContractVersion } : {}),
+        ...(prompt.improvementReplayDisposition ? { improvementReplayDisposition: prompt.improvementReplayDisposition } : {}),
       });
     }
   } finally {
@@ -732,6 +735,9 @@ async function recordImprovementResults(report: EvalRunReport, args: EvalArgs) {
       runKey: report.generatedAt,
       durationMs: result.durationMs,
       traceId: result.traceId,
+      outcomeCode: result.status === "skipped" && result.improvementReplayDisposition === "context_unavailable"
+        ? "private_replay_context_unavailable" as const
+        : null,
       checkResults: result.improvementCheckResults ?? [],
     }];
   });

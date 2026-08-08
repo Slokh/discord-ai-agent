@@ -61,6 +61,25 @@ describe("improvement contract verification", () => {
     });
   });
 
+  it("does not reschedule a private replay that retained context cannot reproduce", () => {
+    const check: ImprovementContractCheck = { kind: "answer_text", value: "source", expectation: "required" };
+    const proof = privateProof([check], ["inconclusive"]);
+    proof.executionId = null;
+    proof.metadata = { outcomeCode: "private_replay_context_unavailable" };
+
+    expect(build([check], { proofs: [proof] })).toMatchObject({
+      status: "inconclusive",
+      checks: [{
+        adapterId: "private_replay",
+        retryTrigger: null,
+        summary: "The contract cannot be replayed faithfully from retained private context.",
+        proofMetadata: { outcomeCode: "private_replay_context_unavailable" },
+      }],
+      pendingProofs: [],
+      nextAction: "await_proof_producers",
+    });
+  });
+
   it("routes delivery and quality checks to traffic-sampled production observation", () => {
     const checks: ImprovementContractCheck[] = [
       { kind: "delivery_state", state: "delivered" },

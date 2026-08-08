@@ -83,7 +83,7 @@ try {
       noMemory: true,
       useDiscordMemory: hasReplayScope,
       skip: Boolean(skipReason),
-      ...(skipReason ? { skipReason } : {}),
+      ...(skipReason ? { skipReason, improvementReplayDisposition: "context_unavailable" } : {}),
     }];
   });
   await mkdir(path.dirname(outputPath), { recursive: true });

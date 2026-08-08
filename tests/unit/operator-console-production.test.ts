@@ -6,6 +6,10 @@ import {
   requireProductionConfirmation,
   warmProductionConnection,
 } from "../../scripts/operatorConsole.js";
+import { localReadOnlyDatabaseUrl } from "../../src/console/productionDatabaseTunnel.js";
+import { productionDatabaseTunnelFailure } from "../../src/console/productionDatabaseTunnel.js";
+import { consoleDatabaseUrl, requireConsoleDatabaseProvisionConfirmation } from "../../scripts/provisionConsoleDatabase.js";
+import { EventEmitter } from "node:events";
 
 describe("production operator console access", () => {
   it("streams a versioned production snapshot through loopback", async () => {
@@ -57,9 +61,47 @@ describe("production operator console access", () => {
     expect(parseOperatorConsoleOptions(["--confirm-production", "--local-ui"])).toEqual({
       confirmed: true,
       localUi: true,
+      localApi: false,
     });
-    expect(() => requireProductionConfirmation({ confirmed: false, localUi: false })).toThrow("--confirm-production");
+    expect(parseOperatorConsoleOptions(["--confirm-production", "--local-api"])).toEqual({
+      confirmed: true,
+      localUi: false,
+      localApi: true,
+    });
+    expect(() => requireProductionConfirmation({ confirmed: false, localUi: false, localApi: false })).toThrow("--confirm-production");
+    expect(() => parseOperatorConsoleOptions(["--local-ui", "--local-api"])).toThrow("either");
     expect(() => parseOperatorConsoleOptions(["--unknown"])).toThrow("Unknown");
+  });
+
+  it("forces tunneled production database sessions to be local and read-only", () => {
+    const source = "postgres://app:secret@production.internal:5432/app?sslmode=require";
+    const local = new URL(localReadOnlyDatabaseUrl(source, 15432));
+
+    expect(local.hostname).toBe("127.0.0.1");
+    expect(local.port).toBe("15432");
+    expect(local.searchParams.get("sslmode")).toBe("require");
+    expect(local.searchParams.get("options")).toContain("default_transaction_read_only=on");
+    expect(local.searchParams.get("options")).toContain("statement_timeout=30000");
+  });
+
+  it("treats an unexpected relay exit as a failed production database connection", async () => {
+    const relay = new EventEmitter();
+    const failure = productionDatabaseTunnelFailure([
+      { child: relay as never, label: "production database relay" },
+    ], () => false);
+
+    relay.emit("exit", 1, null);
+
+    await expect(failure).rejects.toThrow("production database relay disconnected unexpectedly");
+  });
+
+  it("provisions a distinct content-free Console credential only with explicit production confirmation", () => {
+    expect(() => requireConsoleDatabaseProvisionConfirmation([])).toThrow("--confirm-production");
+    expect(() => requireConsoleDatabaseProvisionConfirmation(["--confirm-production"])).not.toThrow();
+    const url = new URL(consoleDatabaseUrl("postgres://app:old@production.internal/app", "new-secret"));
+    expect(url.username).toBe("discord_ai_agent_console_readonly");
+    expect(url.password).toBe("new-secret");
+    expect(url.searchParams.get("options")).toContain("default_transaction_read_only=on");
   });
 
   it("warms the established production connection before opening the local UI", async () => {

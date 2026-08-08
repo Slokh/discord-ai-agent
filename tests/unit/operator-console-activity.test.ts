@@ -122,6 +122,10 @@ describe("operator activity story projection", () => {
           createdAt: "2026-08-06T12:04:00.000Z",
           sourceUrl: "https://discord.com/channels/guild/channel/message-a",
         },
+        {
+          id: "message-skipped", preview: "A bot-directed message", embedded: false,
+          embeddingSkipReason: "bot_mention", createdAt: "2026-08-06T12:03:30.000Z",
+        },
       ],
       activity: [
         { id: "embed-1", kind: "system", title: "Embedding batch", rollupKey: "embedding", status: "succeeded", durationMs: 10_000, occurredAt: "2026-08-06T12:03:00.000Z", events: [] },
@@ -130,7 +134,7 @@ describe("operator activity story projection", () => {
       ],
     });
 
-    expect(result.recent).toHaveLength(2);
+    expect(result.recent).toHaveLength(3);
     expect(result.recent).toEqual(expect.arrayContaining([
       expect.objectContaining({
         id: "message-message-b", kind: "message", title: "Newest retained Discord message",
@@ -138,7 +142,11 @@ describe("operator activity story projection", () => {
       }),
       expect.objectContaining({
         id: "message-message-a", kind: "message", title: "Another retained Discord message",
-        status: "not_embedded", tone: "warning", workState: "waiting",
+        status: "embedding_pending", tone: "warning", workState: "waiting",
+      }),
+      expect.objectContaining({
+        id: "message-message-skipped", status: "embedding_skipped", tone: "neutral",
+        workState: "terminal", summary: "Embedding skipped · bot mention",
       }),
     ]));
     expect(JSON.stringify(result)).not.toContain("Embedding jobs");

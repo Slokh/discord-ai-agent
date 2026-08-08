@@ -138,7 +138,44 @@ describe.skipIf(!runDbTests)("operator dashboard database projection", () => {
        ) VALUES ('work-dashboard','imp-dashboard','github_pull_request','github:pr:1','in_progress','owner/repo',1,'https://github.com/owner/repo/pull/1')`,
     );
     await pool.query(
-      `INSERT INTO deployment_verifications(revision,deployment_id) VALUES ('revision-a','deployment-a')`,
+      `INSERT INTO deployment_verifications(revision,deployment_id,verified_at) VALUES
+         ('revision-previous','deployment-previous',now() - interval '1 day'),
+         ('revision-a','deployment-a',now())`,
+    );
+    await pool.query(
+      `INSERT INTO deployment_announcements(
+         guild_id,revision,previous_revision,repository,channel_id,status,attempts,comparison_url,posted_at
+       ) VALUES (
+         'guild-a','revision-a','revision-previous','owner/repo','channel-a','posted',1,
+         'https://github.com/owner/repo/compare/revision-previous...revision-a',now()
+       )`,
+    );
+    await pool.query(
+      `INSERT INTO improvement_proof_producer_runs(
+         run_id,trigger,run_key,status,revision,deployment_id,started_at,completed_at
+       ) VALUES (
+         'release-run-a','release_promotion','release-a','succeeded','revision-a','deployment-a',
+         now() - interval '4 seconds',now()
+       )`,
+    );
+    await pool.query(
+      `INSERT INTO agent_runtime_sessions(
+         session_id,thread_key,title,request,requested_by,status,harness,metadata,started_at,completed_at,updated_at
+       ) VALUES
+         ('embedding-session-a','embedding:a','Embedding batch (3 messages)','Embed messages','system','succeeded','background_job','{"kind":"background_job","jobKind":"embedding"}',now() - interval '10 minutes',now() - interval '9 minutes',now() - interval '9 minutes'),
+         ('embedding-session-b','embedding:b','Embedding batch (5 messages)','Embed messages','system','succeeded','background_job','{"kind":"background_job","jobKind":"embedding"}',now() - interval '5 minutes',now() - interval '4 minutes',now() - interval '4 minutes')`,
+    );
+    await pool.query(
+      `INSERT INTO agent_runtime_executions(
+         execution_id,session_id,status,metadata,started_at,completed_at,updated_at
+       ) VALUES
+         ('embedding-a','embedding-session-a','succeeded','{"jobKind":"embedding","messageCount":3,"jobCount":3}',now() - interval '10 minutes',now() - interval '9 minutes',now() - interval '9 minutes'),
+         ('embedding-b','embedding-session-b','succeeded','{"jobKind":"embedding","messageCount":5,"jobCount":5}',now() - interval '5 minutes',now() - interval '4 minutes',now() - interval '4 minutes')`,
+    );
+    await pool.query(
+      `INSERT INTO agent_runtime_events(session_id,execution_id,sequence,kind,level,event_name,summary,duration_ms) VALUES
+         ('embedding-session-a','embedding-a',1,'status','info','background.job.completed','Embedded batch',60000),
+         ('embedding-session-b','embedding-b',1,'status','info','background.job.completed','Embedded batch',60000)`,
     );
 
     const snapshot = await new OperatorDashboardRepository(pool).snapshot({ revision: "revision-a" });
@@ -208,6 +245,34 @@ describe.skipIf(!runDbTests)("operator dashboard database projection", () => {
       ]),
     });
     expect(JSON.stringify(conversation)).not.toContain("private secret");
+
+    const release = await new OperatorDashboardRepository(pool).activityDetail({
+      kind: "release", id: "release-deployment-a", revision: "revision-a",
+    });
+    expect(release).toMatchObject({
+      story: { kind: "release", status: "verified" },
+      release: {
+        revision: "revision-a", deploymentId: "deployment-a",
+        previous: { revision: "revision-previous", deploymentId: "deployment-previous" },
+        comparisonUrl: "https://github.com/owner/repo/compare/revision-previous...revision-a",
+        announcements: { total: 1, posted: 1, failed: 0, attempts: 1 },
+        checks: [expect.objectContaining({ name: "release_promotion", status: "succeeded", durationMs: 4000 })],
+      },
+    });
+
+    const embedding = await new OperatorDashboardRepository(pool).activityDetail({
+      kind: "system", id: "system-rollup-embedding", revision: "revision-a",
+    });
+    expect(embedding).toMatchObject({
+      story: { kind: "system", rollupKey: "embedding", runCount: 2 },
+      embedding: {
+        coverage: { embedded: 0, unembedded: expect.any(Number) },
+        runs: [
+          expect.objectContaining({ executionId: "embedding-b", messageCount: 5, jobCount: 5, status: "succeeded" }),
+          expect.objectContaining({ executionId: "embedding-a", messageCount: 3, jobCount: 3, status: "succeeded" }),
+        ],
+      },
+    });
 
     const improvement = await new OperatorDashboardRepository(pool).activityDetail({
       kind: "improvement",

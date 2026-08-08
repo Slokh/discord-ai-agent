@@ -222,8 +222,14 @@ describe("operator console", () => {
     expect(clientScript).toContain('<span class="sr-only">Duration </span>');
     expect(clientScript).toContain('Math.round(Number(value||0)/1000))+"s"');
     expect(clientScript).toContain("storyTiming(story,active)");
-    expect(clientScript).toContain("detailLinks(story)+(metrics?'<section class=\"detail-metrics metrics-'");
+    expect(clientScript).toContain("const detailMetrics=");
+    expect(clientScript).toContain("const detailSpecialLinks=");
+    expect(clientScript).toContain("const embeddingModels=");
+    expect(clientScript).toContain('type:"check"');
+    expect(clientScript).toContain('type:"batch"');
     expect(stylesheetText).toContain(".detail-hero .detail-metrics.metrics-5{grid-template-columns:repeat(5,minmax(0,1fr))}");
+    expect(stylesheetText).toContain(".detail-hero .detail-metrics.metrics-6{grid-template-columns:repeat(6,minmax(0,1fr))}");
+    expect(stylesheetText).toContain(".inventory-list");
     expect(clientScript).not.toContain('detailMetric("Status"');
     expect(clientScript).toContain("const traceItems=");
     expect(clientScript).toContain('id="trace-toggle"');

@@ -2,17 +2,22 @@ import type { DbPool } from "./pool.js";
 
 export async function latestMessageActivity(pool: DbPool) {
   const result = await pool.query(
-    `SELECT message.id,message.guild_id,message.channel_id,
+    `WITH recent_messages AS MATERIALIZED (
+       SELECT id,guild_id,channel_id,author_id,content,created_at
+       FROM messages
+       WHERE deleted_at IS NULL AND normalized_content <> ''
+       ORDER BY created_at DESC,id DESC
+       LIMIT 1000
+     )
+     SELECT message.id,message.guild_id,message.channel_id,
             left(message.content,240) AS preview,message.created_at,
             (embedding.message_id IS NOT NULL) AS embedded,embedding.embedded_at
-     FROM messages message
+     FROM recent_messages message
      JOIN discord_users author ON author.id = message.author_id
      JOIN channels channel ON channel.id = message.channel_id
      LEFT JOIN channels parent_channel ON parent_channel.id = channel.parent_id
      LEFT JOIN message_embeddings embedding ON embedding.message_id = message.id
-     WHERE message.deleted_at IS NULL
-       AND message.normalized_content <> ''
-       AND coalesce(author.is_bot,false) = false
+     WHERE coalesce(author.is_bot,false) = false
        AND channel.is_excluded = false
        AND coalesce(parent_channel.is_excluded,false) = false
        AND NOT EXISTS (

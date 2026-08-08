@@ -88,6 +88,7 @@ Members can add `🔄` or `🔃` to a terminal task update to queue a fresh retr
 Report-authorized `improvement_report` tasks are two-phase. The first phase is evidence-only and must leave the checkout clean. Unsupported reports finish without GitHub work; insufficient evidence names the exact reporter clarification needed. A confirmed defect must include registered machine-executable checks before the second phase may edit. A successfully verified repair opens a diff-described PR and enables auto-merge after required checks; private report evidence never enters the branch, commit, or PR metadata.
 
 Autonomous reassessment remains authoritative after a case becomes actionable: later proof that the incident recovered dismisses the stale case, while a specific unresolved ambiguity stops for operator judgment instead of consuming blind retries.
+The health projection reports that ambiguity as blocked on operator judgment; read-only reconciliation may inspect an existing terminal assessment without requiring a queue producer.
 
 Source-authorized `improvement_repair` tasks are single-phase because the trusted detector and active executable contract already establish the defect. They still require a real diff, focused coverage, full runner verification, diff-derived public PR metadata, required checks, and deployed contract proof. A missing contract, concrete ambiguity, unavailable worker, or exhausted retries is surfaced explicitly instead of silently waiting for human review.
 

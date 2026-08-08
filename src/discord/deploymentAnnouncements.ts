@@ -26,7 +26,7 @@ type GitHubCompare = {
 
 type AnnouncementRepository = Pick<DiscordAiAgentRepository,
   "claimDeploymentAnnouncement" | "recordDeploymentBaseline" | "latestDeploymentRevision" |
-  "markDeploymentAnnouncementPosted" | "markDeploymentAnnouncementFailed" | "auditTool"
+  "markDeploymentAnnouncementPosted" | "markDeploymentAnnouncementFailed" | "markDeploymentAnnouncementSkipped" | "auditTool"
 >;
 
 export async function announceDeployment(input: {
@@ -35,7 +35,7 @@ export async function announceDeployment(input: {
   repo: AnnouncementRepository;
   openRouter: Pick<OpenRouterClient, "chat">;
   fetchImpl?: typeof fetch;
-}): Promise<"disabled" | "baseline" | "duplicate" | "posted"> {
+}): Promise<"disabled" | "baseline" | "duplicate" | "posted" | "skipped"> {
   const { config, repo } = input;
   const guildId = config.discord.guildId;
   const channelId = config.discord.botChannelId;
@@ -61,6 +61,11 @@ export async function announceDeployment(input: {
   const traceId = `deployment:${revision}`;
   try {
     const comparisonUrl = githubComparisonUrl(config.github.repository, previousRevision, revision);
+    const comparison = await fetchGitHubComparison(config, previousRevision, revision, input.fetchImpl ?? fetch);
+    if (isConsoleOnlyComparison(comparison)) {
+      await repo.markDeploymentAnnouncementSkipped({ guildId, revision, comparisonUrl });
+      return "skipped";
+    }
     const channel = await input.client.channels.fetch(channelId);
     if (!channel || typeof (channel as any).send !== "function") {
       throw new Error(`Bot channel ${channelId} is missing or is not message-capable.`);
@@ -78,7 +83,6 @@ export async function announceDeployment(input: {
       return "duplicate";
     }
 
-    const comparison = await fetchGitHubComparison(config, previousRevision, revision, input.fetchImpl ?? fetch);
     const generated = await generatePatchNotes(input.openRouter, config, comparison).catch((error) => {
       logger.warn({ err: error, revision }, "Patch-note model call failed; using commit-summary fallback");
       return { body: fallbackPatchNotes(comparison), model: null, estimatedCostUsd: null };
@@ -210,10 +214,30 @@ function isDeployRevision(value: string) {
   return value !== "unknown" && /^[a-f0-9]{7,64}$/i.test(value);
 }
 
+/** Console and operator-ledger changes are private; their deploys are not community announcements. */
+export function isConsoleOnlyComparison(comparison: GitHubCompare) {
+  const files = (comparison.files ?? []).map((file) => file.filename?.trim()).filter((file): file is string => Boolean(file));
+  return files.length > 0 && files.every(isConsoleOnlyFile);
+}
+
+function isConsoleOnlyFile(filename: string) {
+  return filename.startsWith("src/console/")
+    || filename === "src/db/operatorDashboardRepository.ts"
+    || filename === "src/db/operatorActivityDetailRepository.ts"
+    || filename === "src/db/serviceHeartbeatRepository.ts"
+    || filename === "scripts/operatorConsole.ts"
+    || /^migrations\/\d+_(?:console|service_runtime_heartbeats)/.test(filename)
+    || filename.startsWith("tests/")
+    || filename.startsWith("docs/")
+    || filename === "README.md"
+    || filename === "package-lock.json";
+}
+
 export const __test = {
   comparisonEvidence,
   fallbackPatchNotes,
   formatAnnouncement,
+  isConsoleOnlyComparison,
   normalizePatchNotes: normalizeUpdateNotes,
   patchNotesLookComplete: updateNotesLookComplete,
 };

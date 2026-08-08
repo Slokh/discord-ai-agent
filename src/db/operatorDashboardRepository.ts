@@ -1,11 +1,11 @@
 import type { DbPool } from "./pool.js";
 import { deriveOperatorActivity } from "../console/activity.js";
+import { operatorTaskFailureSummary } from "../console/taskFailureSummary.js";
 import { releaseActivityDetail } from "./operatorActivityDetailRepository.js";
 import { messageActivityDetail, recentMessageActivities } from "./operatorMessageActivityRepository.js";
 const COMPONENTS = ["bot", "worker", "api", "console"] as const;
 export class OperatorDashboardRepository {
   constructor(private readonly pool: DbPool) {}
-
   async activityDetail(input: { kind: string; id: string; revision: string }) {
     const snapshot = await this.snapshot({ revision: input.revision, includeActivityDetails: true });
     const activity = deriveOperatorActivity(snapshot);
@@ -300,7 +300,7 @@ export class OperatorDashboardRepository {
              AND updated_at >= $1::timestamptz - interval '7 days'
            ORDER BY updated_at DESC,created_at DESC
          )
-         SELECT task.task_id,task.task_type,task.title,task.status,task.status_message,task.current_step,
+         SELECT task.task_id,task.task_type,task.title,task.status,task.status_message,task.current_step,task.error,
                 task.branch_name,task.pr_url,task.verify_passed,task.improvement_case_id,
                 task.guild_id,task.channel_id,task.trace_id,
                 task.discord_response_channel_id,task.discord_response_message_id,
@@ -466,30 +466,24 @@ export class OperatorDashboardRepository {
     };
   }
 }
-
 function nullable(value: unknown): string | null {
   return value == null ? null : String(value);
 }
-
 function date(value: unknown): Date {
   return value instanceof Date ? value : new Date(String(value));
 }
-
 function nullableDate(value: unknown): Date | null {
   return value == null ? null : date(value);
 }
-
 function number(value: unknown): number {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : 0;
 }
-
 function executionIdFromActivityId(id: string): string | null {
   if (id.startsWith("runtime-")) return id.slice("runtime-".length) || null;
   if (id.startsWith("execution-")) return id.slice("execution-".length) || null;
   return null;
 }
-
 function runtimeMessageText(value: unknown): string | null {
   if (!Array.isArray(value)) return null;
   const content = value.flatMap((part) => {
@@ -615,6 +609,7 @@ type ActivitySource = {
   pullRequestUrl: string | null;
   branchName: string | null;
   improvementCaseId: string | null;
+  failureReason: string | null;
   events: Array<{ id: string; name: string; level: string; createdAt: Date }>;
 };
 
@@ -649,6 +644,7 @@ function projectActivitySources(
       pullRequestUrl: null,
       branchName: null,
       improvementCaseId: null,
+      failureReason: null,
       events: [],
     };
     if (row.id != null && group.events.length < 12) group.events.push({
@@ -684,6 +680,7 @@ function projectActivitySources(
       pullRequestUrl: nullable(row.pr_url),
       branchName: nullable(row.branch_name),
       improvementCaseId: nullable(row.improvement_case_id),
+      failureReason: operatorTaskFailureSummary(row.status, row.error),
       events: [],
     };
     if (row.id != null && group.events.length < 12) group.events.push({
@@ -724,6 +721,7 @@ function projectActivitySources(
       pullRequestUrl: nullable(row.pull_request_url),
       branchName: null,
       improvementCaseId: String(row.case_id),
+      failureReason: null,
       events: [],
     };
     if (row.event_id != null && group.events.length < 12) group.events.push({

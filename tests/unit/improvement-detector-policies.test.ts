@@ -49,7 +49,7 @@ describe("improvement detector policies", () => {
     const reconciler = IMPROVEMENT_PROOF_PRODUCERS.find((producer) => producer.trigger === "improvement_reconciliation");
     const watchdog = IMPROVEMENT_PROOF_PRODUCERS.find((producer) => producer.trigger === "improvement_watchdog");
     expect(reconciler).toMatchObject({ mode: "scheduled", observedBy: "improvement_watchdog", maxSilenceMs: 15 * 60 * 1_000 });
-    expect(watchdog).toMatchObject({ mode: "scheduled", observedBy: "improvement_reconciliation", maxSilenceMs: 30 * 60 * 1_000 });
+    expect(watchdog).toMatchObject({ mode: "scheduled", observedBy: "improvement_reconciliation", maxSilenceMs: 45 * 60 * 1_000 });
     for (const producer of IMPROVEMENT_PROOF_PRODUCERS) expect(producer.observedBy).not.toBe(producer.trigger);
   });
 

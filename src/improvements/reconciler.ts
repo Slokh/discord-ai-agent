@@ -219,14 +219,6 @@ async function reconcileAutonomousAssessment(
   record: NonNullable<Awaited<ReturnType<ImprovementReconciliationRepository["getImprovementCase"]>>>,
   dossier: ReturnType<typeof buildImprovementTriageDossier>,
 ): Promise<Pick<ImprovementReconciliationResult["triage"][number], "status" | "reason">> {
-  if (!input.enqueueImprovementTask) {
-    await input.repo.recordImprovementReconciliationDecision({
-      caseId: record.case.caseId,
-      eventName: "reconciliation.awaiting_operator",
-      reason: "autonomous_assessment_worker_unavailable",
-    });
-    return { status: "deferred", reason: "operator_judgment" };
-  }
   let attempt = 1;
   for (; attempt <= MAX_ASSESSMENT_ATTEMPTS; attempt += 1) {
     const taskId = improvementAssessmentTaskId(record.case.caseId, dossier.snapshotKey, attempt);
@@ -259,6 +251,14 @@ async function reconcileAutonomousAssessment(
       eventName: "reconciliation.awaiting_operator",
       reason: "autonomous_assessment_retries_exhausted",
       metadata: { attempts: MAX_ASSESSMENT_ATTEMPTS },
+    });
+    return { status: "deferred", reason: "operator_judgment" };
+  }
+  if (!input.enqueueImprovementTask) {
+    await input.repo.recordImprovementReconciliationDecision({
+      caseId: record.case.caseId,
+      eventName: "reconciliation.awaiting_operator",
+      reason: "autonomous_assessment_worker_unavailable",
     });
     return { status: "deferred", reason: "operator_judgment" };
   }
@@ -660,6 +660,17 @@ async function deriveAssessmentHealth(
       };
     }
     if (task.status === "failed" || task.status === "cancelled" || task.status === "no_changes") {
+      if (task.status === "no_changes" && assessmentAwaitingOperator(record.events, task.taskId)) {
+        return {
+          caseId: record.case.caseId,
+          state: "blocked" as const,
+          blocker: "assessment_requires_operator_judgment",
+          nextAction: "operator_review_assessment_ambiguity",
+          retryTrigger: null,
+          retryAt: null,
+          progressKey,
+        };
+      }
       return attempt === MAX_ASSESSMENT_ATTEMPTS
         ? { caseId: record.case.caseId, state: "blocked" as const, blocker: "autonomous_assessment_retries_exhausted", nextAction: "operator_inspect_assessment_failure", retryTrigger: null, retryAt: null, progressKey }
         : { caseId: record.case.caseId, state: "waiting" as const, blocker: "assessment_retry_pending", nextAction: "retry_autonomous_assessment", retryTrigger: "improvement_reconciliation", retryAt: null, progressKey };

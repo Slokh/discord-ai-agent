@@ -589,6 +589,11 @@ describe("improvement reconciler", () => {
       events: [{ eventName: "reconciliation.awaiting_operator", metadata: { taskId } }],
     };
     const enqueueImprovementTask = vi.fn();
+    const updateImprovementCaseHealth = vi.fn(async (input: any) => ({
+      health: { ...input, lastProgressAt: now, checkedAt: now },
+      changed: true,
+      progressed: true,
+    }));
     const repo = {
       listImprovementCasesForReconciliation: vi.fn(async ({ statuses }: { statuses: string[] }) => statuses.includes("actionable") ? [reported] : []),
       getImprovementCase: vi.fn(async () => reportedRecord),
@@ -601,8 +606,8 @@ describe("improvement reconciler", () => {
       reconcileImprovementPullRequestWorkAttempt: vi.fn(),
       latestDeploymentVerification: vi.fn(async () => null),
       verifyImprovementCasesForDeployment: vi.fn(),
-      listImprovementCaseIdsNeedingHealth: vi.fn(async () => []),
-      updateImprovementCaseHealth: vi.fn(),
+      listImprovementCaseIdsNeedingHealth: vi.fn(async () => [reported.caseId]),
+      updateImprovementCaseHealth,
       messageContext: vi.fn(async () => []),
     };
 
@@ -611,12 +616,20 @@ describe("improvement reconciler", () => {
       config: { improvementStalledAfterMs: 1_000 } as unknown as AppConfig,
       runtime: { getExecution: vi.fn(), listMessagesForExecution: vi.fn(), listEvents: vi.fn() } as never,
       deliveries: { getByExecutionId: vi.fn() } as never,
-      enqueueImprovementTask: enqueueImprovementTask as never,
       now,
     });
 
     expect(result.triage).toEqual([{ caseId: reported.caseId, status: "deferred", reason: "operator_judgment" }]);
     expect(enqueueImprovementTask).not.toHaveBeenCalled();
+    expect(updateImprovementCaseHealth).toHaveBeenCalledWith(expect.objectContaining({
+      state: "blocked",
+      blocker: "assessment_requires_operator_judgment",
+      nextAction: "operator_review_assessment_ambiguity",
+      retryTrigger: null,
+    }));
+    expect(repo.recordImprovementReconciliationDecision).not.toHaveBeenCalledWith(expect.objectContaining({
+      reason: "autonomous_assessment_worker_unavailable",
+    }));
   });
 
   it("retries report-authorized repair work after the case becomes actionable", async () => {

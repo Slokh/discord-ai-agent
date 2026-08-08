@@ -22,7 +22,7 @@ The sandbox supervisor never receives the Discord token or database URL. It rece
 
 Report signals enter the unified improvement worker rather than a reaction-specific execution path. Each signal snapshot gets one deterministic assessment task. The sandbox first performs evidence-only triage and code enforces a clean checkout. Expected behavior, non-reproduction, or an already-fixed source dismisses the report without GitHub work. A specific ambiguity moves the case to `needs_evidence` with the exact clarification required. Only `confirmed_unfixed` with a registered machine-executable contract starts the mutation-capable repair phase; it never replays the original Discord request or publishes private report content.
 
-Trusted runtime, deployment, CI, and eval detections skip semantic assessment only after their source-owned contract has been accepted. The reconciler then queues an idempotent `improvement_repair` task from the signal snapshot and active contract version. It uses the normal verified code-update pipeline, links work to the case when queued, and requests auto-merge for the diff-described PR. The durable work remains `in_progress` until GitHub reports the exact published head merged; a terminal check failure retires that PR and enters the bounded repair retry path. Drafts, changed heads, conflicts, requested changes, and unresolved review requirements are explicit operator blockers. Deployment proof—not task completion or PR publication—is the resolution gate.
+Trusted CI and eval detections skip semantic assessment only after their source-owned contract has been accepted. Deployment and runtime detections are observational and must first distinguish transient infrastructure behavior from a source defect. The reconciler then queues an idempotent `improvement_repair` task from the signal snapshot and active contract version. It uses the normal verified code-update pipeline, links work to the case when queued, and requests auto-merge for the diff-described PR. The durable work remains `in_progress` until GitHub reports the exact published head merged; a terminal check failure retires that PR and enters the bounded repair retry path. Drafts, changed heads, conflicts, requested changes, and unresolved review requirements are explicit operator blockers. Deployment proof—not task completion or PR publication—is the resolution gate.
 
 ## Sandbox pipeline
 
@@ -64,7 +64,7 @@ GitHub App installation credentials are preferred in production. A local PAT sho
 
 ## Kubernetes isolation
 
-This backend creates one Job, Secret, and ConfigMap per task. The worker service account can manage those resources; the sandbox service account has no Kubernetes API permissions. Callback tokens bind task and sandbox-run identity, timestamp, and body. Terminal callbacks are accepted once.
+This backend creates one Job, Secret, and ConfigMap per task. The worker service account can manage those resources; the sandbox service account has no Kubernetes API permissions. Callback tokens bind task and sandbox-run identity, timestamp, and body. Terminal callbacks are accepted once. Before failed Job cleanup, reconciliation retains the pod phase, termination reason, exit code, signal, and restart count as typed task evidence, plus a bounded redacted log tail as a private runtime artifact.
 
 NetworkPolicy should allow only DNS, the internal callback API, and the external hosts required for GitHub, OpenRouter, and package installation. A task uses only ephemeral local cache state; correctness never depends on cache persistence.
 

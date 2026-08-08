@@ -235,9 +235,10 @@ async function reconcileAutonomousAssessment(
     if (existing.status === "queued" || existing.status === "running") {
       return { status: "deferred", reason: "assessment_running" };
     }
-    if (existing.status === "succeeded" || existing.status === "no_changes") {
+    if (existing.status === "no_changes") continue;
+    if (existing.status === "succeeded") {
       const work = record.workAttempts.find((candidate) => candidate.taskId === taskId);
-      if (existing.status === "succeeded" && work?.status === "failed") continue;
+      if (work?.status === "failed") continue;
       await input.repo.recordImprovementReconciliationDecision({
         caseId: record.case.caseId,
         eventName: "reconciliation.awaiting_operator",
@@ -639,7 +640,7 @@ async function deriveAssessmentHealth(
         progressKey,
       };
     }
-    if (task.status === "failed" || task.status === "cancelled") {
+    if (task.status === "failed" || task.status === "cancelled" || task.status === "no_changes") {
       return attempt === MAX_ASSESSMENT_ATTEMPTS
         ? { caseId: record.case.caseId, state: "blocked" as const, blocker: "autonomous_assessment_retries_exhausted", nextAction: "operator_inspect_assessment_failure", retryTrigger: null, retryAt: null, progressKey }
         : { caseId: record.case.caseId, state: "waiting" as const, blocker: "assessment_retry_pending", nextAction: "retry_autonomous_assessment", retryTrigger: "improvement_reconciliation", retryAt: null, progressKey };

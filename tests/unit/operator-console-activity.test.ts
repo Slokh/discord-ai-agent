@@ -124,7 +124,7 @@ describe("operator activity story projection", () => {
         },
         {
           id: "message-skipped", preview: "A bot-directed message", embedded: false,
-          embeddingSkipReason: "bot_mention", createdAt: "2026-08-06T12:03:30.000Z",
+          embeddingSkipReason: "agent_interaction", createdAt: "2026-08-06T12:03:30.000Z",
         },
       ],
       activity: [
@@ -146,7 +146,7 @@ describe("operator activity story projection", () => {
       }),
       expect.objectContaining({
         id: "message-message-skipped", status: "embedding_skipped", tone: "neutral",
-        workState: "terminal", summary: "Embedding skipped · bot mention",
+        workState: "terminal", summary: "Agent interaction · embedding not needed",
       }),
     ]));
     expect(JSON.stringify(result)).not.toContain("Embedding jobs");

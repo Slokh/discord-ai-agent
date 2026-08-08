@@ -204,7 +204,9 @@ async function main() {
     repository: operatorDashboard,
     liveReload: config.nodeEnv === "development",
   }) : null;
-  const sandboxReconciler = startsTaskWorker && executionBackend ? startSandboxReconciler({ repo, backend: executionBackend }) : null;
+  const sandboxReconciler = startsTaskWorker && executionBackend
+    ? startSandboxReconciler({ repo, backend: executionBackend, agentRuntime: agentRuntimeRepo })
+    : null;
   const paymentReconciler = walletService && startsWorker ? startPaymentReconciler({ walletService }) : null;
   const runtime =
     startsBot && client && crawler instanceof DiscordCrawler && jobs

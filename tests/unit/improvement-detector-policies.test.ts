@@ -60,6 +60,9 @@ describe("improvement detector policies", () => {
         .toBe(policy.authority === "autonomous_assessment");
     }
     expect(improvementSignalRequiresAutonomousAssessment(signal("member_report", "member-report"))).toBe(true);
+    expect(improvementDetectorPolicy("deployment_detection", "post-deploy-stability")?.authority).toBe("autonomous_assessment");
+    expect(improvementDetectorPolicy("runtime_detection", "revision-quality-gate")?.authority).toBe("autonomous_assessment");
+    expect(improvementDetectorPolicy("ci_detection", "release-verify")?.authority).toBe("direct_repair");
   });
 
   it("fails unknown and source-mismatched detector references closed", () => {

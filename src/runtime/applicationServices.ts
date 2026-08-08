@@ -14,7 +14,7 @@ import { WalletService } from "../payments/walletService.js";
 
 export function createOperatorDashboardServices(config: AppConfig) {
   const pool = createPool(config);
-  const operatorDashboard = new OperatorDashboardRepository(pool, config.discord.clientId || null);
+  const operatorDashboard = new OperatorDashboardRepository(pool);
   return { pool, operatorDashboard, close: () => pool.end() };
 }
 
@@ -31,7 +31,7 @@ export function createApplicationServices(input: {
   const rng = new RngRepository(pool);
   const payments = new PaymentRepository(pool);
   const deliveryObligations = new DeliveryObligationsRepository(pool);
-  const operatorDashboard = new OperatorDashboardRepository(pool, config.discord.clientId || null);
+  const operatorDashboard = new OperatorDashboardRepository(pool);
   const serviceHeartbeats = new ServiceHeartbeatRepository(pool);
   const openRouter = new OpenRouterClient(config.openRouter);
   const walletProvider = input.enableWalletRuntime && config.payments.walletEnabled

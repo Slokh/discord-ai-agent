@@ -526,7 +526,7 @@ describe("improvement reconciler", () => {
     }));
   });
 
-  it("retries a transient autonomous assessment failure with a deterministic bounded task id", async () => {
+  it("retries an autonomous assessment that completes without a structured disposition", async () => {
     const now = new Date("2026-08-05T12:00:00.000Z");
     const reported = improvementCase("imp-retry", "open", now);
     const reportedRecord = record(reported, signal(reported.caseId, "member_report"));
@@ -536,7 +536,7 @@ describe("improvement reconciler", () => {
     const repo = {
       listImprovementCasesForReconciliation: vi.fn(async ({ statuses }: { statuses: string[] }) => statuses.includes("open") ? [reported] : []),
       getImprovementCase: vi.fn(async () => reportedRecord),
-      getAgentTask: vi.fn(async (taskId: string) => taskId === firstTaskId ? { taskId, status: "failed", updatedAt: now } : undefined),
+      getAgentTask: vi.fn(async (taskId: string) => taskId === firstTaskId ? { taskId, status: "no_changes", updatedAt: now } : undefined),
       applyImprovementTriage: vi.fn(),
       recordImprovementReconciliationDecision: vi.fn(async () => ({ recorded: true })),
       getImprovementReporterClarificationState: vi.fn(async () => clarificationState()),

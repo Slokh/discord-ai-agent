@@ -1,6 +1,6 @@
 import type { DbPool } from "./pool.js";
 
-export async function recentMessageActivities(pool: DbPool, now: Date, botUserId: string | null = null) {
+export async function recentMessageActivities(pool: DbPool, now: Date) {
   const result = await pool.query(
     `WITH recent_messages AS MATERIALIZED (
        SELECT id,guild_id,channel_id,author_id,content,created_at
@@ -13,10 +13,10 @@ export async function recentMessageActivities(pool: DbPool, now: Date, botUserId
      SELECT message.id,message.guild_id,message.channel_id,
             left(message.content,240) AS preview,message.created_at,
             (embedding.message_id IS NOT NULL) AS embedded,embedding.embedded_at,
-            CASE WHEN embedding.message_id IS NULL AND $2::text IS NOT NULL AND (
-              position('<@' || $2 || '>' in message.content) > 0 OR
-              position('<@!' || $2 || '>' in message.content) > 0
-            ) THEN 'bot_mention' END AS embedding_skip_reason
+            CASE WHEN embedding.message_id IS NULL AND EXISTS (
+              SELECT 1 FROM discord_delivery_obligations delivery
+              WHERE delivery.source_message_id = message.id
+            ) THEN 'agent_interaction' END AS embedding_skip_reason
      FROM recent_messages message
      JOIN discord_users author ON author.id = message.author_id
      JOIN channels channel ON channel.id = message.channel_id
@@ -30,7 +30,7 @@ export async function recentMessageActivities(pool: DbPool, now: Date, botUserId
        )
      ORDER BY message.created_at DESC,message.id DESC
     `,
-    [now, botUserId],
+    [now],
   );
   return result.rows.map((row) => ({
     id: String(row.id), preview: String(row.preview), createdAt: date(row.created_at),
@@ -40,14 +40,14 @@ export async function recentMessageActivities(pool: DbPool, now: Date, botUserId
   }));
 }
 
-export async function messageActivityDetail(pool: DbPool, messageId: string, botUserId: string | null = null) {
+export async function messageActivityDetail(pool: DbPool, messageId: string) {
   const result = await pool.query(
     `SELECT message.id,message.guild_id,message.channel_id,message.content,message.created_at,
             embedding.model,embedding.dimensions,embedding.input_version,embedding.embedded_at,
-            CASE WHEN embedding.message_id IS NULL AND $2::text IS NOT NULL AND (
-              position('<@' || $2 || '>' in message.content) > 0 OR
-              position('<@!' || $2 || '>' in message.content) > 0
-            ) THEN 'bot_mention' END AS embedding_skip_reason,
+            CASE WHEN embedding.message_id IS NULL AND EXISTS (
+              SELECT 1 FROM discord_delivery_obligations delivery
+              WHERE delivery.source_message_id = message.id
+            ) THEN 'agent_interaction' END AS embedding_skip_reason,
             coalesce(attachment_rows.items,'[]'::jsonb) AS attachments
      FROM messages message
      LEFT JOIN message_embeddings embedding ON embedding.message_id = message.id
@@ -59,7 +59,7 @@ export async function messageActivityDetail(pool: DbPool, messageId: string, bot
      ) attachment_rows ON true
      WHERE message.id = $1 AND message.deleted_at IS NULL
      LIMIT 1`,
-    [messageId, botUserId],
+    [messageId],
   );
   const row = result.rows[0];
   if (!row) return null;

@@ -25,6 +25,7 @@ export type ObservedSandboxRun = {
   status: "running" | "succeeded" | "failed" | "gone";
   reason?: string;
   metadata?: Record<string, unknown>;
+  diagnosticLog?: string;
 };
 
 export type KubernetesExecutionClients = {
@@ -38,7 +39,7 @@ export type KubernetesExecutionClients = {
     | "replaceNamespacedConfigMap"
     | "deleteNamespacedConfigMap"
   > &
-    Partial<Pick<k8s.CoreV1Api, "listNamespacedSecret" | "listNamespacedConfigMap">>;
+    Partial<Pick<k8s.CoreV1Api, "listNamespacedSecret" | "listNamespacedConfigMap" | "listNamespacedPod" | "readNamespacedPodLog">>;
 };
 
 export function createExecutionBackend(config: AppConfig): ExecutionBackend {
@@ -142,10 +143,12 @@ export class KubernetesExecutionBackend implements ExecutionBackend {
       const conditions = job.status?.conditions ?? [];
       const failed = conditions.find((condition) => condition.type === "Failed" && condition.status === "True");
       if (failed || (job.status?.failed ?? 0) > 0) {
+        const diagnostics = await this.failedPodDiagnostics(run.namespace, run.backendJobName);
         return {
           status: "failed",
           reason: failed?.message ?? failed?.reason ?? "Kubernetes Job failed.",
-          metadata: { failed: job.status?.failed ?? null, succeeded: job.status?.succeeded ?? null }
+          metadata: { failed: job.status?.failed ?? null, succeeded: job.status?.succeeded ?? null, ...diagnostics.metadata },
+          diagnosticLog: diagnostics.log
         };
       }
       const complete = conditions.find((condition) => condition.type === "Complete" && condition.status === "True");
@@ -167,6 +170,44 @@ export class KubernetesExecutionBackend implements ExecutionBackend {
     } catch (error) {
       if (isKubernetesNotFound(error)) return { status: "gone", reason: "Kubernetes Job was not found." };
       throw error;
+    }
+  }
+
+  private async failedPodDiagnostics(namespace: string, jobName: string) {
+    if (!this.core.listNamespacedPod) return { metadata: {}, log: undefined };
+    try {
+      const pods = await this.core.listNamespacedPod({ namespace, labelSelector: `job-name=${jobName}` });
+      const pod = [...(pods.items ?? [])].sort((left, right) =>
+        String(right.metadata?.creationTimestamp ?? "").localeCompare(String(left.metadata?.creationTimestamp ?? ""))
+      )[0];
+      if (!pod) return { metadata: {}, log: undefined };
+      const container = pod.status?.containerStatuses?.find((status) => status.name === "sandbox") ?? pod.status?.containerStatuses?.[0];
+      const terminated = container?.state?.terminated ?? container?.lastState?.terminated;
+      let log: string | undefined;
+      if (pod.metadata?.name && this.core.readNamespacedPodLog) {
+        log = await this.core.readNamespacedPodLog({
+          namespace,
+          name: pod.metadata.name,
+          container: container?.name ?? "sandbox",
+          tailLines: 200,
+          limitBytes: 40_000,
+          timestamps: true,
+        }).catch(() => undefined);
+      }
+      return {
+        metadata: {
+          podName: pod.metadata?.name ?? null,
+          podPhase: pod.status?.phase ?? null,
+          containerReason: terminated?.reason ?? null,
+          exitCode: terminated?.exitCode ?? null,
+          signal: terminated?.signal ?? null,
+          restartCount: container?.restartCount ?? null,
+          finishedAt: terminated?.finishedAt ?? null,
+        },
+        log,
+      };
+    } catch {
+      return { metadata: {}, log: undefined };
     }
   }
 

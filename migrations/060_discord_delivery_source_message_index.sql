@@ -1,0 +1,2 @@
+CREATE INDEX IF NOT EXISTS idx_discord_delivery_obligations_source_message
+  ON discord_delivery_obligations(source_message_id);

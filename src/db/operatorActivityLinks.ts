@@ -28,6 +28,7 @@ export type OperatorActivitySource = {
   id: string;
   kind: "runtime" | "code_change" | "improvement" | "system";
   title: string;
+  authorLabel: string | null;
   status: string | null;
   detail: string | null;
   occurredAt: Date;

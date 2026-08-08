@@ -17,7 +17,7 @@ export async function releaseActivityDetail(
       [verifiedAt],
     ),
     pool.query(
-      `SELECT previous_revision,repository,status,comparison_url,attempts,posted_at,updated_at
+      `SELECT guild_id,previous_revision,repository,status,comparison_url,attempts,posted_at,updated_at
        FROM deployment_announcements
        WHERE revision = $1
        ORDER BY posted_at DESC NULLS LAST,updated_at DESC`,
@@ -31,10 +31,10 @@ export async function releaseActivityDetail(
       [revision, deploymentId],
     ),
     pool.query(
-      `SELECT status,count(*)::int AS count
+      `SELECT receipt_id,status,checks,created_at
        FROM improvement_verification_receipts
        WHERE revision = $1 AND deployment_id = $2
-       GROUP BY status ORDER BY status`,
+       ORDER BY created_at ASC,receipt_id ASC`,
       [revision, deploymentId],
     ),
   ]);
@@ -57,14 +57,36 @@ export async function releaseActivityDetail(
       failed: announcementRows.filter((row) => row.status === "failed").length,
       attempts: announcementRows.reduce((total, row) => total + number(row.attempts), 0),
       latestAt: announcementRows[0] ? nullableDate(announcementRows[0].posted_at ?? announcementRows[0].updated_at) : null,
+      deliveries: announcementRows.map((row) => ({
+        id: String(row.guild_id), status: String(row.status), repository: nullable(row.repository),
+        attempts: number(row.attempts), occurredAt: date(row.posted_at ?? row.updated_at),
+      })),
     },
     checks: producers.rows.map((row) => ({
       name: String(row.trigger), status: String(row.status), outcomeCode: nullable(row.outcome_code),
       startedAt: date(row.started_at), completedAt: nullableDate(row.completed_at),
       durationMs: row.completed_at == null ? null : Math.max(0, date(row.completed_at).getTime() - date(row.started_at).getTime()),
     })),
-    verificationReceipts: Object.fromEntries(receipts.rows.map((row) => [String(row.status), number(row.count)])),
+    verificationReceipts: receipts.rows.reduce<Record<string, number>>((counts, row) => {
+      const status = String(row.status);
+      counts[status] = (counts[status] ?? 0) + 1;
+      return counts;
+    }, {}),
+    verifications: receipts.rows.map((row) => ({
+      id: String(row.receipt_id), status: String(row.status),
+      summary: verificationSummary(row.checks), occurredAt: date(row.created_at),
+    })),
   };
+}
+
+function verificationSummary(value: unknown): string | null {
+  if (!Array.isArray(value)) return null;
+  for (const candidate of value) {
+    if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) continue;
+    const summary = nullable((candidate as Record<string, unknown>).summary);
+    if (summary) return summary;
+  }
+  return null;
 }
 
 function nullable(value: unknown): string | null {

@@ -37,7 +37,7 @@ export const environmentVariables = [
   { name: "APP_REVISION", group: "deployment", description: "Immutable deployed git revision.", requiredFor: "release workflow" },
   { name: "RELEASE_VERIFICATION_ID", group: "deployment", description: "Unique public identifier for this rollout's post-deploy promotion.", requiredFor: "release workflow" },
   { name: "PREVIOUS_APP_REVISION", group: "deployment", description: "Previously deployed git revision.", requiredFor: "release announcements" },
-  { name: "DISCORD_BOT_CHANNEL_ID", group: "deployment", description: "Single Discord text channel for deployment announcements and improvement-report threads.", requiredFor: "deployment announcements and improvement conversations", operator: true },
+  { name: "DISCORD_BOT_CHANNEL_ID", group: "deployment", description: "Single Discord text channel for deployment announcements.", requiredFor: "deployment announcements", operator: true },
   { name: "POD_NAMESPACE", group: "deployment", description: "Namespace where isolated code-update Jobs are created.", requiredFor: "Kubernetes worker" },
   { name: "SANDBOX_IMAGE", group: "deployment", description: "Immutable code-update sandbox image reference.", requiredFor: "Kubernetes worker" },
 ] as const satisfies readonly EnvironmentVariableDefinition[];

@@ -1,4 +1,4 @@
-import type { DashboardSnapshotSource } from "./server.js";
+import type { ActivityPageRequest, DashboardSnapshotSource } from "./server.js";
 import { Agent, fetch as fetchWithDispatcher } from "undici";
 
 type FetchSnapshot = (input: string, init?: RequestInit) => Promise<Response>;
@@ -9,24 +9,12 @@ export function createProductionSnapshotSource(input: {
 }): DashboardSnapshotSource {
   const fetchSnapshot = input.fetchSnapshot ?? loopbackFetch();
   const baseUrl = normalizedBaseUrl(input.baseUrl);
-  const snapshotUrl = new URL("/api/snapshot", baseUrl).toString();
-
   return {
-    snapshot: async () => {
-      const response = await fetchSnapshot(snapshotUrl, {
-        cache: "no-store",
-        headers: { accept: "application/json" },
-      });
-      if (!response.ok) throw new Error(`Production console returned HTTP ${response.status}.`);
-      const payload: unknown = await response.json();
-      if (!isRecord(payload)) throw new Error("Production console returned an invalid snapshot.");
-      if (payload.environment !== "production") {
-        throw new Error("Refusing to label a non-production snapshot as production.");
-      }
-      if (payload.schemaVersion !== 1 && payload.schemaVersion !== 2) {
-        throw new Error(`Unsupported production snapshot schema ${String(payload.schemaVersion ?? "missing")}.`);
-      }
-      return payload;
+    overview: async () => read("/api/overview", 3, "overview"),
+    activityPage: async (input) => {
+      const url = new URL("/api/activity", baseUrl);
+      applyActivityQuery(url, input);
+      return read(url.toString(), 3, "activity index");
     },
     activityDetail: async ({ kind, id }) => {
       const url = new URL(`/api/activity/${encodeURIComponent(kind)}/${encodeURIComponent(id)}`, baseUrl).toString();
@@ -37,12 +25,40 @@ export function createProductionSnapshotSource(input: {
       if (response.status === 404) return null;
       if (!response.ok) throw new Error(`Production console returned HTTP ${response.status}.`);
       const payload: unknown = await response.json();
-      if (!isRecord(payload) || payload.schemaVersion !== 1) {
+      if (!isRecord(payload) || payload.schemaVersion !== 2) {
         throw new Error("Production console returned an invalid activity detail.");
+      }
+      if (payload.environment !== "production") {
+        throw new Error("Refusing to label non-production Console data as production.");
       }
       return payload;
     },
   };
+
+  async function read(pathOrUrl: string, schemaVersion: number, label: string) {
+      const url = pathOrUrl.startsWith("http") ? pathOrUrl : new URL(pathOrUrl, baseUrl).toString();
+      const response = await fetchSnapshot(url, {
+        cache: "no-store",
+        headers: { accept: "application/json" },
+      });
+      if (!response.ok) throw new Error(`Production console returned HTTP ${response.status}.`);
+      const payload: unknown = await response.json();
+      if (!isRecord(payload) || payload.schemaVersion !== schemaVersion) {
+        throw new Error(`Production console returned an invalid ${label}.`);
+      }
+      if (payload.environment !== "production") throw new Error("Refusing to label non-production Console data as production.");
+      return payload;
+  }
+}
+
+function applyActivityQuery(url: URL, input: ActivityPageRequest) {
+  if (input.cursor) url.searchParams.set("cursor", input.cursor);
+  if (input.limit) url.searchParams.set("limit", String(input.limit));
+  if (input.filter) url.searchParams.set("filter", input.filter);
+  if (input.types?.length) url.searchParams.set("types", input.types.join(","));
+  if (input.search) url.searchParams.set("search", input.search);
+  if (input.selectedKind) url.searchParams.set("selectedKind", input.selectedKind);
+  if (input.selectedId) url.searchParams.set("selectedId", input.selectedId);
 }
 
 function loopbackFetch(): FetchSnapshot {

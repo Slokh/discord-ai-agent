@@ -1,41 +1,93 @@
 import type { DbPool } from "./pool.js";
-import { deriveOperatorActivity } from "../console/activity.js";
-import { operatorTaskFailureSummary } from "../console/taskFailureSummary.js";
 import { releaseActivityDetail } from "./operatorActivityDetailRepository.js";
 import { messageActivityDetail, recentMessageActivities } from "./operatorMessageActivityRepository.js";
-import { improvementActivityTrace } from "./operatorImprovementActivityRepository.js";
+import { improvementActivityContext, improvementActivityTrace } from "./operatorImprovementActivityRepository.js";
 import { RELATED_CASES_FOR_EXECUTION_SQL, RELATED_CASES_FOR_IMPROVEMENT_SQL } from "./operatorActivityLinks.js";
-import type { OperatorActivitySource } from "./operatorActivityLinks.js";
+import { projectActivitySources } from "./operatorDashboardProjection.js";
 import { recentTaskActivityQuery } from "./operatorDashboardActivityQueries.js";
+import { dashboardTraceEvent, executionActivityTrace, taskActivityTrace } from "./operatorRuntimeActivityRepository.js";
+import { discordMentionLabels, discordMentions, discordRoleMentions, resolvedDiscordSourceTitle } from "./operatorDiscordIdentity.js";
 const COMPONENTS = ["bot", "worker", "api", "console"] as const;
 export class OperatorDashboardRepository {
   constructor(private readonly pool: DbPool) {}
   async activityDetail(input: { kind: string; id: string; revision: string }) {
-    const snapshot = await this.snapshot({ revision: input.revision, includeActivityDetails: true });
-    const activity = deriveOperatorActivity(snapshot);
-    const active = activity.active.find((candidate) => candidate.kind === input.kind && candidate.id === input.id);
-    const story = active ?? activity.recent.find((candidate) => candidate.kind === input.kind && candidate.id === input.id);
-    if (!story) return null;
     const detail = {
       kind: input.kind,
       id: input.id,
-      story,
-      active: Boolean(active),
-      generatedAt: snapshot.generatedAt,
-      revision: snapshot.revision,
+      generatedAt: new Date(),
+      revision: input.revision,
     };
     if (input.kind === "release") {
-      const deployment = snapshot.deployments.find((candidate) => `release-${candidate.deploymentId}` === input.id);
-      return deployment ? { ...detail, release: await releaseActivityDetail(this.pool, deployment) } : detail;
+      const deploymentId = input.id.startsWith("release-") ? input.id.slice("release-".length) : "";
+      const deployment = deploymentId ? await this.pool.query(
+        `SELECT revision,deployment_id,verified_at FROM deployment_verifications WHERE deployment_id = $1 LIMIT 1`,
+        [deploymentId],
+      ) : { rows: [] };
+      return deployment.rows[0] ? { ...detail, release: await releaseActivityDetail(this.pool, {
+        revision: deployment.rows[0].revision,
+        deploymentId: deployment.rows[0].deployment_id,
+        verifiedAt: deployment.rows[0].verified_at,
+      }) } : null;
     }
-    if (input.kind === "message" && input.id.startsWith("message-")) return {
-      ...detail, message: await messageActivityDetail(this.pool, input.id.slice("message-".length)),
+    if (input.kind === "message" && input.id.startsWith("message-")) {
+      const message = await messageActivityDetail(this.pool, input.id.slice("message-".length));
+      return message ? { ...detail, message } : null;
+    }
+    if (input.kind === "improvement" && input.id.startsWith("improvement-")) {
+      const caseId = input.id.slice("improvement-".length);
+      const related = await this.pool.query(
+        `SELECT case_id,merged_into_case_id FROM improvement_cases
+         WHERE case_id = $1 OR merged_into_case_id = $1
+         ORDER BY CASE WHEN case_id = $1 THEN 0 ELSE 1 END,case_id`,
+        [caseId],
+      );
+      const caseIds = [...new Set(related.rows.flatMap((row) => [nullable(row.case_id), nullable(row.merged_into_case_id)]).filter((value): value is string => Boolean(value)))];
+      if (!caseIds.length) return null;
+      const [traceEvents, improvement] = await Promise.all([
+        improvementActivityTrace(this.pool, caseIds),
+        improvementActivityContext(this.pool, caseIds, caseId),
+      ]);
+      return { ...detail, traceEvents, improvement };
+    }
+    if (input.kind === "code_change" && input.id.startsWith("task-")) return {
+      ...detail,
+      traceEvents: await taskActivityTrace(this.pool, input.id.slice("task-".length)),
     };
-    if (input.kind === "improvement" && input.id.startsWith("improvement-"))
-      return { ...detail, traceEvents: await improvementActivityTrace(this.pool, story.relatedImprovementCaseIds) };
-    if (input.kind !== "conversation") return detail;
+    if (input.kind === "system") {
+      if (input.id.startsWith("system-rollup-")) {
+        const rollupKey = input.id.slice("system-rollup-".length);
+        const runs = await this.pool.query(
+          `SELECT execution.execution_id,execution.status,
+                  coalesce(nullif(execution.metadata->>'title',''),session.title,$1) AS title,
+                  coalesce(execution.started_at,execution.created_at) AS started_at,
+                  execution.updated_at
+           FROM agent_runtime_executions execution
+           JOIN agent_runtime_sessions session USING (session_id)
+           WHERE coalesce(nullif(execution.metadata->>'jobKind',''),nullif(session.metadata->>'jobKind','')) = $1
+             AND execution.updated_at >= now() - interval '7 days'
+             AND execution.status NOT IN ('queued','running')
+           ORDER BY execution.updated_at DESC
+           LIMIT 100`,
+          [rollupKey],
+        );
+        if (!runs.rows.length) return null;
+        return { ...detail, runs: runs.rows.map((row) => ({
+          id: `execution-${String(row.execution_id)}`, title: String(row.title), status: String(row.status),
+          tone: ["failed", "blocked", "timed_out", "timeout", "error"].includes(String(row.status)) ? "danger" : "success",
+          durationMs: Math.max(0, date(row.updated_at).getTime() - date(row.started_at).getTime()),
+          occurredAt: date(row.updated_at),
+        })) };
+      }
+      const systemExecutionId = executionIdFromActivityId(input.id);
+      if (systemExecutionId) return {
+        ...detail,
+        traceEvents: await executionActivityTrace(this.pool, systemExecutionId),
+      };
+      return null;
+    }
+    if (input.kind !== "conversation") return null;
     const executionId = executionIdFromActivityId(input.id);
-    if (!executionId) return { ...detail, messages: [] };
+    if (!executionId) return null;
     const execution = await this.pool.query(
       `SELECT execution.execution_id,execution.session_id,
               coalesce(delivery.source_message_id,nullif(execution.metadata->>'discordMessageId',''),session.trace_id) AS source_message_id,
@@ -48,20 +100,20 @@ export class OperatorDashboardRepository {
       [executionId],
     );
     const context = execution.rows[0];
-    if (!context) return { ...detail, executionId, messages: [] };
+    if (!context) return null;
     const sourceMessageId = nullable(context.source_message_id);
     const guildId = nullable(context.guild_id);
     const [archive, runtime, trace] = await Promise.all([
       sourceMessageId
         ? this.pool.query(
           `WITH RECURSIVE chain AS (
-             SELECT message.id,message.guild_id,message.channel_id,message.author_id,
+             SELECT message.id,message.guild_id,message.channel_id,message.author_id,message.raw,
                     left(message.content,8000) AS content,message.created_at,message.deleted_at,
                     message.referenced_message_id,0 AS depth,ARRAY[message.id]::text[] AS path
              FROM messages message
              WHERE message.id = $1 AND ($2::text IS NULL OR message.guild_id = $2)
              UNION ALL
-             SELECT parent.id,parent.guild_id,parent.channel_id,parent.author_id,
+             SELECT parent.id,parent.guild_id,parent.channel_id,parent.author_id,parent.raw,
                     left(parent.content,8000),parent.created_at,parent.deleted_at,
                     parent.referenced_message_id,chain.depth + 1,chain.path || parent.id
              FROM chain
@@ -69,12 +121,12 @@ export class OperatorDashboardRepository {
                                   AND parent.guild_id = chain.guild_id
              WHERE chain.depth < 23 AND NOT parent.id = ANY(chain.path)
            )
-           SELECT chain.id,chain.guild_id,chain.channel_id,chain.content,chain.created_at,
+           SELECT chain.id,chain.guild_id,chain.channel_id,chain.content,chain.raw,chain.created_at,
                   chain.deleted_at,chain.depth,user_row.is_bot,
                   coalesce(member.display_name,member.nickname,user_row.global_name,user_row.username) AS author_label,
                   coalesce(attachment_rows.items,'[]'::jsonb) AS attachments
            FROM chain
-           JOIN discord_users user_row ON user_row.id = chain.author_id
+           JOIN discord_users user_row ON user_row.id = chain.author_id AND user_row.deleted_at IS NULL
            LEFT JOIN guild_members member ON member.guild_id = chain.guild_id AND member.user_id = chain.author_id
            LEFT JOIN LATERAL (
              SELECT jsonb_agg(jsonb_build_object(
@@ -170,12 +222,24 @@ export class OperatorDashboardRepository {
       seen.add(id);
     }
     messages.sort((left, right) => left.createdAt.getTime() - right.createdAt.getTime());
-    return { ...detail, executionId, messages, traceEvents: trace.rows.map(dashboardTraceEvent) };
+    const mentionLabels = await discordMentionLabels(
+      this.pool,
+      [
+        ...archive.rows.map((row) => ({ guild_id: row.guild_id, content: row.content, raw: row.raw })),
+        ...messages.map((message) => ({ guildId, content: message.content })),
+      ],
+    );
+    const resolvedMessages = messages.map((message) => ({
+      ...message,
+      mentions: discordMentions(message.content, guildId, mentionLabels),
+      roles: discordRoleMentions(message.content, guildId, mentionLabels),
+    }));
+    return { ...detail, executionId, messages: resolvedMessages, traceEvents: trace.rows.map(dashboardTraceEvent) };
   }
 
-  async snapshot(input: { revision: string; now?: Date; includeActivityDetails?: boolean }) {
+  async snapshot(input: { revision: string; now?: Date }) {
     const now = input.now ?? new Date();
-    const activityEventLimit = input.includeActivityDetails ? 12 : 1;
+    const activityEventLimit = 1;
     const heartbeatTable = await this.pool.query(
       `SELECT EXISTS (
          SELECT 1 FROM information_schema.tables
@@ -203,16 +267,25 @@ export class OperatorDashboardRepository {
                 coalesce(nullif(execution.metadata->>'jobKind',''),nullif(session.metadata->>'jobKind','')) AS rollup_key,
                 nullif(execution.metadata->>'responseStatus','') AS response_status,
                 delivery.state AS delivery_state,
-                delivery.guild_id AS delivery_guild_id,delivery.channel_id AS delivery_channel_id,
-                delivery.source_message_id,delivery.status_channel_id,delivery.status_message_id,
+                coalesce(delivery.guild_id,session.guild_id) AS delivery_guild_id,
+                coalesce(delivery.channel_id,session.channel_id) AS delivery_channel_id,
+                coalesce(delivery.source_message_id,nullif(execution.metadata->>'discordMessageId',''),session.trace_id) AS source_message_id,
+                left(source_message.content,240) AS source_message_content,
+                source_message.raw AS source_message_raw,
+                coalesce(source_member.display_name,source_member.nickname,source_author.global_name,source_author.username) AS source_author_label,
+                delivery.status_channel_id,delivery.status_message_id,
                 (source_message.referenced_message_id IS NOT NULL) AS has_parent,
                 latest.event_name AS latest_event,count(*) OVER ()::int AS total_count
          FROM agent_runtime_executions execution
          JOIN agent_runtime_sessions session USING (session_id)
          LEFT JOIN discord_delivery_obligations delivery USING (execution_id)
          LEFT JOIN messages source_message
-           ON source_message.id = delivery.source_message_id
-          AND source_message.guild_id = delivery.guild_id
+           ON source_message.id = coalesce(delivery.source_message_id,nullif(execution.metadata->>'discordMessageId',''),session.trace_id)
+          AND source_message.guild_id = coalesce(delivery.guild_id,session.guild_id)
+         LEFT JOIN discord_users source_author ON source_author.id = source_message.author_id AND source_author.deleted_at IS NULL
+         LEFT JOIN guild_members source_member
+           ON source_member.guild_id = source_message.guild_id AND source_member.user_id = source_message.author_id
+          AND NOT EXISTS (SELECT 1 FROM privacy_deletions deletion WHERE deletion.user_id = source_message.author_id)
          LEFT JOIN LATERAL (
            SELECT event_name FROM agent_runtime_events event
            WHERE event.execution_id = execution.execution_id
@@ -237,13 +310,33 @@ export class OperatorDashboardRepository {
                 case_row.automation_blocker,case_row.automation_next_action,
                 case_row.automation_retry_trigger,case_row.automation_retry_at,
                 case_row.automation_last_progress_at,case_row.first_seen_at,case_row.last_seen_at,
-                work.pull_request_url,work.status AS work_status,related.related_case_ids
+                work.pull_request_url,work.status AS work_status,related.related_case_ids,
+                report.preview AS report_preview,report.author_is_bot AS report_author_is_bot,
+                report.has_execution AS report_has_execution
          FROM improvement_cases case_row
          LEFT JOIN LATERAL (
            SELECT pull_request_url,status FROM improvement_work_attempts attempt
            WHERE attempt.case_id = case_row.case_id
            ORDER BY attempt.created_at DESC LIMIT 1
          ) work ON true
+         LEFT JOIN LATERAL (
+           SELECT left(regexp_replace(message.content,'\\s+',' ','g'),240) AS preview,
+                  coalesce(author.is_bot,false) AS author_is_bot,
+                  signal.execution_id IS NOT NULL AS has_execution
+           FROM improvement_signals signal
+           JOIN messages message
+             ON message.id = signal.message_id
+            AND message.guild_id = signal.guild_id
+            AND message.channel_id = signal.channel_id
+           JOIN discord_users author ON author.id = message.author_id
+           WHERE signal.case_id = case_row.case_id
+             AND signal.source = 'member_report'
+             AND signal.active = true
+             AND message.deleted_at IS NULL
+             AND message.normalized_content <> ''
+           ORDER BY signal.observed_at DESC,signal.signal_id DESC
+           LIMIT 1
+         ) report ON true
          ${RELATED_CASES_FOR_IMPROVEMENT_SQL}
          WHERE case_row.merged_into_case_id IS NULL
            AND case_row.status NOT IN ('resolved','dismissed')
@@ -268,7 +361,7 @@ export class OperatorDashboardRepository {
            WHERE execution.task_id IS NULL
              AND execution.status NOT IN ('queued','running')
              AND coalesce(nullif(execution.metadata->>'qualityCohort',''),nullif(session.metadata->>'qualityCohort','')) IS DISTINCT FROM 'synthetic'
-             AND execution.updated_at >= $1::timestamptz - interval '24 hours'
+             AND execution.updated_at >= $1::timestamptz - interval '7 days'
          )
          SELECT recent.execution_id,recent.session_id,recent.attempt,recent.story_started_at,recent.story_updated_at,recent.is_system,
                 coalesce(nullif(execution.metadata->>'title',''),session.title) AS title,
@@ -276,8 +369,13 @@ export class OperatorDashboardRepository {
                 coalesce(nullif(execution.metadata->>'jobKind',''),nullif(session.metadata->>'jobKind','')) AS rollup_key,
                 nullif(execution.metadata->>'responseStatus','') AS response_status,
                 delivery.state AS delivery_state,
-                delivery.guild_id AS delivery_guild_id,delivery.channel_id AS delivery_channel_id,
-                delivery.source_message_id,delivery.status_channel_id,delivery.status_message_id,
+                coalesce(delivery.guild_id,session.guild_id) AS delivery_guild_id,
+                coalesce(delivery.channel_id,session.channel_id) AS delivery_channel_id,
+                coalesce(delivery.source_message_id,nullif(execution.metadata->>'discordMessageId',''),session.trace_id) AS source_message_id,
+                left(source_message.content,240) AS source_message_content,
+                source_message.raw AS source_message_raw,
+                coalesce(source_member.display_name,source_member.nickname,source_author.global_name,source_author.username) AS source_author_label,
+                delivery.status_channel_id,delivery.status_message_id,
                 (source_message.referenced_message_id IS NOT NULL) AS has_parent,
                 event.id,event.event_name,event.level,event.created_at,
                 event.group_event_count,linked.related_case_ids
@@ -286,8 +384,12 @@ export class OperatorDashboardRepository {
          JOIN agent_runtime_sessions session ON session.session_id = recent.session_id
          LEFT JOIN discord_delivery_obligations delivery ON delivery.execution_id = recent.execution_id
          LEFT JOIN messages source_message
-           ON source_message.id = delivery.source_message_id
-          AND source_message.guild_id = delivery.guild_id
+           ON source_message.id = coalesce(delivery.source_message_id,nullif(execution.metadata->>'discordMessageId',''),session.trace_id)
+          AND source_message.guild_id = coalesce(delivery.guild_id,session.guild_id)
+         LEFT JOIN discord_users source_author ON source_author.id = source_message.author_id AND source_author.deleted_at IS NULL
+         LEFT JOIN guild_members source_member
+           ON source_member.guild_id = source_message.guild_id AND source_member.user_id = source_message.author_id
+          AND NOT EXISTS (SELECT 1 FROM privacy_deletions deletion WHERE deletion.user_id = source_message.author_id)
          ${RELATED_CASES_FOR_EXECUTION_SQL}
          LEFT JOIN LATERAL (
            SELECT candidate.id,candidate.event_name,candidate.level,candidate.created_at,
@@ -319,7 +421,9 @@ export class OperatorDashboardRepository {
                 conversation.guild_id AS conversation_guild_id,
                 conversation.source_channel_id,conversation.source_message_id,
                 conversation.delivery_kind,conversation.delivery_channel_id,conversation.delivery_message_id,
-                related.related_case_ids
+                related.related_case_ids,
+                report.preview AS report_preview,report.author_is_bot AS report_author_is_bot,
+                report.has_execution AS report_has_execution
          FROM recent_cases recent
          JOIN improvement_cases case_row USING (case_id)
          LEFT JOIN LATERAL (
@@ -342,13 +446,33 @@ export class OperatorDashboardRepository {
            WHERE candidate.case_id = case_row.case_id
            ORDER BY candidate.updated_at DESC LIMIT 1
          ) conversation ON true
+         LEFT JOIN LATERAL (
+           SELECT left(regexp_replace(message.content,'\\s+',' ','g'),240) AS preview,
+                  coalesce(author.is_bot,false) AS author_is_bot,
+                  signal.execution_id IS NOT NULL AS has_execution
+           FROM improvement_signals signal
+           JOIN messages message
+             ON message.id = signal.message_id
+            AND message.guild_id = signal.guild_id
+            AND message.channel_id = signal.channel_id
+           JOIN discord_users author ON author.id = message.author_id
+           WHERE signal.case_id = case_row.case_id
+             AND signal.source = 'member_report'
+             AND signal.active = true
+             AND message.deleted_at IS NULL
+             AND message.normalized_content <> ''
+           ORDER BY signal.observed_at DESC,signal.signal_id DESC
+           LIMIT 1
+         ) report ON true
          ${RELATED_CASES_FOR_IMPROVEMENT_SQL}
          ORDER BY recent.story_updated_at DESC,event.created_at DESC,event.event_id DESC`,
         [now],
       ),
       this.pool.query(
         `SELECT revision,deployment_id,verified_at FROM deployment_verifications
-         ORDER BY verified_at DESC LIMIT 8`,
+         WHERE verified_at >= $1::timestamptz - interval '7 days'
+         ORDER BY verified_at DESC`,
+        [now],
       ),
       this.pool.query(
         `SELECT producer.trigger,producer.activated_at,run.status,run.revision,
@@ -389,7 +513,7 @@ export class OperatorDashboardRepository {
       .reduce((total, row) => total + number(row.count), 0);
     const attentionCount = caseCounts.rows.reduce((total, row) => total + number(row.attention_count), 0);
     const improvementRows = cases.rows.map((row) => ({
-      caseId: String(row.case_id), title: String(row.title), status: String(row.status),
+      caseId: String(row.case_id), title: improvementConsoleTitle(row), status: String(row.status),
       classification: String(row.classification), severity: String(row.severity),
       owningDomain: nullable(row.owning_domain), automationState: String(row.automation_state),
       blocker: nullable(row.automation_blocker), nextAction: String(row.automation_next_action),
@@ -398,7 +522,14 @@ export class OperatorDashboardRepository {
       pullRequestUrl: nullable(row.pull_request_url), workStatus: nullable(row.work_status),
       relatedImprovementCaseIds: textArray(row.related_case_ids),
     }));
-    const activities = projectActivitySources(runtimeEvents.rows, taskEvents.rows, caseEvents.rows);
+    const promptMentionLabels = await discordMentionLabels(this.pool, [...executions.rows, ...runtimeEvents.rows].map((row) => ({
+      guild_id: row.delivery_guild_id, content: row.source_message_content, raw: row.source_message_raw,
+    })));
+    const runtimeActivityRows = runtimeEvents.rows.map((row) => ({
+      ...row,
+      title: resolvedDiscordSourceTitle(row.source_message_content, row.delivery_guild_id, row.title, promptMentionLabels),
+    }));
+    const activities = projectActivitySources(runtimeActivityRows, taskEvents.rows, caseEvents.rows);
     return {
       generatedAt: now,
       revision: input.revision,
@@ -415,7 +546,10 @@ export class OperatorDashboardRepository {
       executions: executions.rows.map((row) => ({
         executionId: String(row.execution_id), sessionId: String(row.session_id), taskId: nullable(row.task_id),
         status: String(row.status), model: nullable(row.model), provider: nullable(row.provider),
-        pullRequestUrl: nullable(row.pr_url), title: String(row.title), requestPreview: String(row.request_preview),
+        pullRequestUrl: nullable(row.pr_url),
+        title: resolvedDiscordSourceTitle(row.source_message_content, row.delivery_guild_id, row.title, promptMentionLabels),
+        authorLabel: nullable(row.source_author_label),
+        requestPreview: String(row.request_preview),
         latestEvent: nullable(row.latest_event), rollupKey: nullable(row.rollup_key),
         responseStatus: nullable(row.response_status), deliveryState: nullable(row.delivery_state),
         sourceUrl: discordUrl(row.delivery_guild_id, row.delivery_channel_id, row.source_message_id),
@@ -466,11 +600,28 @@ function number(value: unknown): number {
 function textArray(value: unknown): string[] {
   return Array.isArray(value) ? value.filter((item) => item != null).map(String) : [];
 }
+function improvementConsoleTitle(row: Record<string, unknown>): string {
+  const preview = consoleReportPreview(row.report_preview);
+  if (!preview) return String(row.title);
+  const subject = row.report_author_is_bot ? "reply" : row.report_has_execution ? "prompt" : "message";
+  return `Reported ${subject}: ${preview}`;
+}
+function consoleReportPreview(value: unknown): string | null {
+  const compact = nullable(value)
+    ?.replace(/\s+-#\s+\d+(?:\.\d+)?s\s*$/i, "")
+    .replaceAll("**", "")
+    .replaceAll("`", "")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!compact) return null;
+  return compact.length > 140 ? `${compact.slice(0, 137).trimEnd()}…` : compact;
+}
 function executionIdFromActivityId(id: string): string | null {
   if (id.startsWith("runtime-")) return id.slice("runtime-".length) || null;
   if (id.startsWith("execution-")) return id.slice("execution-".length) || null;
   return null;
 }
+
 function runtimeMessageText(value: unknown): string | null {
   if (!Array.isArray(value)) return null;
   const content = value.flatMap((part) => {
@@ -484,76 +635,6 @@ function record(value: unknown): Record<string, unknown> {
   return value != null && typeof value === "object" && !Array.isArray(value)
     ? value as Record<string, unknown>
     : {};
-}
-const TRACE_METADATA_KEYS = new Set([
-  "purpose", "requestedModel", "model", "reasoningEffort", "messageCount", "toolCount", "offeredTools",
-  "maxTokens", "timeoutMs", "toolChoice", "finishReason", "usage", "estimatedCostUsd", "outputChars",
-  "requestedToolCalls", "serverToolUse", "urlCitationCount", "toolName", "status", "fileCount", "tableCount",
-  "errorCode", "errorName", "retryable", "latencyBudgetMs", "latencyBudgetExceeded", "successfulMutationCount",
-  "resumed", "instructionBytes", "turnContextBytes", "toolSchemaBytes", "sizeBytes", "binary",
-]);
-
-function dashboardTraceEvent(row: Record<string, unknown>) {
-  const eventName = String(row.event_name);
-  const level = String(row.level || "info");
-  const metadata = record(row.metadata);
-  return {
-    id: `trace-event-${row.id}`,
-    sequence: number(row.sequence),
-    type: traceEventType(eventName),
-    title: traceEventTitle(eventName, metadata),
-    summary: nullable(row.summary),
-    status: level === "error" || /failed|failure|stalled/.test(eventName)
-      ? "failed"
-      : level === "warn" ? "blocked" : /started|queued/.test(eventName) ? "running" : "done",
-    level,
-    code: eventName,
-    durationMs: row.duration_ms == null ? null : number(row.duration_ms),
-    spanId: nullable(row.span_id),
-    parentSpanId: nullable(row.parent_span_id),
-    metadata: dashboardTraceMetadata(metadata),
-    occurredAt: date(row.created_at),
-  };
-}
-
-function traceEventType(eventName: string) {
-  if (eventName.includes(".model.")) return "model";
-  if (eventName.includes(".tool.")) return "tool";
-  if (eventName.includes("context") || eventName.includes("contract_prepared")) return "context";
-  if (eventName.startsWith("discord.delivery")) return "delivery";
-  if (eventName.includes("artifact")) return "artifact";
-  if (eventName.includes("command") || eventName.includes("git") || eventName.includes("task")) return "task";
-  if (eventName.includes("response") || eventName.includes("assistant.message")) return "response";
-  return "event";
-}
-
-function traceEventTitle(eventName: string, metadata: Record<string, unknown>) {
-  const toolName = nullable(metadata.toolName);
-  if (eventName === "agent.tool.started") return toolName ? `${toolName} started` : "Tool started";
-  if (eventName === "agent.tool.complete") return toolName ? `${toolName} completed` : "Tool completed";
-  if (eventName === "agent.model.call.started") return "Model call started";
-  if (eventName === "agent.model.call.completed") return "Model call completed";
-  if (eventName === "agent.model.call.failed") return "Model call failed";
-  if (eventName === "agent.execution.context_ready" || eventName === "agent.nanocodex.contract_prepared") return "Context assembled";
-  if (eventName === "agent.execution.response_stored") return "Response stored";
-  if (eventName === "discord.delivery.intent_stored") return "Discord delivery queued";
-  return eventName.split(".").slice(-2).map((part) => part.replaceAll("_", " ")).join(" ").replace(/^./, (value) => value.toUpperCase());
-}
-
-function dashboardTraceMetadata(metadata: Record<string, unknown>) {
-  return Object.fromEntries([...TRACE_METADATA_KEYS]
-    .filter((key) => metadata[key] != null)
-    .map((key) => [key, safeTraceValue(metadata[key])]));
-}
-
-function safeTraceValue(value: unknown, depth = 0): unknown {
-  if (value == null || typeof value === "string" || typeof value === "number" || typeof value === "boolean") return value;
-  if (depth >= 2) return undefined;
-  if (Array.isArray(value)) return value.slice(0, 12).map((item) => safeTraceValue(item, depth + 1)).filter((item) => item !== undefined);
-  const item = record(value);
-  return Object.fromEntries(Object.entries(item).slice(0, 16)
-    .map(([key, nested]) => [key, safeTraceValue(nested, depth + 1)])
-    .filter(([, nested]) => nested !== undefined));
 }
 function safeDiscordUrl(value: unknown): string | null {
   const url = nullable(value);
@@ -573,140 +654,7 @@ function dashboardAttachments(value: unknown): Array<{ filename: string | null; 
   });
 }
 
-function projectActivitySources(
-  runtimeRows: Array<Record<string, unknown>>,
-  taskRows: Array<Record<string, unknown>>,
-  caseRows: Array<Record<string, unknown>>,
-): OperatorActivitySource[] {
-  const groups = new Map<string, OperatorActivitySource>();
-  for (const row of runtimeRows) {
-    const key = `runtime-${row.execution_id}`;
-    const occurredAt = date(row.story_updated_at);
-    const startedAt = date(row.story_started_at);
-    const group = groups.get(key) ?? {
-      id: key,
-      kind: row.is_system ? "system" as const : "runtime" as const,
-      title: String(row.title),
-      status: nullable(row.status),
-      detail: null,
-      occurredAt,
-      startedAt,
-      durationMs: Math.max(0, occurredAt.getTime() - startedAt.getTime()),
-      attempts: number(row.attempt) || 1,
-      eventCount: number(row.group_event_count) || 1,
-      rollupKey: nullable(row.rollup_key),
-      responseStatus: nullable(row.response_status),
-      deliveryState: nullable(row.delivery_state),
-      sourceUrl: discordUrl(row.delivery_guild_id, row.delivery_channel_id, row.source_message_id),
-      responseUrl: discordUrl(row.delivery_guild_id, row.status_channel_id, row.status_message_id),
-      responseKind: row.status_message_id == null ? null : "reply",
-      hasParent: Boolean(row.has_parent),
-      pullRequestUrl: null,
-      branchName: null,
-      improvementCaseId: null,
-      relatedImprovementCaseIds: textArray(row.related_case_ids),
-      failureReason: null,
-      events: [],
-    };
-    if (row.id != null && group.events.length < 12) group.events.push({
-      id: `runtime-event-${row.id}`,
-      name: String(row.event_name),
-      level: String(row.level),
-      createdAt: date(row.created_at),
-    });
-    groups.set(key, group);
-  }
-  for (const row of taskRows) {
-    const key = `task-${row.task_id}`;
-    const occurredAt = date(row.story_updated_at);
-    const startedAt = date(row.story_started_at);
-    const group = groups.get(key) ?? {
-      id: key,
-      kind: row.task_type === "improvement_report" ? "system" as const : "code_change" as const,
-      title: String(row.title),
-      status: nullable(row.status),
-      detail: nullable(row.status_message) ?? nullable(row.current_step),
-      occurredAt,
-      startedAt,
-      durationMs: Math.max(0, occurredAt.getTime() - startedAt.getTime()),
-      attempts: number(row.attempts) || 1,
-      eventCount: number(row.group_event_count),
-      rollupKey: row.task_type === "improvement_report" ? "improvement_report" : null,
-      responseStatus: null,
-      deliveryState: null,
-      sourceUrl: discordUrl(row.guild_id, row.channel_id, row.trace_id),
-      responseUrl: discordUrl(row.guild_id, row.discord_response_channel_id, row.discord_response_message_id),
-      responseKind: row.discord_response_message_id == null ? null : "reply",
-      hasParent: false,
-      pullRequestUrl: nullable(row.pr_url),
-      branchName: nullable(row.branch_name),
-      improvementCaseId: nullable(row.improvement_case_id),
-      relatedImprovementCaseIds: nullable(row.improvement_case_id) ? [String(row.improvement_case_id)] : [],
-      failureReason: operatorTaskFailureSummary(row.status, row.error),
-      events: [],
-    };
-    if (row.id != null && group.events.length < 12) group.events.push({
-      id: `task-event-${row.id}`,
-      name: String(row.event_name),
-      level: String(row.level),
-      createdAt: date(row.created_at),
-    });
-    groups.set(key, group);
-  }
-  for (const row of caseRows) {
-    const key = `improvement-${row.case_id}`;
-    const occurredAt = date(row.story_updated_at);
-    const eventName = String(row.event_name);
-    const group = groups.get(key) ?? {
-      id: key,
-      kind: "improvement" as const,
-      title: String(row.title),
-      status: String(row.status),
-      detail: eventName,
-      occurredAt,
-      startedAt: date(row.first_seen_at),
-      durationMs: null,
-      attempts: null,
-      eventCount: number(row.group_event_count) || 1,
-      rollupKey: null,
-      responseStatus: null,
-      deliveryState: null,
-      sourceUrl: discordUrl(row.conversation_guild_id, row.source_channel_id, row.source_message_id),
-      responseUrl: discordConversationUrl(
-        row.conversation_guild_id,
-        row.delivery_kind,
-        row.delivery_channel_id,
-        row.delivery_message_id,
-      ),
-      responseKind: nullable(row.delivery_kind),
-      hasParent: false,
-      pullRequestUrl: nullable(row.pull_request_url),
-      branchName: null,
-      improvementCaseId: String(row.case_id),
-      relatedImprovementCaseIds: textArray(row.related_case_ids),
-      failureReason: null,
-      events: [],
-    };
-    if (row.event_id != null && group.events.length < 12) group.events.push({
-      id: `improvement-event-${row.event_id}`,
-      name: eventName,
-      level: eventName.endsWith("failed") || eventName.endsWith("stalled") ? "warn" : "info",
-      createdAt: date(row.created_at),
-    });
-    groups.set(key, group);
-  }
-  return [...groups.values()]
-    .sort((left, right) => right.occurredAt.getTime() - left.occurredAt.getTime());
-}
-
 function discordUrl(guildId: unknown, channelId: unknown, messageId: unknown): string | null {
   if (guildId == null || channelId == null || messageId == null) return null;
   return `https://discord.com/channels/${encodeURIComponent(String(guildId))}/${encodeURIComponent(String(channelId))}/${encodeURIComponent(String(messageId))}`;
-}
-function discordConversationUrl(guildId: unknown, deliveryKind: unknown, channelId: unknown, messageId: unknown): string | null {
-  if (channelId == null || messageId == null) return null;
-  const scope = deliveryKind === "dm" ? "@me" : guildId == null ? null : String(guildId);
-  if (scope == null) return null;
-  const encodedScope = scope === "@me" ? scope : encodeURIComponent(scope);
-  return `https://discord.com/channels/${encodedScope}/${encodeURIComponent(String(channelId))}/${encodeURIComponent(String(messageId))}`;
 }

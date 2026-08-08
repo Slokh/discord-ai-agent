@@ -170,6 +170,32 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
     await expect(repo.listImprovementSignalsForReporter({ guildId, reporterId: userId })).resolves.toEqual([]);
   });
 
+  it("removes guild identity and prevents rehydration after privacy deletion", async () => {
+    const guildId = `guild-${randomUUID()}`;
+    const channelId = `channel-${randomUUID()}`;
+    const userId = `user-${randomUUID()}`;
+    await repo.upsertGuild({ id: guildId, name: "privacy" });
+    await repo.upsertChannel({ id: channelId, guildId, name: "general", type: 0 });
+    const message = {
+      id: `message-${randomUUID()}`, guildId, channelId, authorId: userId,
+      authorUsername: "private-user", memberDisplayName: "Private Member",
+      content: "private content", normalizedContent: "private content", createdAt: new Date(),
+    };
+    await repo.upsertMessage(message);
+    await expect(pool.query("SELECT display_name FROM guild_members WHERE user_id = $1", [userId]))
+      .resolves.toMatchObject({ rows: [{ display_name: "Private Member" }] });
+
+    await repo.requestUserDeletion(userId);
+    await repo.upsertMessage({ ...message, content: "rehydrated", normalizedContent: "rehydrated" });
+
+    await expect(pool.query("SELECT * FROM guild_members WHERE user_id = $1", [userId]))
+      .resolves.toMatchObject({ rows: [] });
+    await expect(pool.query("SELECT username,global_name,deleted_at FROM discord_users WHERE id = $1", [userId]))
+      .resolves.toMatchObject({ rows: [{ username: null, global_name: null, deleted_at: expect.any(Date) }] });
+    await expect(pool.query("SELECT content,normalized_content FROM messages WHERE id = $1", [message.id]))
+      .resolves.toMatchObject({ rows: [{ content: "", normalized_content: "" }] });
+  });
+
   it("idempotently coalesces automated detections across observations and revisions", async () => {
     const first = await recordAutomatedImprovementDetection(repo, {
       source: "runtime_detection",

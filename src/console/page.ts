@@ -13,13 +13,14 @@ export const dashboardPage = `<!doctype html>
       <div class="dashboard-title"><h1>Console</h1><div id="environment" class="environment">—</div><div id="revision" class="revision" tabindex="0" aria-describedby="release-tooltip"><span id="revision-text">revision —</span><span id="release-tooltip" class="status-tooltip release-tooltip" role="tooltip"></span></div></div>
       <section class="topbar-system" aria-label="System status">
         <div class="system-segments">
-          <div class="status-segment" tabindex="0" aria-describedby="services-tooltip"><span id="service-summary">— services</span><div id="services-tooltip" class="status-tooltip" role="tooltip"></div></div>
-          <div class="status-segment" tabindex="0" aria-describedby="producers-tooltip"><span id="producer-summary">— producers</span><div id="producers-tooltip" class="status-tooltip" role="tooltip"></div></div>
+          <button class="status-segment" type="button" aria-describedby="services-tooltip"><span id="service-summary">— services</span><div id="services-tooltip" class="status-tooltip" role="tooltip"></div></button>
+          <button class="status-segment" type="button" aria-describedby="producers-tooltip"><span id="producer-summary">— producers</span><div id="producers-tooltip" class="status-tooltip" role="tooltip"></div></button>
         </div>
       </section>
     </header>
 
     <div class="console-content">
+    <div id="console-stale" class="console-stale" role="status" aria-live="polite" hidden></div>
     <div id="dashboard-loading" class="loading-shell overview-loading" role="status" aria-live="polite">
       <span class="sr-only loading-status">Loading production data</span>
       <div class="loading-error" hidden><strong>Production data unavailable</strong><span>The Console will retry automatically.</span></div>
@@ -43,7 +44,7 @@ export const dashboardPage = `<!doctype html>
       <section id="activity-panel" class="panel activity-panel" aria-label="Activity">
         <div class="activity-filter-controls">
           <div class="activity-filters" role="group" aria-label="Filter activity by status"><button type="button" data-activity-filter="all" aria-pressed="true">All <span id="filter-all-count">0</span></button><button type="button" data-activity-filter="running" aria-pressed="false">Running <span id="filter-running-count">0</span></button><button type="button" data-activity-filter="waiting" aria-pressed="false">Waiting <span id="filter-waiting-count">0</span></button><button type="button" data-activity-filter="issues" aria-pressed="false">Issues <span id="filter-issues-count">0</span></button><button type="button" data-activity-filter="done" aria-pressed="false">Done <span id="filter-done-count">0</span></button></div>
-          <div class="activity-type-filter"><span>Type</span><div id="activity-type-menu" class="activity-type-menu"><button id="activity-type-trigger" type="button" aria-haspopup="listbox" aria-expanded="false" aria-controls="activity-type-options"><span id="activity-type-label">All types</span><span class="activity-type-chevron" aria-hidden="true"></span></button><div id="activity-type-options" class="activity-type-options" role="listbox" aria-label="Filter activity by type" hidden><button type="button" role="option" data-activity-type="all" aria-selected="true">All types</button><button type="button" role="option" data-activity-type="conversation" aria-selected="false">Prompts &amp; replies</button><button type="button" role="option" data-activity-type="message" aria-selected="false">Messages</button><button type="button" role="option" data-activity-type="improvement" aria-selected="false">Improvements</button><button type="button" role="option" data-activity-type="code_change" aria-selected="false">Code changes</button><button type="button" role="option" data-activity-type="release" aria-selected="false">Releases</button><button type="button" role="option" data-activity-type="system" aria-selected="false">System</button></div></div></div>
+          <div class="activity-type-filter"><span>Type</span><div id="activity-type-menu" class="activity-type-menu"><button id="activity-type-trigger" type="button" aria-haspopup="listbox" aria-expanded="false" aria-controls="activity-type-options"><span id="activity-type-label">Relevant</span><span class="activity-type-chevron" aria-hidden="true"></span></button><div id="activity-type-options" class="activity-type-options" role="listbox" aria-multiselectable="true" aria-label="Filter activity by type" hidden><button type="button" role="option" data-activity-type="conversation" aria-selected="true">Prompts &amp; replies</button><button type="button" role="option" data-activity-type="improvement" aria-selected="true">Improvements</button><button type="button" role="option" data-activity-type="code_change" aria-selected="true">Code changes</button><button type="button" role="option" data-activity-type="message" aria-selected="false">Messages</button><button type="button" role="option" data-activity-type="release" aria-selected="false">Releases</button><button type="button" role="option" data-activity-type="system" aria-selected="false">System</button></div></div></div>
         </div>
         <div id="activity-scroll" class="activity-scroll"><div id="active-activity" class="active-activity"></div><div id="activity" class="timeline"></div></div>
       </section>
@@ -65,7 +66,7 @@ export const dashboardPage = `<!doctype html>
 </body>
 </html>`;
 
-export function renderDashboardPage(liveReload = false, _detailView = false) {
+export function renderDashboardPage(liveReload = false) {
   const page = dashboardPage;
   if (!liveReload) return page;
   return page.replace(

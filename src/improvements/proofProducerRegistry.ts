@@ -41,9 +41,10 @@ export const IMPROVEMENT_PROOF_PRODUCERS: readonly ImprovementProofProducerPolic
     trigger: "improvement_watchdog",
     mode: "scheduled",
     observedBy: "improvement_reconciliation",
-    // GitHub-scheduled runs can start late; allow two missed 15-minute slots
-    // before declaring the independent watchdog unhealthy.
-    maxSilenceMs: 45 * 60 * 1_000,
+    // GitHub-scheduled runs can start late; retain a full extra interval after
+    // two missed 15-minute slots before declaring the independent watchdog
+    // unhealthy.
+    maxSilenceMs: 60 * 60 * 1_000,
     expectedIntervalMs: 15 * 60 * 1_000,
     maxRunDurationMs: 5 * 60 * 1_000,
     consecutiveFailureThreshold: 2,

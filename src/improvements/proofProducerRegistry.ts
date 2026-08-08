@@ -37,7 +37,9 @@ export const IMPROVEMENT_PROOF_PRODUCERS: readonly ImprovementProofProducerPolic
     source: "runtime_detection",
     summary: "The improvement reconciler is stale, stuck, or repeatedly failing.",
     owningDomain: "improvements",
-    notifyBotChannel: true,
+    // The independently scheduled watchdog records this condition for automated
+    // repair, but must not create a Discord-facing alert for it.
+    notifyBotChannel: false,
   }),
   producer({
     trigger: "improvement_watchdog",

@@ -3,7 +3,7 @@ import type { ImprovementProofProducerHealth } from "../../src/db/improvementPro
 import { recordObservedProofProducerDetections } from "../../src/improvements/producerHealth.js";
 
 describe("improvement producer health observation", () => {
-  it("keeps the reconciler and external watchdog in separate failure domains", async () => {
+  it("keeps the reconciler and external watchdog in separate failure domains without alerting Discord for watchdog detections", async () => {
     const recordImprovementSignal = vi.fn(async () => ({
       case: { caseId: "case-reconciler" },
       signal: { signalId: "signal-reconciler" },
@@ -32,11 +32,7 @@ describe("improvement producer health observation", () => {
         observedBy: "improvement_watchdog",
       }),
     }));
-    expect(enqueueImprovementBotUpdate).toHaveBeenCalledWith(expect.objectContaining({
-      caseId: "case-reconciler",
-      producerTrigger: "improvement_reconciliation",
-      livenessReason: "missed_sla",
-    }));
+    expect(enqueueImprovementBotUpdate).not.toHaveBeenCalled();
 
     recordImprovementSignal.mockClear();
     enqueueImprovementBotUpdate.mockClear();

@@ -1,0 +1,46 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ include "discord-ai-agent.fullname" . }}-improvement-watchdog
+  labels:
+    {{- include "discord-ai-agent.labels" . | nindent 4 }}
+    app.kubernetes.io/component: improvement-watchdog
+spec:
+  schedule: {{ .Values.improvementWatchdog.schedule | quote }}
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: {{ .Values.improvementWatchdog.startingDeadlineSeconds }}
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      activeDeadlineSeconds: {{ .Values.improvementWatchdog.activeDeadlineSeconds }}
+      backoffLimit: 0
+      template:
+        metadata:
+          labels:
+            {{- include "discord-ai-agent.labels" . | nindent 12 }}
+            app.kubernetes.io/component: improvement-watchdog
+        spec:
+          restartPolicy: Never
+          securityContext:
+            {{- toYaml .Values.podSecurityContext | nindent 12 }}
+          serviceAccountName: {{ include "discord-ai-agent.fullname" . }}-worker
+          containers:
+            - name: improvement-watchdog
+              securityContext:
+                {{- toYaml .Values.containerSecurityContext | nindent 16 }}
+              image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+              imagePullPolicy: {{ .Values.image.pullPolicy }}
+              command: ["node", "dist/scripts/improvementWatchdog.js", "--record-detection", "--enforce"]
+              env:
+                {{- include "discord-ai-agent.commonEnv" . | nindent 16 }}
+                {{- include "discord-ai-agent.databaseEnv" . | nindent 16 }}
+                {{- include "discord-ai-agent.discordEnv" . | nindent 16 }}
+                {{- include "discord-ai-agent.openRouterEnv" . | nindent 16 }}
+                {{- include "discord-ai-agent.spotifyEnv" . | nindent 16 }}
+                {{- include "discord-ai-agent.paymentEnv" . | nindent 16 }}
+                {{- include "discord-ai-agent.githubEnv" . | nindent 16 }}
+                {{- include "discord-ai-agent.sandboxCallbackEnv" . | nindent 16 }}
+                {{- include "discord-ai-agent.sandboxLauncherEnv" . | nindent 16 }}
+              resources:
+                {{- toYaml .Values.improvementWatchdog.resources | nindent 16 }}

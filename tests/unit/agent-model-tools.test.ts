@@ -5,9 +5,29 @@ import {
   normalizeOpenRouterModelId,
   setAgentModel,
 } from "../../src/tools/agentModelTools.js";
+import { prepareAgentModelCapability } from "../../src/capabilities/agentModel.js";
 import type { ToolContext } from "../../src/tools/types.js";
 
 describe("agent model settings", () => {
+  it("provides the default, authorized override, and code model as verified routing context", async () => {
+    const ctx = context("member", {
+      getGuildAgentSettings: vi.fn(async () => ({ chatModel: "openai/gpt-5.6-sol" })),
+    });
+    ctx.config = {
+      openRouter: {
+        chatModel: "openai/gpt-5.6-luna",
+        codegenModel: "openai/gpt-5.6-terra",
+      },
+    } as ToolContext["config"];
+
+    const prepared = await prepareAgentModelCapability(ctx);
+
+    expect(prepared.model).toBe("openai/gpt-5.6-sol");
+    expect(prepared.promptContribution?.content).toContain("Configured Discord chat default: `openai/gpt-5.6-luna` (Luna).");
+    expect(prepared.promptContribution?.content).toContain("authorized chat-model override: `openai/gpt-5.6-sol`");
+    expect(prepared.promptContribution?.content).toContain("Configured code-update model: `openai/gpt-5.6-terra` (Terra).");
+  });
+
   it("validates OpenRouter model IDs locally", () => {
     expect(normalizeOpenRouterModelId(" moonshotai/kimi-k3 ")).toBe("moonshotai/kimi-k3");
     expect(normalizeOpenRouterModelId("openai/gpt-5.6:online")).toBe("openai/gpt-5.6:online");

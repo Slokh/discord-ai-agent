@@ -6,7 +6,7 @@ export type ActivityWorkState = "active" | "waiting" | "blocked" | "terminal" | 
 
 export type ActivityStory = {
   id: string;
-  kind: "conversation" | "code_change" | "improvement" | "release" | "system";
+  kind: "conversation" | "code_change" | "improvement" | "release" | "message" | "system";
   category: "product" | "failure" | "system";
   title: string;
   status: string;
@@ -66,13 +66,33 @@ export function deriveOperatorActivity(snapshot: DashboardRecord): { active: Act
   const projected = mergeOpenImprovements(
     correlateImprovementWork(records(snapshot.activity).map(projectRecentStory)),
     records(record(snapshot.improvements).cases),
-  );
+  ).filter((story) => story.rollupKey !== "embedding");
+  const latestMessage = record(snapshot.latestMessage);
+  if (latestMessage.id) projected.push(messageStory(latestMessage));
   for (const deployment of records(snapshot.deployments).slice(0, 3)) projected.push(releaseStory(deployment));
   const rolledUp = rollupSystemStories(projected);
   const sorted = rolledUp.sort((left, right) => timestamp(right.occurredAt) - timestamp(left.occurredAt));
   return foldActiveImprovementWork({
-    active: active.sort((left, right) => timestamp(right.occurredAt) - timestamp(left.occurredAt)),
+    active: active.filter((story) => story.rollupKey !== "embedding")
+      .sort((left, right) => timestamp(right.occurredAt) - timestamp(left.occurredAt)),
     recent: sorted,
+  });
+}
+
+function messageStory(message: DashboardRecord): ActivityStory {
+  const embedded = Boolean(message.embedded);
+  return storyDefaults({
+    id: "message-latest",
+    kind: "message",
+    category: "system",
+    title: string(message.preview, "Message content unavailable"),
+    status: embedded ? "embedded" : "not_embedded",
+    tone: embedded ? "success" : "warning",
+    workState: embedded ? "terminal" : "waiting",
+    summary: embedded ? "Embedded" : "Not embedded",
+    occurredAt: message.createdAt,
+    startedAt: message.createdAt,
+    sourceUrl: nullableString(message.sourceUrl),
   });
 }
 
@@ -531,8 +551,8 @@ export function improvementMilestone(eventName: string): string {
 
 function systemRollupTitle(key: string): string {
   const labels: Record<string, string> = {
-    embedding: "Embedding jobs", discord_crawl: "Discord crawls",
-    reminder_delivery: "Reminder deliveries", improvement_report: "Improvement assessments",
+    discord_crawl: "Discord crawls", reminder_delivery: "Reminder deliveries",
+    improvement_report: "Improvement assessments",
   };
   return labels[key] ?? `${humanize(key)} jobs`;
 }

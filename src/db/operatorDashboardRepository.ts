@@ -1,8 +1,8 @@
 import type { DbPool } from "./pool.js";
 import { deriveOperatorActivity } from "../console/activity.js";
-import { embeddingActivityDetail, releaseActivityDetail } from "./operatorActivityDetailRepository.js";
+import { releaseActivityDetail } from "./operatorActivityDetailRepository.js";
+import { latestMessageActivity, messageActivityDetail } from "./operatorMessageActivityRepository.js";
 const COMPONENTS = ["bot", "worker", "api", "console"] as const;
-
 export class OperatorDashboardRepository {
   constructor(private readonly pool: DbPool) {}
 
@@ -24,9 +24,9 @@ export class OperatorDashboardRepository {
       const deployment = snapshot.deployments.find((candidate) => `release-${candidate.deploymentId}` === input.id);
       return deployment ? { ...detail, release: await releaseActivityDetail(this.pool, deployment) } : detail;
     }
-    if (input.kind === "system" && story.rollupKey === "embedding") {
-      return { ...detail, embedding: await embeddingActivityDetail(this.pool) };
-    }
+    if (input.kind === "message" && input.id === "message-latest") return {
+      ...detail, message: await messageActivityDetail(this.pool, String(snapshot.latestMessage?.id)),
+    };
     if (input.kind !== "conversation") return detail;
     const executionId = executionIdFromActivityId(input.id);
     if (!executionId) return { ...detail, messages: [] };
@@ -186,7 +186,7 @@ export class OperatorDashboardRepository {
         [now],
       )
       : Promise.resolve({ rows: [] });
-    const [heartbeats, executions, tasks, cases, caseCounts, runtimeEvents, taskEvents, caseEvents, deployments, producers] = await Promise.all([
+    const [heartbeats, executions, tasks, cases, caseCounts, runtimeEvents, taskEvents, caseEvents, deployments, producers, latestMessages] = await Promise.all([
       heartbeatQuery,
       this.pool.query(
         `SELECT execution.execution_id,execution.session_id,execution.task_id,execution.status,
@@ -377,6 +377,7 @@ export class OperatorDashboardRepository {
            ORDER BY candidate.started_at DESC,candidate.run_id DESC LIMIT 1
          ) run ON true ORDER BY producer.trigger`,
       ),
+      latestMessageActivity(this.pool),
     ]);
 
     const heartbeatRows = heartbeats.rows.map((row) => ({
@@ -414,7 +415,6 @@ export class OperatorDashboardRepository {
       pullRequestUrl: nullable(row.pull_request_url), workStatus: nullable(row.work_status),
     }));
     const activities = projectActivitySources(runtimeEvents.rows, taskEvents.rows, caseEvents.rows);
-
     return {
       generatedAt: now,
       revision: input.revision,
@@ -453,6 +453,7 @@ export class OperatorDashboardRepository {
         createdAt: date(row.created_at), startedAt: nullableDate(row.started_at), updatedAt: date(row.updated_at),
       })),
       improvements: { counts: improvementCounts, cases: improvementRows },
+      latestMessage: latestMessages,
       deployments: deployments.rows.map((row) => ({
         revision: String(row.revision), deploymentId: String(row.deployment_id), verifiedAt: date(row.verified_at),
       })),
@@ -741,7 +742,6 @@ function discordUrl(guildId: unknown, channelId: unknown, messageId: unknown): s
   if (guildId == null || channelId == null || messageId == null) return null;
   return `https://discord.com/channels/${encodeURIComponent(String(guildId))}/${encodeURIComponent(String(channelId))}/${encodeURIComponent(String(messageId))}`;
 }
-
 function discordConversationUrl(guildId: unknown, deliveryKind: unknown, channelId: unknown, messageId: unknown): string | null {
   if (channelId == null || messageId == null) return null;
   const scope = deliveryKind === "dm" ? "@me" : guildId == null ? null : String(guildId);

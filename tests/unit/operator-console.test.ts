@@ -78,6 +78,7 @@ describe("operator console", () => {
     expect(pageHtml).toContain('id="activity-type-trigger" type="button" aria-haspopup="listbox"');
     expect(pageHtml).toContain('id="activity-type-options" class="activity-type-options" role="listbox" aria-label="Filter activity by type" hidden');
     expect(pageHtml).toContain("Prompts &amp; replies");
+    expect(pageHtml).toContain("Messages");
     expect(pageHtml).not.toContain('id="activity-search-trigger"');
     expect(pageHtml).not.toContain('class="command-trigger"');
     expect(pageHtml).toContain('id="activity-search" class="activity-search" aria-labelledby="activity-search-title"');
@@ -159,7 +160,7 @@ describe("operator console", () => {
     expect(clientScript).toContain('aria-hidden="true"');
     expect(clientScript).toContain('datetime="');
     expect(clientScript).toContain('activityFilter=["all","running","waiting","blocked","failed","done"]');
-    expect(clientScript).toContain('activityType=["all","conversation","improvement","code_change","release","system"]');
+    expect(clientScript).toContain('activityType=["all","conversation","message","improvement","code_change","release","system"]');
     expect(clientScript).toContain("renderActivityDetail");
     expect(clientScript).toContain("detailLoadingShell");
     expect(clientScript).toContain('view.classList.add("is-switching")');
@@ -225,12 +226,14 @@ describe("operator console", () => {
     expect(clientScript).toContain("storyTiming(story,active)");
     expect(clientScript).toContain("const detailMetrics=");
     expect(clientScript).toContain("const detailSpecialLinks=");
-    expect(clientScript).toContain("const embeddingModels=");
+    expect(clientScript).toContain("const messageDetail=");
+    expect(clientScript).toContain('story.kind==="message"?"Message":story.title');
     expect(clientScript).toContain('type:"check"');
-    expect(clientScript).toContain('type:"batch"');
+    expect(clientScript).not.toContain('type:"batch"');
     expect(stylesheetText).toContain(".detail-hero .detail-metrics.metrics-5{grid-template-columns:repeat(5,minmax(0,1fr))}");
     expect(stylesheetText).toContain(".detail-hero .detail-metrics.metrics-6{grid-template-columns:repeat(6,minmax(0,1fr))}");
-    expect(stylesheetText).toContain(".inventory-list");
+    expect(stylesheetText).toContain(".badge.embedded");
+    expect(stylesheetText).toContain(".badge.not_embedded");
     expect(clientScript).not.toContain('detailMetric("Status"');
     expect(clientScript).toContain("const traceItems=");
     expect(clientScript).toContain('id="trace-toggle"');

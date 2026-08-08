@@ -67,66 +67,6 @@ export async function releaseActivityDetail(
   };
 }
 
-export async function embeddingActivityDetail(pool: DbPool) {
-  const [runs, eligible, models] = await Promise.all([
-    pool.query(
-      `SELECT execution.execution_id,execution.status,
-              coalesce(nullif(execution.metadata->>'title',''),session.title) AS title,
-              execution.started_at,execution.completed_at,execution.updated_at,
-              execution.metadata->>'messageCount' AS message_count,
-              execution.metadata->>'jobCount' AS job_count,
-              count(event.id)::int AS event_count,
-              count(event.id) FILTER (WHERE event.level IN ('warn','error'))::int AS warning_count
-       FROM agent_runtime_executions execution
-       JOIN agent_runtime_sessions session USING (session_id)
-       LEFT JOIN agent_runtime_events event USING (execution_id)
-       WHERE coalesce(nullif(execution.metadata->>'jobKind',''),nullif(session.metadata->>'jobKind','')) = 'embedding'
-         AND execution.updated_at >= now() - interval '24 hours'
-       GROUP BY execution.execution_id,session.title
-       ORDER BY execution.updated_at DESC
-       LIMIT 50`,
-    ),
-    pool.query(
-      `SELECT count(*)::int AS eligible
-       FROM messages
-       WHERE deleted_at IS NULL AND normalized_content <> ''`,
-    ),
-    pool.query(
-      `SELECT model,dimensions,input_version,count(*)::int AS count,max(embedded_at) AS latest_embedded_at,
-              sum(count(*)) OVER ()::int AS total_embedded,
-              max(max(embedded_at)) OVER () AS overall_latest_embedded_at
-       FROM message_embeddings
-       GROUP BY model,dimensions,input_version
-       ORDER BY count(*) DESC,model ASC
-       LIMIT 5`,
-    ),
-  ]);
-  const eligibleCount = number(eligible.rows[0]?.eligible);
-  const embeddedCount = number(models.rows[0]?.total_embedded);
-  return {
-    coverage: {
-      eligible: eligibleCount, embedded: embeddedCount,
-      unembedded: Math.max(0, eligibleCount - embeddedCount),
-      latestEmbeddedAt: nullableDate(models.rows[0]?.overall_latest_embedded_at),
-    },
-    models: models.rows.map((row) => ({
-      model: String(row.model), dimensions: number(row.dimensions), inputVersion: number(row.input_version),
-      count: number(row.count), latestEmbeddedAt: nullableDate(row.latest_embedded_at),
-    })),
-    runs: runs.rows.map((row) => {
-      const startedAt = nullableDate(row.started_at);
-      const completedAt = nullableDate(row.completed_at ?? row.updated_at);
-      return {
-        executionId: String(row.execution_id), title: String(row.title), status: String(row.status),
-        messageCount: number(row.message_count), jobCount: number(row.job_count),
-        eventCount: number(row.event_count), warningCount: number(row.warning_count),
-        startedAt, completedAt,
-        durationMs: startedAt && completedAt ? Math.max(0, completedAt.getTime() - startedAt.getTime()) : null,
-      };
-    }),
-  };
-}
-
 function nullable(value: unknown): string | null {
   return value == null ? null : String(value);
 }

@@ -3,6 +3,7 @@ import { existsSync } from "node:fs";
 import { z } from "zod";
 import { parseGitHubRepository } from "../github/repository.js";
 import { assertNoRetiredEnvironmentVariables, environmentVariableNames } from "./environment.js";
+import { CONSOLE_PUBLIC_URL } from "../console/constants.js";
 
 type ProcessRole = "all" | "api" | "bot" | "worker" | "console";
 const PUBLIC_REPOSITORY_URL = "https://github.com/Slokh/discord-ai-agent";
@@ -36,7 +37,7 @@ export const productConfig = {
     port: 8_080,
     internalUrl: "http://discord-ai-agent-api:8080"
   },
-  console: { host: "0.0.0.0", port: 8_081 },
+  console: { host: "0.0.0.0", port: 8_081, publicUrl: CONSOLE_PUBLIC_URL },
   sandbox: {
     namespace: "discord-ai-agent",
     image: "discord-ai-agent-sandbox:latest",
@@ -75,6 +76,7 @@ const envSchema = z.object({
 
   DISCORD_TOKEN: z.string().optional(),
   DISCORD_CLIENT_ID: z.string().trim().default(""),
+  DISCORD_CLIENT_SECRET: z.string().trim().default(""),
   DISCORD_GUILD_ID: z.string().trim().default(""),
   DISCORD_PREMIUM_SKU_IDS: z.string().trim().default("").refine(
     (value) => value === "" || value.split(",").every((id) => /^\d{17,20}$/.test(id.trim())),
@@ -88,6 +90,10 @@ const envSchema = z.object({
   GITHUB_APP_PRIVATE_KEY: z.string().default(""),
   GITHUB_APP_INSTALLATION_ID: z.string().trim().default(""),
   TASK_SIGNING_SECRET: z.string().default(""),
+  CONSOLE_SESSION_SECRET: z.string().trim().default("").refine(
+    (value) => value === "" || value.length >= 32,
+    "CONSOLE_SESSION_SECRET must contain at least 32 characters.",
+  ),
 
   BOT_OWNER_USER_ID: z.string().trim().default(""),
   OPS_ALLOWLIST_USER_IDS: z.string().default(""),
@@ -139,6 +145,7 @@ export function loadConfig(argv = process.argv) {
     discord: {
       token: env.DISCORD_TOKEN,
       clientId: env.DISCORD_CLIENT_ID,
+      clientSecret: env.DISCORD_CLIENT_SECRET,
       guildId: env.DISCORD_GUILD_ID,
       botChannelId: env.DISCORD_BOT_CHANNEL_ID || null,
       botName: productConfig.discord.botName,
@@ -169,6 +176,13 @@ export function loadConfig(argv = process.argv) {
     },
     callbackServer: { host: productConfig.callback.host, port: productConfig.callback.port },
     consoleServer: { host: productConfig.console.host, port: productConfig.console.port },
+    consoleAuth: {
+      publicUrl: productConfig.console.publicUrl,
+      clientId: env.DISCORD_CLIENT_ID,
+      clientSecret: env.DISCORD_CLIENT_SECRET,
+      guildId: env.DISCORD_GUILD_ID,
+      sessionSecret: env.CONSOLE_SESSION_SECRET,
+    },
     execution: {
       taskSigningSecret: env.TASK_SIGNING_SECRET,
       sandbox: { taskTimeoutSeconds: productConfig.sandbox.taskTimeoutSeconds },
@@ -257,6 +271,20 @@ export function assertDiscordConfig(config: AppConfig): asserts config is AppCon
     ["DISCORD_GUILD_ID", config.discord.guildId]
   ].filter(([, value]) => !value);
   if (missing.length > 0) throw new Error(`Missing required Discord secret/config values: ${missing.map(([name]) => name).join(", ")}`);
+}
+
+export function assertConsoleAuthConfig(config: AppConfig): asserts config is AppConfig & {
+  consoleAuth: { publicUrl: string; clientId: string; clientSecret: string; guildId: string; sessionSecret: string };
+} {
+  const missing = [
+    ["DISCORD_CLIENT_ID", config.consoleAuth.clientId],
+    ["DISCORD_CLIENT_SECRET", config.consoleAuth.clientSecret],
+    ["DISCORD_GUILD_ID", config.consoleAuth.guildId],
+    ["CONSOLE_SESSION_SECRET", config.consoleAuth.sessionSecret],
+  ].filter(([, value]) => !value);
+  if (missing.length > 0) {
+    throw new Error(`Missing required Console authentication values: ${missing.map(([name]) => name).join(", ")}`);
+  }
 }
 
 export function missingPaymentConfig(config: AppConfig): string[] {

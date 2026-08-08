@@ -26,6 +26,7 @@ jobs:
       HELM_RELEASE: ${{ vars.HELM_RELEASE || 'discord-ai-agent' }}
       K8S_NAMESPACE: ${{ vars.K8S_NAMESPACE || 'discord-ai-agent' }}
       DISCORD_BOT_CHANNEL_ID: ${{ vars.DISCORD_BOT_CHANNEL_ID }}
+      CONSOLE_TUNNEL_ENABLED: ${{ vars.CONSOLE_TUNNEL_ENABLED }}
       IMAGE_TAG: ${{ inputs.image_tag }}
     steps:
       - uses: aws-actions/configure-aws-credentials@v6
@@ -71,6 +72,9 @@ jobs:
           fi
           if [ -n "${DISCORD_BOT_CHANNEL_ID:-}" ]; then
             helm_args+=(--set-string "config.botChannelId=$DISCORD_BOT_CHANNEL_ID")
+          fi
+          if [ "${CONSOLE_TUNNEL_ENABLED:-}" = "true" ]; then
+            helm_args+=(--set "console.tunnel.enabled=true")
           fi
           helm upgrade --install "$HELM_RELEASE" deploy/helm/discord-ai-agent \
             --rollback-on-failure \

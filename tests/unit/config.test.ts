@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { assertExecutionConfig, assertOpenRouterConfig, assertPaymentConfig, loadConfig, productConfig } from "../../src/config/env.js";
+import { assertConsoleAuthConfig, assertExecutionConfig, assertOpenRouterConfig, assertPaymentConfig, loadConfig, productConfig } from "../../src/config/env.js";
 
 describe("config", () => {
   it("keeps stable product and architecture choices in source", () => {
@@ -17,6 +17,13 @@ describe("config", () => {
         agentPromptMaxConcurrency: 4
       }));
       expect(config.discord).toEqual(expect.objectContaining({ botName: "ai", loadingReaction: "⏳", premiumSkuIds: [] }));
+      expect(config.consoleAuth).toEqual({
+        publicUrl: "https://console.mindcool.dev",
+        clientId: "",
+        clientSecret: "",
+        guildId: "",
+        sessionSecret: "",
+      });
       expect(config.openRouter).toEqual(expect.objectContaining({
         chatModel: "openai/gpt-5.6-luna",
         codegenModel: "openai/gpt-5.6-terra",
@@ -106,6 +113,7 @@ describe("config", () => {
       const config = loadConfig();
       expect(() => assertOpenRouterConfig(config)).toThrow(/OPENROUTER_API_KEY/);
       expect(() => assertExecutionConfig(config)).toThrow(/TASK_SIGNING_SECRET/);
+      expect(() => assertConsoleAuthConfig(config)).toThrow(/DISCORD_CLIENT_SECRET.*CONSOLE_SESSION_SECRET/);
     });
   });
 
@@ -125,6 +133,8 @@ function withCleanEnv(callback: () => void) {
     PREVIOUS_APP_REVISION: "",
     DISCORD_BOT_CHANNEL_ID: "",
     DISCORD_PREMIUM_SKU_IDS: "",
+    DISCORD_CLIENT_SECRET: "",
+    CONSOLE_SESSION_SECRET: "",
     PRIVY_APP_ID: "",
     PRIVY_APP_SECRET: "",
     POD_NAMESPACE: "",

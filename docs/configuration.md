@@ -11,11 +11,13 @@ Production startup rejects retired variables so old deployment settings cannot s
 | Variable | Required for | Secret | Purpose |
 | --- | --- | --- | --- |
 | `DISCORD_TOKEN` | Discord bot and worker roles | yes | Discord bot token. |
-| `DISCORD_CLIENT_ID` | Discord bot and worker roles | no | Discord application ID. |
-| `DISCORD_GUILD_ID` | Discord bot and worker roles | no | Private community guild ID. |
+| `DISCORD_CLIENT_ID` | Discord bot, worker, and hosted Console roles | no | Discord application ID. |
+| `DISCORD_CLIENT_SECRET` | hosted Console authentication | yes | Discord OAuth client secret. |
+| `DISCORD_GUILD_ID` | Discord bot, worker, and hosted Console roles | no | Private community guild ID. |
 | `DATABASE_URL` | all roles | yes | Postgres connection string with pgvector available. |
 | `OPENROUTER_API_KEY` | agent execution | yes | OpenRouter credential for model and provider-backed tools. |
 | `TASK_SIGNING_SECRET` | code updates | yes | Shared HMAC secret for isolated task callbacks. |
+| `CONSOLE_SESSION_SECRET` | hosted Console authentication | yes | HMAC secret for hosted Console sessions and OAuth state. |
 | `GITHUB_TOKEN` | code updates (token mode) | yes | GitHub token used for code-update publication when an App is not configured. |
 | `GITHUB_APP_ID` | code updates (App mode) | no | GitHub App ID. |
 | `GITHUB_APP_PRIVATE_KEY` | code updates (App mode) | yes | GitHub App private key. |

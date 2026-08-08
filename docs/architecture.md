@@ -11,9 +11,9 @@ The application is TypeScript on Node.js 22 with Postgres, pgvector, Discord, Op
 | `bot` | Discord gateway events, ingress, reactions, delivery, component interactions, deployment announcements, and task notifications |
 | `worker` | Agent executions, crawl and embedding jobs, reminder and scheduled-request delivery, code-update jobs, reconciliation, compaction, and retention |
 | `api` | Internal signed sandbox callbacks and health probe |
-| `console` | Private read-only operator dashboard and health probe |
+| `console` | Discord-authenticated read-only operator dashboard and public health probe |
 
-`all` starts all roles for a fully configured single-process environment. Production normally splits them. Chat requires the bot plus a worker with agent-runtime work enabled. Code updates also require task work and the API callback surface. The console reads Postgres but does not start queues, Discord, model, or mutation capabilities.
+`all` starts all roles for a fully configured single-process environment. Production normally splits them. Chat requires the bot plus a worker with agent-runtime work enabled. Code updates also require task work and the API callback surface. The Console reads Postgres but does not start queues, a Discord gateway, models, or mutation capabilities. Its production HTTP surface is carried through an outbound Cloudflare Tunnel and requires a signed session created only after Discord OAuth confirms membership in the configured guild; local loopback development bypasses that hosted boundary.
 
 ```text
 Discord message

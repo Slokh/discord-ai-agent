@@ -1,8 +1,9 @@
 import { brotliCompressSync, constants as zlibConstants, gzipSync } from "node:zlib";
 import { createServer, type IncomingMessage, type Server } from "node:http";
-import type { AppConfig } from "../config/env.js";
+import { assertConsoleAuthConfig, type AppConfig } from "../config/env.js";
 import { logger } from "../util/logger.js";
 import { deriveOperatorActivity, retainOpenImprovementActivity, summarizeOperatorActivity, type ActivitySummary } from "./activity.js";
+import { createDiscordConsoleAuthenticator, type ConsoleAuthenticator } from "./auth.js";
 import { dashboardClient } from "./client.js";
 import { renderDashboardPage } from "./page.js";
 import { dashboardReloadClient } from "./reloadClient.js";
@@ -29,7 +30,13 @@ export async function startOperatorConsole(input: {
   repository: DashboardSnapshotSource;
   sourceEnvironment?: AppConfig["nodeEnv"];
   liveReload?: boolean;
+  authenticator?: ConsoleAuthenticator | null;
+  allowLoopbackAuthBypass?: boolean;
 }): Promise<{ close: () => Promise<void>; server: Server }> {
+  if (input.config.nodeEnv === "production") assertConsoleAuthConfig(input.config);
+  const authenticator = input.authenticator === undefined
+    ? input.config.nodeEnv === "production" ? createDiscordConsoleAuthenticator(input.config.consoleAuth) : null
+    : input.authenticator;
   const reloadClients = new Set<import("node:http").ServerResponse>();
   let projectionInFlight: Promise<ConsoleProjection> | null = null;
   const activityDetailInFlight = new Map<string, Promise<Record<string, unknown> | null>>();
@@ -39,6 +46,22 @@ export async function startOperatorConsole(input: {
       const path = url.pathname;
       if (request.method !== "GET") return send(response, 405, "text/plain; charset=utf-8", "Method not allowed");
       if (path === "/healthz") return send(response, 200, "application/json; charset=utf-8", JSON.stringify({ ok: true }));
+      const loopbackBypass = input.allowLoopbackAuthBypass !== false && isLoopback(request.socket.remoteAddress);
+      if (authenticator && !loopbackBypass) {
+        const auth = await authenticator.authorize(request, response, url);
+        if (auth === "handled") return;
+        if (auth === "unauthorized") {
+          if (path.startsWith("/api/")) {
+            return send(response, 401, "application/json; charset=utf-8", JSON.stringify({ error: "authentication_required" }));
+          }
+          const returnTo = path === "/" || path === "/index.html" || /^\/activity\/[^/]+\/[^/]+$/.test(path)
+            ? `${path}${url.search}`
+            : "/";
+          response.writeHead(302, { ...SECURITY_HEADERS, Location: `/auth/login?returnTo=${encodeURIComponent(returnTo)}`, "Content-Length": 0 });
+          response.end();
+          return;
+        }
+      }
       if (path === "/api/overview") {
         const startedAt = performance.now();
         const overview = input.repository.overview
@@ -130,6 +153,10 @@ export async function startOperatorConsole(input: {
       return new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
     },
   };
+}
+
+function isLoopback(address: string | undefined) {
+  return address === "127.0.0.1" || address === "::1" || address === "::ffff:127.0.0.1";
 }
 
 type ConsoleProjection = {

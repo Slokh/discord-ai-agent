@@ -86,6 +86,10 @@ describe.skipIf(!runDbTests)("operator dashboard database projection", () => {
     );
     await pool.query(`INSERT INTO guilds(id,name) VALUES ('guild-a','Test guild')`);
     await pool.query(
+      `INSERT INTO channels(id,guild_id,name,type,is_thread,is_excluded)
+       VALUES ('channel-a','guild-a','general',0,false,false)`,
+    );
+    await pool.query(
       `INSERT INTO discord_users(id,username,global_name,is_bot) VALUES
          ('member-a','member-a','Member A',false),
          ('assistant-a','assistant-a','Assistant',true)`,
@@ -102,6 +106,10 @@ describe.skipIf(!runDbTests)("operator dashboard database projection", () => {
     await pool.query(
       `INSERT INTO attachments(id,message_id,url,filename,content_type,size_bytes)
        VALUES ('attachment-a','attachment-only','https://cdn.example.test/file.png','file.png','image/png',2048)`,
+    );
+    await pool.query(
+      `INSERT INTO message_embeddings(message_id,embedding,model,dimensions,input_version,input_text,embedded_at)
+       VALUES ('source-b',array_fill(0::real,ARRAY[1536])::vector,'text-embedding-3-small',1536,2,'Current member prompt',now())`,
     );
     await pool.query(
       `INSERT INTO agent_runtime_messages(message_id,session_id,client_message_id,role,parts,metadata,created_at) VALUES
@@ -187,6 +195,10 @@ describe.skipIf(!runDbTests)("operator dashboard database projection", () => {
     expect(snapshot.improvements.cases[0]).toMatchObject({ caseId: "imp-dashboard", automationState: "blocked", pullRequestUrl: "https://github.com/owner/repo/pull/1" });
     expect(snapshot.deployments[0]).toMatchObject({ revision: "revision-a", deploymentId: "deployment-a" });
     expect(snapshot.producers).toHaveLength(5);
+    expect(snapshot.latestMessage).toMatchObject({
+      id: "source-b", preview: "Current member prompt", embedded: true,
+      sourceUrl: "https://discord.com/channels/guild-a/channel-a/source-b",
+    });
     expect(snapshot.activity.map((story) => story.kind)).toEqual(expect.arrayContaining(["runtime", "improvement"]));
     expect(snapshot.activity.filter((story) => story.kind === "runtime")).toHaveLength(2);
     expect(JSON.stringify({ executions: snapshot.executions, tasks: snapshot.tasks, activity: snapshot.activity })).not.toContain("canary");
@@ -260,19 +272,23 @@ describe.skipIf(!runDbTests)("operator dashboard database projection", () => {
       },
     });
 
-    const embedding = await new OperatorDashboardRepository(pool).activityDetail({
-      kind: "system", id: "system-rollup-embedding", revision: "revision-a",
+    const message = await new OperatorDashboardRepository(pool).activityDetail({
+      kind: "message", id: "message-latest", revision: "revision-a",
     });
-    expect(embedding).toMatchObject({
-      story: { kind: "system", rollupKey: "embedding", runCount: 2 },
-      embedding: {
-        coverage: { embedded: 0, unembedded: expect.any(Number) },
-        runs: [
-          expect.objectContaining({ executionId: "embedding-b", messageCount: 5, jobCount: 5, status: "succeeded" }),
-          expect.objectContaining({ executionId: "embedding-a", messageCount: 3, jobCount: 3, status: "succeeded" }),
-        ],
+    expect(message).toMatchObject({
+      story: { kind: "message", id: "message-latest", status: "embedded", title: "Current member prompt" },
+      message: {
+        id: "source-b", content: "Current member prompt", embedded: true,
+        model: "text-embedding-3-small", dimensions: 1536, inputVersion: 2,
       },
     });
+    const projectedActivity = deriveOperatorActivity(snapshot);
+    expect(projectedActivity.recent).toContainEqual(expect.objectContaining({
+      kind: "message", id: "message-latest", status: "embedded",
+    }));
+    expect(projectedActivity.active.concat(projectedActivity.recent)).not.toContainEqual(
+      expect.objectContaining({ rollupKey: "embedding" }),
+    );
 
     const improvement = await new OperatorDashboardRepository(pool).activityDetail({
       kind: "improvement",

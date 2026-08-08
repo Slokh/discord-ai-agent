@@ -107,9 +107,14 @@ describe("operator activity story projection", () => {
     expect(result.active[0]).toMatchObject({ kind: "system", category: "system", tone: "active" });
   });
 
-  it("rolls up repeated successful system jobs while preserving failed runs", () => {
+  it("replaces embedding job rollups with the latest concrete message", () => {
     const result = deriveOperatorActivity({
       executions: [], tasks: [], deployments: [],
+      latestMessage: {
+        id: "message-a", preview: "A retained Discord message", embedded: false,
+        createdAt: "2026-08-06T12:04:00.000Z",
+        sourceUrl: "https://discord.com/channels/guild/channel/message-a",
+      },
       activity: [
         { id: "embed-1", kind: "system", title: "Embedding batch", rollupKey: "embedding", status: "succeeded", durationMs: 10_000, occurredAt: "2026-08-06T12:03:00.000Z", events: [] },
         { id: "embed-2", kind: "system", title: "Embedding batch", rollupKey: "embedding", status: "succeeded", durationMs: 30_000, occurredAt: "2026-08-06T12:02:00.000Z", events: [] },
@@ -117,11 +122,12 @@ describe("operator activity story projection", () => {
       ],
     });
 
-    expect(result.recent).toHaveLength(2);
-    expect(result.recent.find((story) => story.id === "system-rollup-embedding")).toMatchObject({
-      title: "Embedding jobs", runCount: 2, successCount: 2, failureCount: 0, p95DurationMs: 30_000,
+    expect(result.recent).toHaveLength(1);
+    expect(result.recent[0]).toMatchObject({
+      id: "message-latest", kind: "message", title: "A retained Discord message",
+      status: "not_embedded", tone: "warning", workState: "waiting",
     });
-    expect(result.recent.find((story) => story.id === "embed-failed")).toMatchObject({ tone: "danger", summary: "Background work failed" });
+    expect(JSON.stringify(result)).not.toContain("Embedding jobs");
   });
 
   it("keeps every eligible story instead of applying a final category ceiling", () => {

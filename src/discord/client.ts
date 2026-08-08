@@ -156,8 +156,8 @@ export function createDiscordAiAgentBot(input: {
         const fetched = newMessage.partial ? await newMessage.fetch() : newMessage;
         if (fetched.inGuild()) {
           if (!shouldProcessGuildEvent(input.config.discord.guildId, fetched.guildId)) return;
-          if (isSelfMessage(fetched as Message, client.user?.id)) return;
           await persistDiscordMessage(input.repo, fetched as Message);
+          if (isSelfMessage(fetched as Message, client.user?.id)) return;
           queueIncomingMessageEmbedding(input, fetched as Message, client.user?.id, "message_update");
         }
       } catch (error) {

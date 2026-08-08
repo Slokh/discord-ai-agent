@@ -14,7 +14,6 @@ export type ImprovementProofProducerPolicy = {
   expectedIntervalMs: number | null;
   maxRunDurationMs: number;
   consecutiveFailureThreshold: number;
-  notifyBotChannel: boolean;
   detector: {
     source: AutomatedImprovementSource;
     reference: string;
@@ -37,7 +36,6 @@ export const IMPROVEMENT_PROOF_PRODUCERS: readonly ImprovementProofProducerPolic
     source: "runtime_detection",
     summary: "The improvement reconciler is stale, stuck, or repeatedly failing.",
     owningDomain: "improvements",
-    notifyBotChannel: true,
   }),
   producer({
     trigger: "improvement_watchdog",
@@ -52,7 +50,6 @@ export const IMPROVEMENT_PROOF_PRODUCERS: readonly ImprovementProofProducerPolic
     source: "runtime_detection",
     summary: "The external improvement watchdog is stale, stuck, or repeatedly failing.",
     owningDomain: "operations",
-    notifyBotChannel: true,
   }),
   producer({
     trigger: "release_promotion",
@@ -65,7 +62,6 @@ export const IMPROVEMENT_PROOF_PRODUCERS: readonly ImprovementProofProducerPolic
     source: "deployment_detection",
     summary: "The release-promotion proof producer failed before recording deployment proof.",
     owningDomain: "deployment",
-    notifyBotChannel: false,
   }),
   producer({
     trigger: "post_deploy_private_replay",
@@ -78,7 +74,6 @@ export const IMPROVEMENT_PROOF_PRODUCERS: readonly ImprovementProofProducerPolic
     source: "eval_detection",
     summary: "The private-replay proof producer is stale or repeatedly failing.",
     owningDomain: "evals",
-    notifyBotChannel: false,
   }),
   producer({
     trigger: "production_observation",
@@ -91,7 +86,6 @@ export const IMPROVEMENT_PROOF_PRODUCERS: readonly ImprovementProofProducerPolic
     source: "runtime_detection",
     summary: "The production-observation proof producer is stale or repeatedly failing.",
     owningDomain: "observability",
-    notifyBotChannel: false,
   }),
 ]);
 
@@ -118,7 +112,6 @@ function producer(input: {
   source: AutomatedImprovementSource;
   summary: string;
   owningDomain: string;
-  notifyBotChannel: boolean;
 }): ImprovementProofProducerPolicy {
   return Object.freeze({
     trigger: input.trigger,
@@ -128,7 +121,6 @@ function producer(input: {
     expectedIntervalMs: input.expectedIntervalMs,
     maxRunDurationMs: input.maxRunDurationMs,
     consecutiveFailureThreshold: input.consecutiveFailureThreshold,
-    notifyBotChannel: input.notifyBotChannel,
     detector: {
       source: input.source,
       reference: improvementProofProducerReference(input.trigger),

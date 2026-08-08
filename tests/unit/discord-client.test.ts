@@ -13,6 +13,7 @@ import {
   stripBotAddress
 } from "../../src/discord/mentionParsing.js";
 import { handleUndoCrossReaction, persistReactionMessage } from "../../src/discord/reactions.js";
+import { handleMessageCreate } from "../../src/discord/messageIngress.js";
 
 describe("isSelfMessage", () => {
   it("detects messages authored by the current bot user", () => {
@@ -22,6 +23,24 @@ describe("isSelfMessage", () => {
 
   it("does not skip messages when the bot user id is not known yet", () => {
     expect(isSelfMessage({ author: { id: "bot" } } as any, undefined)).toBe(false);
+  });
+});
+
+describe("bot-authored message archiving", () => {
+  it("archives the bot's own message without treating it as an agent request", async () => {
+    const repo = fakeRepo();
+    const message = fakeGuildBotReplyMessage("guild-a", "bot-1", "outbound-1");
+
+    await handleMessageCreate(
+      { config: { discord: { guildId: "guild-a" } } as any, repo: repo as any } as any,
+      { user: { id: "bot-1" } } as any,
+      message as any,
+    );
+
+    expect(repo.upsertMessage).toHaveBeenCalledWith(expect.objectContaining({
+      id: "outbound-1",
+      authorId: "bot-1",
+    }));
   });
 });
 

@@ -10,7 +10,6 @@ describe("improvement producer health observation", () => {
       signalCreated: true,
       caseCreated: true,
     }));
-    const enqueueImprovementBotUpdate = vi.fn(async () => ({ updateId: "update-1" }));
     const health = [
       unhealthy("improvement_reconciliation"),
       unhealthy("improvement_watchdog"),
@@ -18,7 +17,7 @@ describe("improvement producer health observation", () => {
     ];
 
     const external = await recordObservedProofProducerDetections({
-      repo: { recordImprovementSignal, enqueueImprovementBotUpdate } as never,
+      repo: { recordImprovementSignal } as never,
       health,
       appRevision: "revision-a",
       observer: "improvement_watchdog",
@@ -32,24 +31,15 @@ describe("improvement producer health observation", () => {
         observedBy: "improvement_watchdog",
       }),
     }));
-    expect(enqueueImprovementBotUpdate).toHaveBeenCalledWith(expect.objectContaining({
-      caseId: "case-reconciler",
-      producerTrigger: "improvement_reconciliation",
-      livenessReason: "missed_sla",
-    }));
-
     recordImprovementSignal.mockClear();
-    enqueueImprovementBotUpdate.mockClear();
     const reconciliation = await recordObservedProofProducerDetections({
-      repo: { recordImprovementSignal, enqueueImprovementBotUpdate } as never,
+      repo: { recordImprovementSignal } as never,
       health,
       appRevision: "revision-a",
       observer: "improvement_reconciliation",
     });
     expect(reconciliation.map((result) => result.trigger)).toEqual(["improvement_watchdog", "production_observation"]);
     expect(recordImprovementSignal).toHaveBeenCalledTimes(2);
-    expect(enqueueImprovementBotUpdate).toHaveBeenCalledOnce();
-    expect(enqueueImprovementBotUpdate).toHaveBeenCalledWith(expect.objectContaining({ producerTrigger: "improvement_watchdog" }));
   });
 });
 

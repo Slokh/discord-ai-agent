@@ -10,8 +10,7 @@ export type ImprovementProofProducerDetectionResult = {
   status: "recorded" | "unchanged" | "error";
 };
 
-type ProducerDetectionRepository = Pick<DiscordAiAgentRepository, "recordImprovementSignal">
-  & Partial<Pick<DiscordAiAgentRepository, "enqueueImprovementBotUpdate">>;
+type ProducerDetectionRepository = Pick<DiscordAiAgentRepository, "recordImprovementSignal">;
 
 /** Records only the unhealthy producers assigned to this independent observer. */
 export async function recordObservedProofProducerDetections(input: {
@@ -44,25 +43,10 @@ export async function recordObservedProofProducerDetections(input: {
           observedBy: input.observer,
         },
       });
-      if (policy.notifyBotChannel && input.repo.enqueueImprovementBotUpdate) {
-        await input.repo.enqueueImprovementBotUpdate({
-          caseId: recorded.case.caseId,
-          sourceKey: `proof-producer:${producer.trigger}:${episode}`,
-          producerTrigger: producer.trigger,
-          livenessReason: unhealthyReason(producer.reason),
-        });
-      }
       results.push({ trigger: producer.trigger, status: recorded.signalCreated ? "recorded" : "unchanged" });
     } catch {
       results.push({ trigger: producer.trigger, status: "error" });
     }
   }
   return results;
-}
-
-function unhealthyReason(reason: ImprovementProofProducerHealth["reason"]) {
-  if (reason === "current" || reason === "not_yet_observed") {
-    throw new Error(`Healthy producer reason cannot create an alert: ${reason}.`);
-  }
-  return reason;
 }

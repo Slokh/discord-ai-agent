@@ -214,7 +214,6 @@ export class DiscordCrawler {
       const pageBounds = selectCrawlPageBounds(messages);
       const embeddingQueueStats = emptyEmbeddingQueueStats();
       for (const message of messages) {
-        if (this.isSelfMessage(message)) continue;
         await persistDiscordMessage(this.input.repo, message);
         embeddingQueueStats[await this.queueEmbeddingForMessage(message)] += 1;
       }
@@ -273,7 +272,6 @@ export class DiscordCrawler {
       const messages = [...page.values()].sort((a, b) => a.createdTimestamp - b.createdTimestamp);
       const embeddingQueueStats = emptyEmbeddingQueueStats();
       for (const message of messages) {
-        if (this.isSelfMessage(message)) continue;
         await persistDiscordMessage(this.input.repo, message);
         embeddingQueueStats[await this.queueEmbeddingForMessage(message)] += 1;
       }
@@ -344,10 +342,6 @@ export class DiscordCrawler {
 
   private async persistThread(guildId: string, thread: CrawlableChannel) {
     await this.input.repo.upsertChannel({ ...channelRecordFromChannel(guildId, thread), isThread: true });
-  }
-
-  private isSelfMessage(message: Message) {
-    return Boolean(this.input.client.user?.id && message.author.id === this.input.client.user.id);
   }
 
   private async queueEmbeddingForMessage(message: Message): Promise<CrawlEmbeddingQueueStatus> {

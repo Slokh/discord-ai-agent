@@ -9,7 +9,6 @@ import { DiscordCrawler } from "./discord/crawler.js";
 import { createDiscordAiAgentBot } from "./discord/client.js";
 import { startAgentTaskNotifier } from "./discord/taskNotifications.js";
 import { startImprovementReporterNotifier } from "./discord/improvementReporterConversations.js";
-import { startImprovementBotUpdateNotifier } from "./discord/improvementBotUpdates.js";
 import { startJobs } from "./jobs/queue.js";
 import { logger } from "./util/logger.js";
 import { createAgentRuntimeRunner } from "./discord/agentRuntimeRunner.js";
@@ -213,7 +212,6 @@ async function main() {
       : null;
   const taskNotifier = startsBot && client ? startAgentTaskNotifier({ client, repo, config }) : null;
   const improvementReporterNotifier = startsBot && client ? startImprovementReporterNotifier({ client, repo, config }) : null;
-  const improvementBotUpdateNotifier = startsBot && client ? startImprovementBotUpdateNotifier({ client, repo, config }) : null;
 
   let shuttingDown = false;
   const shutdown = async () => {
@@ -222,7 +220,6 @@ async function main() {
     logger.info("Shutting down Discord AI Agent");
     taskNotifier?.stop();
     improvementReporterNotifier?.stop();
-    improvementBotUpdateNotifier?.stop();
     await runtime?.drain(30_000).catch((error) => logger.warn({ err: error }, "Timed out draining Discord bot handlers"));
     sandboxReconciler?.stop();
     paymentReconciler?.stop();

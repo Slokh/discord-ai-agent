@@ -38,7 +38,8 @@ export async function handleMessageCreate(
     return;
   }
   if (isSelfMessage(message, client.user?.id)) {
-    logger.debug({ messageId: message.id, channelId: message.channelId }, "Ignoring self-authored Discord message");
+    await persistDiscordMessage(input.repo, message);
+    logger.debug({ messageId: message.id, channelId: message.channelId }, "Persisted self-authored Discord message without invoking the agent");
     return;
   }
 

@@ -12,13 +12,14 @@ try {
   const result = await pool.query(`
     SELECT case_row.case_id, case_row.classification, contract.contract_id, contract.version, contract.expected_behavior, contract.checks,
            contract.source_revision, contract.created_at,
-           replay.execution_id, replay.guild_id, replay.channel_id, replay.user_id,
+           replay.execution_id, replay.turn_envelope_artifact_id, replay.guild_id, replay.channel_id, replay.user_id,
            replay.request, replay.visible_channel_ids, replay.request_kind,
            replay.reply_context, replay.request_attachments, replay.request_embeds, replay.interaction
     FROM improvement_contracts contract
     JOIN improvement_cases case_row ON case_row.case_id = contract.case_id
     JOIN LATERAL (
-      SELECT candidate.execution_id, candidate.guild_id, candidate.channel_id, candidate.reporter_id AS user_id,
+      SELECT candidate.execution_id, turn.artifact_id AS turn_envelope_artifact_id,
+             candidate.guild_id, candidate.channel_id, candidate.reporter_id AS user_id,
              coalesce(nullif(turn.envelope->>'text', ''), nullif(session.request, '')) AS request,
              turn.envelope->'visibleChannelIds' AS visible_channel_ids,
              coalesce(nullif(turn.envelope->>'requestKind', ''), 'message') AS request_kind,
@@ -30,7 +31,7 @@ try {
       JOIN agent_runtime_executions execution ON execution.execution_id = candidate.execution_id
       JOIN agent_runtime_sessions session ON session.session_id = execution.session_id
       JOIN LATERAL (
-        SELECT string_agg(chunk.content, '' ORDER BY chunk.chunk_index)::jsonb AS envelope
+        SELECT artifact.artifact_id, string_agg(chunk.content, '' ORDER BY chunk.chunk_index)::jsonb AS envelope
         FROM agent_runtime_artifacts artifact
         JOIN agent_runtime_artifact_chunks chunk USING (artifact_id)
         WHERE artifact.execution_id = execution.execution_id AND artifact.kind = 'turn_envelope'
@@ -79,7 +80,13 @@ try {
       prompt,
       notes: `Expected behavior: ${String(row.expected_behavior)}\nPrivate improvement case: ${String(row.case_id)}`,
       ...assertions,
-      promptArgs: ["--guild-id", String(row.guild_id), "--channel-id", String(row.channel_id), "--user-id", String(row.user_id), "--visible-channel-ids", visibleChannelIds.join(",")],
+      promptArgs: [
+        "--guild-id", String(row.guild_id),
+        "--channel-id", String(row.channel_id),
+        "--user-id", String(row.user_id),
+        "--visible-channel-ids", visibleChannelIds.join(","),
+        ...(row.reply_context == null ? [] : ["--replay-turn-envelope-artifact", String(row.turn_envelope_artifact_id)]),
+      ],
       noMemory: true,
       useDiscordMemory: hasReplayScope,
       skip: Boolean(skipReason),

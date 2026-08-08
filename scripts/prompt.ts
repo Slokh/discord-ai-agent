@@ -3,7 +3,9 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { DbPool } from "../src/db/pool.js";
 import type { DiscordAiAgentRepository } from "../src/db/repositories.js";
-import type { AgentFile } from "../src/tools/types.js";
+import type { AgentFile, ToolContext } from "../src/tools/types.js";
+import { loadAgentRuntimeTurnEnvelope } from "../src/agent/runtimeEnvelope.js";
+import { privateReplayReplyContextFromEnvelope } from "../src/observability/improvementContractReplay.js";
 import { persistLocalPromptTurn } from "./promptMemory.js";
 
 const SESSION_CONTEXT_MESSAGE_LIMIT = 24;
@@ -16,6 +18,7 @@ type PromptArgs = {
   userId: string;
   userName: string;
   visibleChannelIds?: string[];
+  replayTurnEnvelopeArtifactId?: string;
   memory: boolean;
   useDiscordMemory: boolean;
   readOnly: boolean;
@@ -84,6 +87,20 @@ async function main() {
     const guildId = args.guildId ?? config.discord.guildId;
     const currentChannel = await resolveCurrentChannel(pool, guildId, args);
     const visibleChannelIds = args.visibleChannelIds ?? (await allIndexedChannelIds(pool, guildId));
+    const replayEnvelope = args.replayTurnEnvelopeArtifactId
+      ? await loadAgentRuntimeTurnEnvelope({ agentRuntime, artifactId: args.replayTurnEnvelopeArtifactId })
+      : null;
+    if (args.replayTurnEnvelopeArtifactId && !replayEnvelope) {
+      throw new Error("The retained private-replay turn envelope is unavailable.");
+    }
+    const replyContext: ToolContext["replyContext"] = replayEnvelope
+      ? privateReplayReplyContextFromEnvelope(replayEnvelope, {
+        guildId,
+        channelId: currentChannel.id,
+        userId: args.userId,
+        visibleChannelIds,
+      }) as ToolContext["replyContext"]
+      : undefined;
     const runtimeThreadKey = localPromptThreadKey(guildId, currentChannel.id, args.userId);
     const memoryThreadKey = args.useDiscordMemory ? discordChannelThreadKey(guildId, currentChannel.id) : runtimeThreadKey;
     if (args.memory) {
@@ -150,6 +167,7 @@ async function main() {
               visibleChannelIds: uniqueStrings([currentChannel.id, ...visibleChannelIds]),
               mentionedUserIds: explicitUserMentionIds(args.prompt, config.discord.clientId),
               mentionedChannelIds: explicitChannelMentionIds(args.prompt),
+              replyContext,
               threadKey: runtimeThreadKey,
               sessionMessages: priorSessionMessages,
               requestId,
@@ -267,6 +285,10 @@ function parseArgs(argv: string[]): PromptArgs {
       args.useDiscordMemory = true;
     } else if (arg === "--read-only") {
       args.readOnly = true;
+    } else if (arg.startsWith("--replay-turn-envelope-artifact=")) {
+      args.replayTurnEnvelopeArtifactId = valueAfterEquals(arg);
+    } else if (arg === "--replay-turn-envelope-artifact") {
+      args.replayTurnEnvelopeArtifactId = requiredNext(argv, ++index, arg);
     } else if (arg === "--verbose") {
       args.verbose = true;
     } else if (arg === "--json") {
@@ -305,6 +327,9 @@ function parseArgs(argv: string[]): PromptArgs {
   }
 
   args.prompt = promptParts.join(" ").trim();
+  if (args.replayTurnEnvelopeArtifactId && !args.readOnly) {
+    throw new Error("Retained turn envelopes may only be used for read-only private replays.");
+  }
   return args;
 }
 

@@ -248,6 +248,9 @@ describe("operator console", () => {
     expect(clientScript).toContain('event.key==="Escape"');
     expect(clientScript).toContain('setAttribute("aria-selected"');
     expect(clientScript).toContain("if(refreshInFlight)return refreshInFlight");
+    expect(clientScript).toContain("activityDetailVersion");
+    expect(clientScript).toContain("detailState.version===version");
+    expect(clientScript).toContain("await refreshSnapshot()");
     expect(clientScript).toContain('renderChanged("activity"');
     expect(clientScript).toContain('revealView("dashboard-view","dashboard-loading")');
     expect(clientScript).toContain('removeAttribute("inert")');
@@ -347,5 +350,37 @@ describe("operator console", () => {
     await fetch(url);
 
     expect(snapshot).toHaveBeenCalledTimes(2);
+  });
+
+  it("coalesces only overlapping reads for the same activity detail", async () => {
+    const config = loadConfig(["node", "test", "console"]);
+    config.consoleServer = { host: "127.0.0.1", port: 0 };
+    let releaseFirst: (() => void) | undefined;
+    const activityDetail = vi.fn(async ({ id }: { id: string }) => {
+      if (id === "embedding" && activityDetail.mock.calls.length === 1) {
+        await new Promise<void>((resolve) => {
+          releaseFirst = resolve;
+        });
+      }
+      return { id };
+    });
+    const runtime = await startOperatorConsole({
+      config,
+      repository: { snapshot: async () => ({}), activityDetail },
+    });
+    close = runtime.close;
+    const address = runtime.server.address();
+    if (!address || typeof address === "string") throw new Error("Console did not bind a TCP port.");
+    const baseUrl = `http://127.0.0.1:${address.port}/api/activity/system`;
+
+    const first = fetch(`${baseUrl}/embedding`);
+    const second = fetch(`${baseUrl}/embedding`);
+    const different = fetch(`${baseUrl}/release`);
+    await vi.waitFor(() => expect(activityDetail).toHaveBeenCalledTimes(2));
+    releaseFirst?.();
+    await Promise.all([first, second, different]);
+    await fetch(`${baseUrl}/embedding`);
+
+    expect(activityDetail).toHaveBeenCalledTimes(3);
   });
 });

@@ -13,7 +13,7 @@ const empty=(copy)=>'<div class="empty">'+esc(copy)+'</div>';
 const safeLink=(url,label)=>{if(!url||!/^https:\/\/(github\.com|discord\.com\/channels)\//.test(url))return "";return '<a class="link" target="_blank" rel="noreferrer" href="'+esc(url)+'">'+esc(label)+'</a>'};
 const tooltipRow=(name,status,detail)=>'<div class="tooltip-row"><span class="status-dot '+esc(status)+'" aria-hidden="true"></span><span>'+esc(name)+'</span><span>'+esc(String(status).replaceAll("_"," ")+" · "+detail)+'</span></div>';
 let latestSnapshot=null;
-let detailState={key:null,data:null,loading:false,error:null};
+let detailState={key:null,data:null,loading:false,error:null,version:null};
 let refreshInFlight=null;
 const sectionFingerprints=new Map();
 let traceExpanded=false;
@@ -126,7 +126,7 @@ function renderActivityDetail(detail,route){
 }
 
 function clearActivityDetail(){
-  detailState={key:null,data:null,loading:false,error:null};
+  detailState={key:null,data:null,loading:false,error:null,version:null};
   traceExpanded=false;
   document.body.classList.remove("detail-selected");
   document.title="Discord AI Agent · Console";
@@ -136,7 +136,7 @@ function clearActivityDetail(){
 }
 const mobileWorkspace=()=>matchMedia("(max-width: 760px)").matches;
 const focusActivityList=()=>{if(mobileWorkspace())requestAnimationFrame(()=>document.querySelector('[data-activity-filter][aria-pressed="true"]')?.focus())};
-const selectInitialActivity=(data)=>{if(initialSelectionHandled)return;initialSelectionHandled=true;if(activityRoute()||mobileWorkspace())return;const activeKeys=new Set(list(data.activity?.active).map((item)=>item.kind+":"+item.id));const stories=[...new Map([...list(data.activity?.active),...list(data.activity?.recent)].map((item)=>[item.kind+":"+item.id,item])).values()];const story=stories.find((item)=>matchesActivityFilter(item,activityFilter,activeKeys.has(item.kind+":"+item.id)));if(!story)return;history.replaceState(null,"",activityPath(story));const route=activityRoute();if(route)refreshActivityDetail(route)};
+const selectInitialActivity=(data)=>{if(initialSelectionHandled)return;initialSelectionHandled=true;if(activityRoute()||mobileWorkspace())return;const activeKeys=new Set(list(data.activity?.active).map((item)=>item.kind+":"+item.id));const stories=[...new Map([...list(data.activity?.active),...list(data.activity?.recent)].map((item)=>[item.kind+":"+item.id,item])).values()];const story=stories.find((item)=>matchesActivityFilter(item,activityFilter,activeKeys.has(item.kind+":"+item.id)));if(!story)return;history.replaceState(null,"",activityPath(story))};
 
 function renderActivity(data){
   const anchor=viewAnchor();
@@ -208,8 +208,9 @@ document.addEventListener("click",(event)=>{
   event.preventDefault();navigateToActivityPath(story.getAttribute("href"));
 });
 async function refreshSnapshot(){const response=await fetch("/api/snapshot",{cache:"no-store"});if(!response.ok)throw new Error("snapshot unavailable");render(await response.json())}
-async function refreshActivityDetail(route){const key=route.kind+":"+route.id;const changing=detailState.key!==key;const preserve=changing&&Boolean(detailState.data);if(changing){detailState={key,data:null,loading:false,error:null};traceExpanded=false}detailState.loading=true;const view=el("activity-detail-view");if(changing){document.body.classList.add("detail-selected");el("activity-back").href="/"+activityQuery()+"#activity-panel";view.setAttribute("aria-busy","true");view.classList.add("is-switching");view.classList.toggle("preserving-detail",preserve);if(!preserve)renderActivityDetail(null,route);if(latestSnapshot)renderActivity(latestSnapshot)}try{const response=await fetch("/api/activity/"+encodeURIComponent(route.kind)+"/"+encodeURIComponent(route.id),{cache:"no-store"});if(!response.ok)throw new Error("activity unavailable");const data=await response.json();if(detailState.key!==key)return;const changed=JSON.stringify(data)!==JSON.stringify(detailState.data);detailState.data=data;detailState.error=null;if(changing||changed)renderActivityDetail(data,route)}catch(error){if(detailState.key===key){detailState.error=error;if(changing)renderActivityDetail(null,route)}}finally{if(detailState.key===key){detailState.loading=false;view.setAttribute("aria-busy","false");if(changing){view.scrollTo({top:0});requestAnimationFrame(()=>{if(detailState.key===key){view.classList.remove("is-switching","preserving-detail")}})}if(latestSnapshot)renderActivity(latestSnapshot)}}}
+const activityDetailVersion=(route)=>{const story=allActivityStories().find((item)=>item.kind===route.kind&&item.id===route.id);return story?JSON.stringify(story):null};
+async function refreshActivityDetail(route,force=false){const key=route.kind+":"+route.id;const version=activityDetailVersion(route);if(detailState.key===key&&detailState.loading)return;if(!force&&detailState.key===key&&detailState.data&&detailState.version===version)return;const changing=detailState.key!==key;const preserve=changing&&Boolean(detailState.data);if(changing){detailState={key,data:null,loading:false,error:null,version:null};traceExpanded=false}detailState.loading=true;const view=el("activity-detail-view");if(changing){document.body.classList.add("detail-selected");el("activity-back").href="/"+activityQuery()+"#activity-panel";view.setAttribute("aria-busy","true");view.classList.add("is-switching");view.classList.toggle("preserving-detail",preserve);if(!preserve)renderActivityDetail(null,route);if(latestSnapshot)renderActivity(latestSnapshot)}try{const response=await fetch("/api/activity/"+encodeURIComponent(route.kind)+"/"+encodeURIComponent(route.id),{cache:"no-store"});if(!response.ok)throw new Error("activity unavailable");const data=await response.json();if(detailState.key!==key)return;const changed=JSON.stringify(data)!==JSON.stringify(detailState.data);detailState.data=data;detailState.error=null;detailState.version=version;if(changing||changed)renderActivityDetail(data,route)}catch(error){if(detailState.key===key){detailState.error=error;if(changing)renderActivityDetail(null,route)}}finally{if(detailState.key===key){detailState.loading=false;view.setAttribute("aria-busy","false");if(changing){view.scrollTo({top:0});requestAnimationFrame(()=>{if(detailState.key===key){view.classList.remove("is-switching","preserving-detail")}})}if(latestSnapshot)renderActivity(latestSnapshot)}}}
 window.addEventListener("popstate",()=>{const route=activityRoute();if(route){refreshActivityDetail(route);if(mobileWorkspace())requestAnimationFrame(()=>el("activity-back").focus())}else{clearActivityDetail();focusActivityList()}});
-async function refresh(){if(refreshInFlight)return refreshInFlight;const route=activityRoute();refreshInFlight=Promise.all([refreshSnapshot(),route?refreshActivityDetail(route):Promise.resolve(clearActivityDetail())]).catch(()=>{el("service-summary").textContent="Services unavailable";el("producer-summary").textContent="Producers unavailable";loadingError("dashboard-loading","Production data unavailable")}).finally(()=>{refreshInFlight=null});return refreshInFlight}
+async function refresh(){if(refreshInFlight)return refreshInFlight;refreshInFlight=(async()=>{await refreshSnapshot();const route=activityRoute();if(route)await refreshActivityDetail(route);else clearActivityDetail()})().catch(()=>{el("service-summary").textContent="Services unavailable";el("producer-summary").textContent="Producers unavailable";loadingError("dashboard-loading","Production data unavailable")}).finally(()=>{refreshInFlight=null});return refreshInFlight}
 refresh();setInterval(refresh,5000);
 `;

@@ -14,6 +14,7 @@ describe("operator console", () => {
 
   it("serves a private-by-deployment dashboard and read-only snapshot API", async () => {
     const config = loadConfig(["node", "test", "console"]);
+    config.nodeEnv = "test";
     config.consoleServer.host = "127.0.0.1";
     config.consoleServer.port = 0;
     const repository = {

@@ -214,6 +214,18 @@ describe("assessRevisionQuality", () => {
     expect(revisionQualityDetectionInputs(waitingQuality, assessRevisionQuality(waitingQuality), [])).toEqual([]);
   });
 
+  it("does not create a repair detection from an aggregate failure rate without a root-cause occurrence", () => {
+    const failedQuality = quality({ succeeded: 10 }, {
+      tools: [
+        { tool: "web__run", status: "ok", count: 5 },
+        { tool: "web__run", status: "error", count: 5 },
+      ],
+    });
+
+    expect(assessRevisionQuality(failedQuality).violationCodes).toContain("tool_failure_rate");
+    expect(revisionQualityDetectionInputs(failedQuality, assessRevisionQuality(failedQuality), [])).toEqual([]);
+  });
+
   it("creates a medium-severity defect for a slow successful capability without failing the release gate", () => {
     const current = quality({ succeeded: 10 }, {
       failureClusters: [failureCluster("tool_latency", {

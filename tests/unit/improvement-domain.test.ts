@@ -7,7 +7,9 @@ import {
   improvementContractAssertions,
   improvementContractReplayResults,
   improvementContractReplaySkipReason,
+  privateReplayReplyContextFromEnvelope,
 } from "../../src/observability/improvementContractReplay.js";
+import type { AgentRuntimeTurnEnvelope } from "../../src/agent/runtimeEnvelope.js";
 
 describe("improvement domain", () => {
   it("coalesces only stable normalized fingerprint inputs", () => {
@@ -51,7 +53,7 @@ describe("improvement domain", () => {
     expect(improvementContractReplaySkipReason({ hasAssertion: true, hasReplayScope: true, hasReplayableContext: false })).toMatch(/cannot reproduce faithfully/);
   });
 
-  it("replays only text turns whose Discord context can be reconstructed", () => {
+  it("replays text turns whose bounded Discord reply context can be reconstructed", () => {
     const textTurn = {
       requestKind: "message",
       replyContext: null,
@@ -60,11 +62,59 @@ describe("improvement domain", () => {
       interaction: null,
     };
     expect(hasFaithfulPrivateReplayContext(textTurn)).toBe(true);
+    const replyContext = {
+      messageId: "parent",
+      rootMessageId: "root",
+      channelId: "channel",
+      guildId: "guild",
+      authorId: "bot",
+      authorDisplayName: "Bot",
+      authorIsBot: true,
+      content: "Earlier bounded context",
+      attachmentSummaries: [],
+      attachments: [],
+      createdAt: null,
+      url: null,
+      chain: [],
+    };
+    expect(hasFaithfulPrivateReplayContext({ ...textTurn, replyContext })).toBe(true);
     expect(hasFaithfulPrivateReplayContext({ ...textTurn, replyContext: { messageId: "parent" } })).toBe(false);
     expect(hasFaithfulPrivateReplayContext({ ...textTurn, requestAttachments: [{ id: "file" }] })).toBe(false);
     expect(hasFaithfulPrivateReplayContext({ ...textTurn, requestEmbeds: [{ url: "https://example.com" }] })).toBe(false);
     expect(hasFaithfulPrivateReplayContext({ ...textTurn, interaction: { customId: "button" } })).toBe(false);
     expect(hasFaithfulPrivateReplayContext({ ...textTurn, requestKind: "scheduled" })).toBe(false);
+
+    const envelope = {
+      ...textTurn,
+      requestKind: "message" as const,
+      schemaVersion: 2,
+      source: "discord",
+      requestId: "request",
+      threadKey: "discord:guild:channel",
+      guildId: "guild",
+      channelId: "channel",
+      userId: "user",
+      userDisplayName: "User",
+      botUserId: "bot",
+      botRoleIds: [],
+      text: "follow up",
+      rawContent: "follow up",
+      discordUrl: "https://discord.com/channels/guild/channel/request",
+      messageCreatedAt: "2026-08-08T00:00:00.000Z",
+      visibleChannelIds: ["channel", "other"],
+      mentionedUserIds: [],
+      mentionedChannelIds: [],
+      replyContext,
+      sessionMessages: [],
+      delivery: { statusChannelId: null, statusMessageId: null },
+      createdAt: "2026-08-08T00:00:00.000Z",
+    } satisfies AgentRuntimeTurnEnvelope;
+    expect(privateReplayReplyContextFromEnvelope(envelope, {
+      guildId: "guild", channelId: "channel", userId: "user", visibleChannelIds: ["other", "channel"],
+    })).toEqual(replyContext);
+    expect(() => privateReplayReplyContextFromEnvelope(envelope, {
+      guildId: "guild", channelId: "channel", userId: "other-user", visibleChannelIds: ["channel", "other"],
+    })).toThrow(/does not match/);
   });
 
   it("derives content-free pass and failure conclusions for every private replay check kind", () => {

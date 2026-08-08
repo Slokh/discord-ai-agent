@@ -186,6 +186,51 @@ describe("operator activity story projection", () => {
     expect(result.recent[0]?.lifecycle.map((step) => step.label)).toEqual(["Reported", "Verification passed"]);
   });
 
+  it("projects one issue for cases and failure artifacts linked to the same execution", () => {
+    const result = deriveOperatorActivity({
+      executions: [], tasks: [], deployments: [],
+      activity: [{
+        id: "runtime-failed", kind: "runtime", title: "Failed prompt", status: "failed",
+        relatedImprovementCaseIds: ["case-root", "case-wrapper"],
+        occurredAt: "2026-08-06T12:06:00.000Z", startedAt: "2026-08-06T12:00:00.000Z",
+        events: [{ id: "failure", name: "agent.model.call.failed", level: "error", createdAt: "2026-08-06T12:05:00.000Z" }],
+      }, {
+        id: "improvement-root", kind: "improvement", improvementCaseId: "case-root",
+        relatedImprovementCaseIds: ["case-root", "case-wrapper"], title: "Provider request timed out",
+        status: "actionable", occurredAt: "2026-08-06T12:04:00.000Z", startedAt: "2026-08-06T12:01:00.000Z",
+        events: [{ id: "root", name: "case.actionable", level: "info", createdAt: "2026-08-06T12:04:00.000Z" }],
+      }, {
+        id: "improvement-wrapper", kind: "improvement", improvementCaseId: "case-wrapper",
+        relatedImprovementCaseIds: ["case-root", "case-wrapper"], title: "Agent runtime failed",
+        status: "needs_evidence", occurredAt: "2026-08-06T12:05:00.000Z", startedAt: "2026-08-06T12:02:00.000Z",
+        events: [{ id: "wrapper", name: "case.needs_evidence", level: "info", createdAt: "2026-08-06T12:05:00.000Z" }],
+      }, {
+        id: "task-wrapper", kind: "code_change", improvementCaseId: "case-wrapper", title: "Repair timeout handling",
+        status: "failed", occurredAt: "2026-08-06T12:07:00.000Z", failureReason: "The repair task failed.", events: [],
+      }],
+      improvements: { cases: [{
+        caseId: "case-root", title: "Provider request timed out", status: "actionable", severity: "high",
+        automationState: "blocked", blocker: "repair failed", relatedImprovementCaseIds: ["case-root", "case-wrapper"],
+        firstSeenAt: "2026-08-06T12:01:00.000Z", lastProgressAt: "2026-08-06T12:04:00.000Z",
+      }, {
+        caseId: "case-wrapper", title: "Agent runtime failed", status: "needs_evidence", severity: "medium",
+        automationState: "waiting", relatedImprovementCaseIds: ["case-root", "case-wrapper"],
+        firstSeenAt: "2026-08-06T12:02:00.000Z", lastProgressAt: "2026-08-06T12:05:00.000Z",
+      }] },
+    });
+
+    expect(result.recent).toHaveLength(1);
+    expect(result.recent[0]).toMatchObject({
+      id: "improvement-root", kind: "improvement", title: "Provider request timed out",
+      workState: "blocked", relatedImprovementCaseIds: ["case-root", "case-wrapper"],
+      failureReason: "The repair task failed.",
+    });
+    expect(result.recent[0]?.technicalEvents).toEqual(expect.arrayContaining([
+      expect.objectContaining({ name: "agent.model.call.failed" }),
+      expect.objectContaining({ name: "case.needs_evidence" }),
+    ]));
+  });
+
   it("retains open improvements outside the recent event window and exposes filterable work state", () => {
     const result = deriveOperatorActivity({
       executions: [], tasks: [], deployments: [], activity: [{
@@ -246,6 +291,7 @@ describe("operator activity story projection", () => {
         occurredAt: "2026-08-06T12:00:00.000Z", startedAt: "2026-08-06T11:00:00.000Z",
         durationMs: null, latencyTone: null, attempts: null, branchName: null, pullRequestUrl: null,
         sourceUrl: null, responseUrl: null, responseKind: null, hasParent: false, failureReason: null, rollupKey: null,
+        relatedImprovementCaseIds: ["case-a"],
         runCount: null, successCount: null, failureCount: null, p95DurationMs: null,
         runs: [], lifecycle: [], technicalEvents: [],
       }],

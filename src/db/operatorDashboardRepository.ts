@@ -4,6 +4,8 @@ import { operatorTaskFailureSummary } from "../console/taskFailureSummary.js";
 import { releaseActivityDetail } from "./operatorActivityDetailRepository.js";
 import { messageActivityDetail, recentMessageActivities } from "./operatorMessageActivityRepository.js";
 import { improvementActivityTrace } from "./operatorImprovementActivityRepository.js";
+import { RELATED_CASES_FOR_EXECUTION_SQL, RELATED_CASES_FOR_IMPROVEMENT_SQL } from "./operatorActivityLinks.js";
+import type { OperatorActivitySource } from "./operatorActivityLinks.js";
 const COMPONENTS = ["bot", "worker", "api", "console"] as const;
 export class OperatorDashboardRepository {
   constructor(private readonly pool: DbPool) {}
@@ -29,7 +31,7 @@ export class OperatorDashboardRepository {
       ...detail, message: await messageActivityDetail(this.pool, input.id.slice("message-".length)),
     };
     if (input.kind === "improvement" && input.id.startsWith("improvement-"))
-      return { ...detail, traceEvents: await improvementActivityTrace(this.pool, input.id.slice("improvement-".length)) };
+      return { ...detail, traceEvents: await improvementActivityTrace(this.pool, story.relatedImprovementCaseIds) };
     if (input.kind !== "conversation") return detail;
     const executionId = executionIdFromActivityId(input.id);
     if (!executionId) return { ...detail, messages: [] };
@@ -234,13 +236,14 @@ export class OperatorDashboardRepository {
                 case_row.automation_blocker,case_row.automation_next_action,
                 case_row.automation_retry_trigger,case_row.automation_retry_at,
                 case_row.automation_last_progress_at,case_row.first_seen_at,case_row.last_seen_at,
-                work.pull_request_url,work.status AS work_status
+                work.pull_request_url,work.status AS work_status,related.related_case_ids
          FROM improvement_cases case_row
          LEFT JOIN LATERAL (
            SELECT pull_request_url,status FROM improvement_work_attempts attempt
            WHERE attempt.case_id = case_row.case_id
            ORDER BY attempt.created_at DESC LIMIT 1
          ) work ON true
+         ${RELATED_CASES_FOR_IMPROVEMENT_SQL}
          WHERE case_row.merged_into_case_id IS NULL
            AND case_row.status NOT IN ('resolved','dismissed')
          ORDER BY
@@ -276,7 +279,7 @@ export class OperatorDashboardRepository {
                 delivery.source_message_id,delivery.status_channel_id,delivery.status_message_id,
                 (source_message.referenced_message_id IS NOT NULL) AS has_parent,
                 event.id,event.event_name,event.level,event.created_at,
-                event.group_event_count
+                event.group_event_count,linked.related_case_ids
          FROM execution_rollup recent
          JOIN agent_runtime_executions execution ON execution.execution_id = recent.execution_id
          JOIN agent_runtime_sessions session ON session.session_id = recent.session_id
@@ -284,6 +287,7 @@ export class OperatorDashboardRepository {
          LEFT JOIN messages source_message
            ON source_message.id = delivery.source_message_id
           AND source_message.guild_id = delivery.guild_id
+         ${RELATED_CASES_FOR_EXECUTION_SQL}
          LEFT JOIN LATERAL (
            SELECT candidate.id,candidate.event_name,candidate.level,candidate.created_at,
                   count(*) OVER ()::int AS group_event_count
@@ -340,7 +344,8 @@ export class OperatorDashboardRepository {
                 work.pull_request_url,
                 conversation.guild_id AS conversation_guild_id,
                 conversation.source_channel_id,conversation.source_message_id,
-                conversation.delivery_kind,conversation.delivery_channel_id,conversation.delivery_message_id
+                conversation.delivery_kind,conversation.delivery_channel_id,conversation.delivery_message_id,
+                related.related_case_ids
          FROM recent_cases recent
          JOIN improvement_cases case_row USING (case_id)
          LEFT JOIN LATERAL (
@@ -363,6 +368,7 @@ export class OperatorDashboardRepository {
            WHERE candidate.case_id = case_row.case_id
            ORDER BY candidate.updated_at DESC LIMIT 1
          ) conversation ON true
+         ${RELATED_CASES_FOR_IMPROVEMENT_SQL}
          ORDER BY recent.story_updated_at DESC,event.created_at DESC,event.event_id DESC`,
         [now],
       ),
@@ -416,6 +422,7 @@ export class OperatorDashboardRepository {
       retryTrigger: nullable(row.automation_retry_trigger), retryAt: nullableDate(row.automation_retry_at),
       lastProgressAt: date(row.automation_last_progress_at), firstSeenAt: date(row.first_seen_at), lastSeenAt: date(row.last_seen_at),
       pullRequestUrl: nullable(row.pull_request_url), workStatus: nullable(row.work_status),
+      relatedImprovementCaseIds: textArray(row.related_case_ids),
     }));
     const activities = projectActivitySources(runtimeEvents.rows, taskEvents.rows, caseEvents.rows);
     return {
@@ -481,6 +488,9 @@ function nullableDate(value: unknown): Date | null {
 function number(value: unknown): number {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : 0;
+}
+function textArray(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((item) => item != null).map(String) : [];
 }
 function executionIdFromActivityId(id: string): string | null {
   if (id.startsWith("runtime-")) return id.slice("runtime-".length) || null;
@@ -589,37 +599,12 @@ function dashboardAttachments(value: unknown): Array<{ filename: string | null; 
   });
 }
 
-type ActivitySource = {
-  id: string;
-  kind: "runtime" | "code_change" | "improvement" | "system";
-  title: string;
-  status: string | null;
-  detail: string | null;
-  occurredAt: Date;
-  startedAt: Date;
-  durationMs: number | null;
-  attempts: number | null;
-  eventCount: number;
-  rollupKey: string | null;
-  responseStatus: string | null;
-  deliveryState: string | null;
-  sourceUrl: string | null;
-  responseUrl: string | null;
-  responseKind: string | null;
-  hasParent: boolean;
-  pullRequestUrl: string | null;
-  branchName: string | null;
-  improvementCaseId: string | null;
-  failureReason: string | null;
-  events: Array<{ id: string; name: string; level: string; createdAt: Date }>;
-};
-
 function projectActivitySources(
   runtimeRows: Array<Record<string, unknown>>,
   taskRows: Array<Record<string, unknown>>,
   caseRows: Array<Record<string, unknown>>,
-): ActivitySource[] {
-  const groups = new Map<string, ActivitySource>();
+): OperatorActivitySource[] {
+  const groups = new Map<string, OperatorActivitySource>();
   for (const row of runtimeRows) {
     const key = `runtime-${row.execution_id}`;
     const occurredAt = date(row.story_updated_at);
@@ -645,6 +630,7 @@ function projectActivitySources(
       pullRequestUrl: null,
       branchName: null,
       improvementCaseId: null,
+      relatedImprovementCaseIds: textArray(row.related_case_ids),
       failureReason: null,
       events: [],
     };
@@ -681,6 +667,7 @@ function projectActivitySources(
       pullRequestUrl: nullable(row.pr_url),
       branchName: nullable(row.branch_name),
       improvementCaseId: nullable(row.improvement_case_id),
+      relatedImprovementCaseIds: nullable(row.improvement_case_id) ? [String(row.improvement_case_id)] : [],
       failureReason: operatorTaskFailureSummary(row.status, row.error),
       events: [],
     };
@@ -722,6 +709,7 @@ function projectActivitySources(
       pullRequestUrl: nullable(row.pull_request_url),
       branchName: null,
       improvementCaseId: String(row.case_id),
+      relatedImprovementCaseIds: textArray(row.related_case_ids),
       failureReason: null,
       events: [],
     };

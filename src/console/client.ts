@@ -21,7 +21,7 @@ let searchState={results:[],index:0,restoreFocus:null};
 const loadingTransitionMs=200;
 const requestedFilter=new URLSearchParams(location.search).get("filter");
 const requestedType=new URLSearchParams(location.search).get("type");
-let activityFilter=["all","running","waiting","blocked","failed","done"].includes(requestedFilter)?requestedFilter:"all";
+let activityFilter=["all","running","waiting","issues","done"].includes(requestedFilter)?requestedFilter:"all";
 let activityType=["all","conversation","message","improvement","code_change","release","system"].includes(requestedType)?requestedType:"all";
 const activityTypeLabels={all:"All types",conversation:"Prompts & replies",message:"Messages",improvement:"Improvements",code_change:"Code changes",release:"Releases",system:"System"};
 const activityRoute=()=>{const match=location.pathname.match(/^\/activity\/([^/]+)\/([^/]+)$/);if(!match)return null;try{return {kind:decodeURIComponent(match[1]),id:decodeURIComponent(match[2])}}catch{return null}};
@@ -56,7 +56,7 @@ function renderSystem(data){
 const activityKind=(value,hasParent=false)=>value==="conversation"?(hasParent?"reply":"prompt"):({code_change:"code change",improvement:"improvement",message:"message",release:"release",system:"system"}[value]||String(value||"activity").replaceAll("_"," "));
 const activityLifecycle=(story,active=false)=>{if(active||story.workState==="active"||["queued","running"].includes(story.status))return "running";if(story.workState==="waiting"||story.status==="delivery_pending")return "waiting";if(story.workState==="blocked")return "blocked";if(story.workState==="terminal")return "done";if(story.category==="failure"||story.tone==="danger"||story.tone==="warning")return "failed";return "done"};
 const matchesActivityType=(item,type=activityType)=>type==="all"||item.kind===type;
-const matchesActivityFilter=(item,filter=activityFilter,active=false)=>matchesActivityType(item)&&(filter==="all"||activityLifecycle(item,active)===filter);
+const matchesActivityFilter=(item,filter=activityFilter,active=false)=>{const lifecycle=activityLifecycle(item,active);return matchesActivityType(item)&&(filter==="all"||(filter==="issues"?["blocked","failed"].includes(lifecycle):lifecycle===filter))};
 const viewAnchor=()=>{const scroll=el("activity-scroll");if(!scroll||scroll.scrollTop<=0)return null;const story=[...scroll.querySelectorAll("[data-story-id]")].find((item)=>item.getBoundingClientRect().bottom>scroll.getBoundingClientRect().top);return story?{id:story.dataset.storyId,top:story.getBoundingClientRect().top}:null};
 const restoreViewAnchor=(anchor)=>{if(!anchor)return;const story=document.querySelector('[data-story-id="'+CSS.escape(anchor.id)+'"]');if(story)el("activity-scroll").scrollBy(0,story.getBoundingClientRect().top-anchor.top)};
 const storyIndicator=(story,active)=>{const state=activityLifecycle(story,active);return '<span class="story-mark story-status-indicator" data-state="'+esc(state)+'" role="img" aria-label="Status: '+esc(state)+'" title="'+esc(state)+'"></span>'};
@@ -144,13 +144,13 @@ function renderActivity(data){
   document.querySelectorAll("[data-activity-filter]").forEach((button)=>button.setAttribute("aria-pressed",String(button.dataset.activityFilter===activityFilter)));
   el("activity-type-label").textContent=activityTypeLabels[activityType];
   document.querySelectorAll("[data-activity-type]").forEach((option)=>option.setAttribute("aria-selected",String(option.dataset.activityType===activityType)));
-  for(const filter of ["all","running","waiting","blocked","failed","done"]){el("filter-"+filter+"-count").textContent=all.filter((item)=>matchesActivityFilter(item,filter,activeKeys.has(item.kind+":"+item.id))).length}
+  for(const filter of ["all","running","waiting","issues","done"]){el("filter-"+filter+"-count").textContent=all.filter((item)=>matchesActivityFilter(item,filter,activeKeys.has(item.kind+":"+item.id))).length}
   const active=list(data.activity?.active).filter((item)=>matchesActivityFilter(item,activityFilter,true));
   const recent=list(data.activity?.recent).filter((item)=>matchesActivityFilter(item));
   el("active-activity").innerHTML=active.length?'<div class="stream-label">Running now</div>'+active.map((item)=>storyCard(item,true)).join(""):"";
   const groups=[];
-  for(const item of recent){const label=["running","waiting","blocked"].includes(activityFilter)?"Open work":dayLabel(item.occurredAt);const group=groups.at(-1);if(group?.label===label)group.items.push(item);else groups.push({label,items:[item]})}
-  const emptyCopy={running:"Nothing is running.",waiting:"Nothing is waiting.",blocked:"Nothing is blocked.",failed:"No failed activity.",done:"No completed activity."}[activityFilter]||"No activity yet.";
+  for(const item of recent){const label=["running","waiting"].includes(activityFilter)?"Open work":dayLabel(item.occurredAt);const group=groups.at(-1);if(group?.label===label)group.items.push(item);else groups.push({label,items:[item]})}
+  const emptyCopy={running:"Nothing is running.",waiting:"Nothing is waiting.",issues:"No activity needs investigation.",done:"No completed activity."}[activityFilter]||"No activity yet.";
   el("activity").innerHTML=groups.length?groups.map((group)=>'<section class="activity-day"><h3>'+esc(group.label)+'</h3>'+group.items.map((item)=>storyCard(item)).join("")+'</section>').join(""):empty(emptyCopy);
   restoreViewAnchor(anchor);
 }

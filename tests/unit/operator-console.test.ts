@@ -72,8 +72,9 @@ describe("operator console", () => {
     expect(pageHtml).toContain('id="filter-all-count"');
     expect(pageHtml).toContain('id="filter-running-count"');
     expect(pageHtml).toContain('id="filter-waiting-count"');
-    expect(pageHtml).toContain('id="filter-blocked-count"');
-    expect(pageHtml).toContain('id="filter-failed-count"');
+    expect(pageHtml).toContain('id="filter-issues-count"');
+    expect(pageHtml).not.toContain('id="filter-blocked-count"');
+    expect(pageHtml).not.toContain('id="filter-failed-count"');
     expect(pageHtml).toContain('id="filter-done-count"');
     expect(pageHtml).toContain('id="activity-type-trigger" type="button" aria-haspopup="listbox"');
     expect(pageHtml).toContain('id="activity-type-options" class="activity-type-options" role="listbox" aria-label="Filter activity by type" hidden');
@@ -159,7 +160,8 @@ describe("operator console", () => {
     expect(() => new Script(clientScript)).not.toThrow();
     expect(clientScript).toContain('aria-hidden="true"');
     expect(clientScript).toContain('datetime="');
-    expect(clientScript).toContain('activityFilter=["all","running","waiting","blocked","failed","done"]');
+    expect(clientScript).toContain('activityFilter=["all","running","waiting","issues","done"]');
+    expect(clientScript).toContain('filter==="issues"?["blocked","failed"].includes(lifecycle)');
     expect(clientScript).toContain('activityType=["all","conversation","message","improvement","code_change","release","system"]');
     expect(clientScript).toContain("renderActivityDetail");
     expect(clientScript).toContain("detailLoadingShell");
@@ -211,7 +213,7 @@ describe("operator console", () => {
     expect(clientScript).not.toContain("improvementAttentionOnly");
     expect(clientScript).toContain("activityLifecycle");
     expect(clientScript).toContain("matchesActivityType");
-    expect(clientScript).toContain('activityLifecycle(item,active)===filter');
+    expect(clientScript).toContain('const lifecycle=activityLifecycle(item,active)');
     expect(clientScript).toContain('story.status==="delivery_pending"');
     expect(clientScript).toContain('story.workState==="terminal")return "done"');
     expect(clientScript).not.toContain('setActivityFilter("blocked",true)');

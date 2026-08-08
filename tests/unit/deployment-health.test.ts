@@ -46,6 +46,37 @@ describe("deployment health", () => {
     expect(readSnapshot).toHaveBeenCalledTimes(3);
     expect(sleep).toHaveBeenCalledTimes(2);
   });
+
+  it("allows restarts before the gate while rejecting a restart during its stability window", async () => {
+    const settled = snapshot();
+    for (const item of settled.items.filter((item: any) => item.kind === "Pod")) {
+      item.status.containerStatuses[0].restartCount = 1;
+    }
+    await expect(verifyDeploymentStability({
+      namespace: "namespace",
+      release: "discord-ai-agent",
+      expectedRevision: "revision-a",
+      stabilitySeconds: 5,
+      intervalMs: 5_000,
+      readSnapshot: () => settled,
+      sleep: async () => undefined,
+    })).resolves.toMatchObject({ healthy: true });
+
+    let reads = 0;
+    await expect(verifyDeploymentStability({
+      namespace: "namespace",
+      release: "discord-ai-agent",
+      expectedRevision: "revision-a",
+      stabilitySeconds: 5,
+      intervalMs: 5_000,
+      readSnapshot: () => {
+        const sample = snapshot();
+        if (reads++ > 0) sample.items.find((item: any) => item.kind === "Pod")!.status.containerStatuses[0].restartCount = 1;
+        return sample;
+      },
+      sleep: async () => undefined,
+    })).rejects.toThrow("stability window");
+  });
 });
 
 function snapshot() {

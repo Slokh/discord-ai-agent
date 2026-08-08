@@ -159,6 +159,10 @@ export async function messageIdsNeedingEmbeddings(pool: DbPool, input: {
           AND c.is_excluded = false
           AND coalesce(parent.is_excluded, false) = false
           AND NOT EXISTS (SELECT 1 FROM privacy_deletions p WHERE p.user_id = m.author_id)
+          AND NOT EXISTS (
+            SELECT 1 FROM discord_delivery_obligations delivery
+            WHERE delivery.source_message_id = m.id
+          )
           AND ($4::text IS NULL OR (
             position('<@' || $4 || '>' in m.content) = 0
             AND position('<@!' || $4 || '>' in m.content) = 0
@@ -194,6 +198,10 @@ export async function embeddingBacklog(pool: DbPool, input: { guildId: string; m
           AND c.is_excluded = false
           AND coalesce(parent.is_excluded, false) = false
           AND NOT EXISTS (SELECT 1 FROM privacy_deletions p WHERE p.user_id = m.author_id)
+          AND NOT EXISTS (
+            SELECT 1 FROM discord_delivery_obligations delivery
+            WHERE delivery.source_message_id = m.id
+          )
           AND ($3::text IS NULL OR (
             position('<@' || $3 || '>' in m.content) = 0
             AND position('<@!' || $3 || '>' in m.content) = 0

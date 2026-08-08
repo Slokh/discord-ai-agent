@@ -37,6 +37,39 @@ describe("sandbox reconciler", () => {
     });
   });
 
+  it("stores failed pod logs as a redacted runtime artifact instead of task metadata", async () => {
+    const run = sandboxRun();
+    const repo = {
+      listActiveSandboxRuns: vi.fn(async () => [run]),
+      listStaleRunningAgentTasksWithoutActiveSandbox: vi.fn(async () => []),
+      listTerminalSandboxRunsPendingCleanup: vi.fn(async () => []),
+      markAgentTaskFailed: vi.fn(async () => undefined),
+    };
+    const agentRuntime = {
+      getExecution: vi.fn(async () => ({ sessionId: "session-1", executionId: "agent-task-execution-task-1" })),
+      storeArtifact: vi.fn(async () => ({ artifactId: "artifact-1" })),
+    };
+    const backend = {
+      name: "kubernetes-sandbox",
+      observeRun: vi.fn(async () => ({ status: "failed" as const, reason: "failed", diagnosticLog: "sensitive log tail" })),
+      cleanupRun: vi.fn(),
+    };
+
+    await runSandboxReconciliationOnce(repo as any, backend, { agentRuntime: agentRuntime as any });
+
+    expect(agentRuntime.storeArtifact).toHaveBeenCalledWith(expect.objectContaining({
+      kind: "command_log",
+      content: "sensitive log tail",
+      metadata: expect.objectContaining({ source: "kubernetes_pod_log", bounded: true }),
+    }));
+    expect(repo.markAgentTaskFailed).toHaveBeenCalledWith(expect.objectContaining({
+      metadata: expect.objectContaining({
+        diagnosticArtifactId: "artifact-1",
+        observed: expect.not.objectContaining({ diagnosticLog: expect.anything() }),
+      }),
+    }));
+  });
+
   it("cleans terminal sandbox resources and records cleanup", async () => {
     const run = sandboxRun({ taskStatus: "succeeded", status: "succeeded" });
     const repo = {

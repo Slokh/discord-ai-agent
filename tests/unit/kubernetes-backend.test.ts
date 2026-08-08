@@ -74,6 +74,42 @@ describe("KubernetesExecutionBackend", () => {
     await expect(backend.observeRun(sandboxRun())).resolves.toEqual({ status: "gone", reason: "Kubernetes Job was not found." });
   });
 
+  it("retains bounded pod termination diagnostics when a Kubernetes job fails", async () => {
+    const clients = fakeClients({
+      readNamespacedJob: vi.fn(async () => ({
+        status: { failed: 1, conditions: [{ type: "Failed", status: "True", reason: "BackoffLimitExceeded" }] },
+      })),
+    }, {
+      listNamespacedPod: vi.fn(async () => ({ items: [{
+        metadata: { name: "agent-task-test-abc", creationTimestamp: new Date("2026-08-08T12:00:00Z") },
+        status: { phase: "Failed", containerStatuses: [{
+          name: "sandbox", restartCount: 0,
+          state: { terminated: { reason: "Error", exitCode: 137, signal: 9, finishedAt: new Date("2026-08-08T12:01:00Z") } },
+        }] },
+      }] } as any)),
+      readNamespacedPodLog: vi.fn(async () => "last useful failure line"),
+    });
+    const backend = new KubernetesExecutionBackend(loadConfig(), clients);
+
+    await expect(backend.observeRun(sandboxRun())).resolves.toMatchObject({
+      status: "failed",
+      reason: "BackoffLimitExceeded",
+      diagnosticLog: "last useful failure line",
+      metadata: {
+        podName: "agent-task-test-abc",
+        podPhase: "Failed",
+        containerReason: "Error",
+        exitCode: 137,
+        signal: 9,
+        restartCount: 0,
+      },
+    });
+    expect(clients.core.readNamespacedPodLog).toHaveBeenCalledWith(expect.objectContaining({
+      tailLines: 200,
+      limitBytes: 40_000,
+    }));
+  });
+
   it("has one execution backend", () => {
     expect(createExecutionBackend(loadConfig())).toBeInstanceOf(KubernetesExecutionBackend);
   });

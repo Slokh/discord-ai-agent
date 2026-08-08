@@ -31,6 +31,12 @@ spec:
           ports:
             - name: http
               containerPort: {{ .Values.console.port }}
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 5
+            failureThreshold: 24
           readinessProbe:
             httpGet:
               path: /healthz

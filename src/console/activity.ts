@@ -92,7 +92,7 @@ function messageStory(message: DashboardRecord): ActivityStory {
     status: embedded ? "embedded" : skipped ? "embedding_skipped" : "embedding_pending",
     tone: embedded ? "success" : skipped ? "neutral" : "warning",
     workState: embedded || skipped ? "terminal" : "waiting",
-    summary: embedded ? "Embedded" : skipped ? "Embedding skipped · bot mention" : "Embedding pending",
+    summary: embedded ? "Embedded" : skipped ? "Agent interaction · embedding not needed" : "Embedding pending",
     occurredAt: message.createdAt,
     startedAt: message.createdAt,
     sourceUrl: nullableString(message.sourceUrl),

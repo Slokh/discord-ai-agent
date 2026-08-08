@@ -1,4 +1,5 @@
 import type { DiscordAiAgentRepository } from "../db/repositories.js";
+import type { AgentRuntimeRepository } from "../db/agentRuntimeRepository.js";
 import type { ExecutionBackend, ObservedSandboxRun } from "./backend.js";
 import { logger } from "../util/logger.js";
 
@@ -18,6 +19,7 @@ export function startSandboxReconciler(input: {
   backend: SandboxRunBackend;
   intervalMs?: number;
   staleRunningTaskMs?: number;
+  agentRuntime?: Pick<AgentRuntimeRepository, "getExecution" | "storeArtifact">;
 }): SandboxReconcilerRuntime {
   let stopped = false;
   let running = false;
@@ -27,7 +29,7 @@ export function startSandboxReconciler(input: {
     if (running || stopped) return;
     running = true;
     try {
-      await runSandboxReconciliationOnce(input.repo, input.backend, { staleRunningTaskMs: input.staleRunningTaskMs });
+      await runSandboxReconciliationOnce(input.repo, input.backend, { staleRunningTaskMs: input.staleRunningTaskMs, agentRuntime: input.agentRuntime });
     } finally {
       running = false;
     }
@@ -51,9 +53,9 @@ export function startSandboxReconciler(input: {
 export async function runSandboxReconciliationOnce(
   repo: DiscordAiAgentRepository,
   backend: SandboxRunBackend,
-  options: { staleRunningTaskMs?: number; now?: () => number } = {}
+  options: { staleRunningTaskMs?: number; now?: () => number; agentRuntime?: Pick<AgentRuntimeRepository, "getExecution" | "storeArtifact"> } = {}
 ) {
-  await reconcileActiveRuns(repo, backend);
+  await reconcileActiveRuns(repo, backend, options.agentRuntime);
   await reconcileRunningTasksWithoutActiveSandbox(repo, options);
   await cleanupTerminalRuns(repo, backend);
   await sweepOrphanClusterResources(repo, backend as OrphanSweepBackend);
@@ -67,7 +69,11 @@ async function sweepOrphanClusterResources(repo: DiscordAiAgentRepository, backe
   await backend.sweepOrphanResources(knownTaskIds);
 }
 
-async function reconcileActiveRuns(repo: DiscordAiAgentRepository, backend: SandboxRunBackend) {
+async function reconcileActiveRuns(
+  repo: DiscordAiAgentRepository,
+  backend: SandboxRunBackend,
+  agentRuntime?: Pick<AgentRuntimeRepository, "getExecution" | "storeArtifact">,
+) {
   const runs = await repo.listActiveSandboxRuns({ backend: backend.name });
   for (const run of runs) {
     if (run.backend !== backend.name) continue;
@@ -91,12 +97,43 @@ async function reconcileActiveRuns(repo: DiscordAiAgentRepository, backend: Sand
       continue;
     }
 
+    const diagnosticArtifactId = await retainSandboxDiagnostic(agentRuntime, run.taskId, run.sandboxRunId, observed.diagnosticLog);
+    const safeObserved = {
+      status: observed.status,
+      ...(observed.reason ? { reason: observed.reason } : {}),
+      ...(observed.metadata ? { metadata: observed.metadata } : {}),
+    };
     await repo.markAgentTaskFailed({
       taskId: run.taskId,
       error: observed.reason ?? (observed.status === "gone" ? "Sandbox job disappeared before completion." : "Sandbox job failed."),
-      metadata: { sandboxRunId: run.sandboxRunId, observed }
+      metadata: {
+        sandboxRunId: run.sandboxRunId,
+        observed: safeObserved,
+        ...(diagnosticArtifactId ? { diagnosticArtifactId } : {}),
+      }
     });
   }
+}
+
+async function retainSandboxDiagnostic(
+  agentRuntime: Pick<AgentRuntimeRepository, "getExecution" | "storeArtifact"> | undefined,
+  taskId: string,
+  sandboxRunId: string,
+  diagnosticLog: string | undefined,
+) {
+  if (!agentRuntime || !diagnosticLog?.trim()) return null;
+  const execution = await agentRuntime.getExecution({ executionId: `agent-task-execution-${taskId}` });
+  if (!execution) return null;
+  const artifact = await agentRuntime.storeArtifact({
+    sessionId: execution.sessionId,
+    executionId: execution.executionId,
+    kind: "command_log",
+    name: "Kubernetes sandbox failure log",
+    content: diagnosticLog,
+    contentType: "text/plain",
+    metadata: { taskId, sandboxRunId, source: "kubernetes_pod_log", bounded: true },
+  });
+  return artifact.artifactId;
 }
 
 async function reconcileRunningTasksWithoutActiveSandbox(

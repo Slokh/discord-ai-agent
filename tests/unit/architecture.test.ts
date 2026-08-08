@@ -40,6 +40,12 @@ describe("architecture guardrails", () => {
     expect(serviceAccounts.match(/automountServiceAccountToken: false/g)).toHaveLength(2);
   });
 
+  it("allows the Console to finish cold startup before liveness restarts it", async () => {
+    const deployment = await fs.readFile(path.join(process.cwd(), "deploy/helm/discord-ai-agent/templates/console.yaml"), "utf8");
+    expect(deployment).toContain("startupProbe:");
+    expect(deployment).toMatch(/startupProbe:[\s\S]*periodSeconds: 5[\s\S]*failureThreshold: 24[\s\S]*readinessProbe:/);
+  });
+
   it("keeps broad sandbox HTTPS egress away from private and metadata networks", async () => {
     const policy = await fs.readFile(path.join(process.cwd(), "deploy/helm/discord-ai-agent/templates/networkpolicy.yaml"), "utf8");
     for (const cidr of ["10.0.0.0/8", "100.64.0.0/10", "127.0.0.0/8", "169.254.0.0/16", "172.16.0.0/12", "192.168.0.0/16"]) {

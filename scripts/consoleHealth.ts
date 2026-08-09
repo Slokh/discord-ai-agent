@@ -9,7 +9,7 @@ export type ConsoleHealthResult = {
   activity: { sampled: boolean; detailSampled: boolean };
 };
 
-export async function checkConsoleHealth(input: {
+export type ConsoleHealthInput = {
   expectedRevision: string;
   internalUrl?: string | null;
   publicUrl?: string | null;
@@ -18,7 +18,26 @@ export async function checkConsoleHealth(input: {
   maxAgeMs?: number;
   maxLatencyMs?: number;
   timeoutMs?: number;
+};
+
+export async function waitForConsoleHealth(input: ConsoleHealthInput & {
+  attempts?: number;
+  retryDelayMs?: number;
+  sleep?: (milliseconds: number) => Promise<void>;
 }): Promise<ConsoleHealthResult> {
+  const attempts = Math.max(1, Math.trunc(input.attempts ?? 1));
+  const retryDelayMs = Math.max(0, Math.trunc(input.retryDelayMs ?? 0));
+  const sleep = input.sleep ?? ((milliseconds: number) => new Promise((resolve) => setTimeout(resolve, milliseconds)));
+  let result: ConsoleHealthResult | null = null;
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    result = await checkConsoleHealth(input);
+    if (result.status === "healthy") return result;
+    if (attempt < attempts && retryDelayMs > 0) await sleep(retryDelayMs);
+  }
+  return result!;
+}
+
+export async function checkConsoleHealth(input: ConsoleHealthInput): Promise<ConsoleHealthResult> {
   if (!input.internalUrl && !input.publicUrl) throw new Error("At least one Console health endpoint is required.");
   const fetchImpl = input.fetchImpl ?? fetch;
   const now = input.now ?? Date.now;

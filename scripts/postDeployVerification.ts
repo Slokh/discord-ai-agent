@@ -3,7 +3,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { verifyDeploymentStability } from "./deploymentHealth.js";
 import { rollbackRelease } from "./rollbackRelease.js";
-import { checkConsoleHealth } from "./consoleHealth.js";
+import { waitForConsoleHealth } from "./consoleHealth.js";
 
 export type PostDeployStage = "deployment_health" | "capability_canary" | "console_health" | "private_regressions" | "stability" | "promotion";
 export type PostDeployVerificationResult = {
@@ -191,10 +191,13 @@ async function runCli() {
       ];
       command("kubectl", healthArgs);
       if (args.consolePublicUrl) {
-        const publicHealth = await checkConsoleHealth({
+        const publicHealth = await waitForConsoleHealth({
           expectedRevision: args.expectedRevision,
           internalUrl: null,
           publicUrl: args.consolePublicUrl,
+          attempts: 8,
+          retryDelayMs: 5_000,
+          timeoutMs: 3_000,
         });
         if (publicHealth.status !== "healthy") {
           const failedCodes = publicHealth.checks.filter((check) => check.status === "failed").map((check) => check.code);

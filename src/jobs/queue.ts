@@ -23,6 +23,7 @@ import { runImprovementReconciliationOnce, type ImprovementReconciliationResult 
 import { durationMs, logger } from "../util/logger.js";
 import { currentTraceContext, runWithTrace } from "../util/trace.js";
 import { enqueueAgentTaskJob, type AgentTaskEnqueueInput, type AgentTaskEnqueueResult } from "./agentTaskEnqueue.js";
+import { waitForAgentTaskCapacity, waitForAgentTaskTerminal } from "./agentTaskCapacity.js";
 import { agentTaskRuntimeParentMetadata } from "./agentTaskRuntimeParent.js";
 import { normalizeEmbeddingPriority } from "./embeddingPriority.js";
 import { KeyedSerialQueue } from "./keyedSerialQueue.js";
@@ -31,6 +32,7 @@ import { configureReminderQueues, enqueueReminderDelivery, registerReminderWorke
 export const CRAWL_GUILD_JOB = "crawl.guild";
 export const EMBED_MESSAGE_JOB = "embedding.message";
 export const AGENT_TASK_JOB = "agent.task";
+const AGENT_TASK_JOB_EXPIRE_SECONDS = 2 * 60 * 60;
 export const AGENT_RUNTIME_EXECUTION_JOB = "agent.runtime.execution";
 export const IMPROVEMENT_RECONCILIATION_JOB = "improvement.reconcile";
 const EMBEDDING_JOB_BATCH_SIZE = 400;
@@ -134,8 +136,8 @@ export async function startJobs(input: {
   await boss.createQueue(CRAWL_GUILD_JOB, { policy: "short" });
   await boss.createQueue(EMBED_MESSAGE_JOB, { policy: "short", retryLimit: 3, retryDelay: 10, retryBackoff: true });
   await boss.updateQueue(EMBED_MESSAGE_JOB, { retryLimit: 3, retryDelay: 10, retryBackoff: true });
-  await boss.createQueue(AGENT_TASK_JOB, { policy: "short", retryLimit: 0 });
-  await boss.updateQueue(AGENT_TASK_JOB, { retryLimit: 0 });
+  await boss.createQueue(AGENT_TASK_JOB, { policy: "short", retryLimit: 0, expireInSeconds: AGENT_TASK_JOB_EXPIRE_SECONDS });
+  await boss.updateQueue(AGENT_TASK_JOB, { retryLimit: 0, expireInSeconds: AGENT_TASK_JOB_EXPIRE_SECONDS });
   await boss.createQueue(AGENT_RUNTIME_EXECUTION_JOB, {
     policy: "short",
     retryLimit: 2,
@@ -466,6 +468,17 @@ export async function startJobs(input: {
               "Starting agent.task sandbox"
             );
             const backendName = input.agentTask?.name ?? defaultAgentTaskBackendName(input.config);
+            await waitForAgentTaskCapacity({
+              repo: input.repo,
+              backend: backendName,
+              maxConcurrent: input.config.execution.sandbox.maxConcurrentTasks,
+              onWait: (activeCount) => {
+                logger.info(
+                  { queue: AGENT_TASK_JOB, jobId: job.id, taskId: job.data.taskId, activeCount },
+                  "Agent task is queued behind active sandbox capacity",
+                );
+              },
+            });
             const runtimeParentMetadata = agentTaskRuntimeParentMetadata(job.data);
             await input.repo?.markAgentTaskRunning({
               taskId: job.data.taskId,
@@ -531,6 +544,13 @@ export async function startJobs(input: {
                 },
                 "agent.task sandbox started"
               );
+              // Keep this single pg-boss worker occupied until the durable task
+              // is terminal. Combined with the pre-launch capacity check, this
+              // serializes normal operation and also respects a sandbox left
+              // running across a worker restart.
+              if (backendName === "kubernetes-sandbox") {
+                await waitForAgentTaskTerminal({ repo: input.repo, taskId: job.data.taskId });
+              }
             } catch (error) {
               const message = error instanceof Error ? error.message : String(error);
               await input.repo?.markAgentTaskFailed({

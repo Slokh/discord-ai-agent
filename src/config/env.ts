@@ -50,6 +50,10 @@ export const productConfig = {
     // Keep V8's old-space limit below the 2 GiB container limit. Native
     // allocations and child-process overhead need the remaining headroom.
     nodeHeapMb: 1_536,
+    // The shared production node is intentionally small. Keep repository
+    // sandboxes serial so bursty repair intake queues instead of competing for
+    // memory and causing unrelated workspaces to be evicted together.
+    maxConcurrentTasks: 1,
     taskTimeoutSeconds: 1_800,
     ttlSecondsAfterFinished: 3_600
   },
@@ -185,7 +189,10 @@ export function loadConfig(argv = process.argv) {
     },
     execution: {
       taskSigningSecret: env.TASK_SIGNING_SECRET,
-      sandbox: { taskTimeoutSeconds: productConfig.sandbox.taskTimeoutSeconds },
+      sandbox: {
+        maxConcurrentTasks: productConfig.sandbox.maxConcurrentTasks,
+        taskTimeoutSeconds: productConfig.sandbox.taskTimeoutSeconds,
+      },
       kubernetes: {
         namespace: env.POD_NAMESPACE || productConfig.sandbox.namespace,
         sandboxImage: env.SANDBOX_IMAGE || productConfig.sandbox.image,

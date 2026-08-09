@@ -32,7 +32,14 @@ describe("sandbox reconciler", () => {
           status: "failed",
           reason: "BackoffLimitExceeded",
           metadata: { failed: 1 }
-        }
+        },
+        failureCode: "sandbox_unknown",
+        diagnosticsStatus: "unavailable",
+        failureDiagnosis: expect.objectContaining({
+          code: "sandbox_unknown",
+          summary: expect.stringContaining("stopped unexpectedly"),
+          diagnosticsStatus: "unavailable",
+        }),
       }
     });
   });
@@ -67,6 +74,30 @@ describe("sandbox reconciler", () => {
         diagnosticArtifactId: "artifact-1",
         observed: expect.not.objectContaining({ diagnosticLog: expect.anything() }),
       }),
+    }));
+  });
+
+  it("records one progress transition while Kubernetes retries the sandbox", async () => {
+    const run = sandboxRun();
+    const repo = {
+      listActiveSandboxRuns: vi.fn(async () => [run]),
+      listStaleRunningAgentTasksWithoutActiveSandbox: vi.fn(async () => []),
+      listTerminalSandboxRunsPendingCleanup: vi.fn(async () => []),
+      getAgentTask: vi.fn(async () => agentTask({ currentStep: "sandbox_running" })),
+      markAgentTaskProgress: vi.fn(async () => undefined),
+    };
+    const backend = {
+      name: "kubernetes-sandbox",
+      observeRun: vi.fn(async () => ({ status: "running" as const, metadata: { failed: 1, active: 1, retrying: true } })),
+      cleanupRun: vi.fn(),
+    };
+
+    await runSandboxReconciliationOnce(repo as any, backend);
+
+    expect(repo.markAgentTaskProgress).toHaveBeenCalledWith(expect.objectContaining({
+      taskId: "task-1",
+      step: "sandbox_retrying",
+      statusMessage: expect.stringContaining("retrying once automatically"),
     }));
   });
 
@@ -192,7 +223,7 @@ function sandboxRun(overrides: Partial<SandboxRunRecord> = {}): SandboxRunRecord
   };
 }
 
-function agentTask() {
+function agentTask(overrides: Record<string, unknown> = {}) {
   return {
     taskId: "task-1",
     pgBossJobId: "job-1",
@@ -227,6 +258,7 @@ function agentTask() {
     lastRenderedSignature: null,
     lastRenderedAt: null,
     terminalRenderedAt: null,
-    updatedAt: new Date("2026-01-01T00:10:00Z")
+    updatedAt: new Date("2026-01-01T00:10:00Z"),
+    ...overrides,
   };
 }

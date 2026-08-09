@@ -199,6 +199,8 @@ Group canonical runtime-ledger failures by deployed revision, warning/error even
 
 Deleted reply parents are informational `discord.reply_context.unavailable` events. Unexpected fetch failures remain warnings, so warning-only triage is not polluted by normal Discord deletion.
 
+For repository sandbox failures, inspect the terminal task event's `failureCode`, `failureDiagnosis.diagnosticsStatus`, and `observed.metadata` before opening its retained `kubernetes_pod_log` artifact. `sandbox_oom`, `sandbox_evicted`, `sandbox_deadline`, `sandbox_start_failed`, `sandbox_runner_crash`, and `sandbox_disappeared` are distinct causes. `sandbox_unknown` with `read_failed`, `pod_missing`, or `api_unavailable` means the cause was not retained and must not be guessed from the last successful command. A running observation with `retrying: true` is the single automatic infrastructure retry, not another logical code-change task.
+
 ## Build and release verification
 
 Before deployment:

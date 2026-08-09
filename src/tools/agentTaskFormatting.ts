@@ -85,7 +85,7 @@ export function formatAgentTaskResult(input: {
   }
 
   if (job.status === "failed") {
-    const diagnosis = agentTaskFailureDiagnosis(input.taskEvents);
+    const diagnosis = agentTaskFailureDiagnosis(input.taskEvents) ?? fallbackSandboxFailureDiagnosis(job.error);
     return [
       diagnosis
         ? `No PR opened: ${diagnosis.summary}`
@@ -163,7 +163,7 @@ function agentTaskFailureDiagnosis(taskEvents: TaskEvent[] | undefined) {
 }
 
 function formatLastCommandFailure(events: SandboxCommandEvent[] | undefined, category?: string) {
-  const event = events?.find((candidate) => candidate.exitCode !== 0) ?? events?.[0];
+  const event = events?.find((candidate) => candidate.exitCode !== 0);
   if (!event) return "";
   if (category === "sandbox_resource") {
     const exit = event.exitCode == null ? "" : ` exit=${event.exitCode}`;
@@ -174,6 +174,16 @@ function formatLastCommandFailure(events: SandboxCommandEvent[] | undefined, cat
   const exit = event.exitCode == null ? "" : ` exit=${event.exitCode}`;
   const duration = event.durationMs == null ? "" : ` ${event.durationMs}ms`;
   return `Last sandbox command: \`${event.command ?? event.step}\`${exit}${duration}${detail}`;
+}
+
+function fallbackSandboxFailureDiagnosis(error: string | null | undefined) {
+  if (!error || !/(backoff limit|kubernetes job|sandbox job|sandbox.*disappear)/i.test(error)) return null;
+  return {
+    summary: "The coding workspace stopped unexpectedly during implementation.",
+    category: "unknown",
+    nextAction: "React with 🔄 to retry the code change.",
+    finalResponse: "",
+  };
 }
 
 function formatAgentTaskTimingSummary(events: TaskEvent[] | undefined) {

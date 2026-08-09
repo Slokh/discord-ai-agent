@@ -2,6 +2,7 @@ import type { DiscordAiAgentRepository } from "../db/repositories.js";
 import type { AgentRuntimeRepository } from "../db/agentRuntimeRepository.js";
 import type { ExecutionBackend, ObservedSandboxRun } from "./backend.js";
 import { logger } from "../util/logger.js";
+import { diagnoseObservedSandboxFailure } from "./sandboxFailureDiagnosis.js";
 
 const DEFAULT_RECONCILE_INTERVAL_MS = 30_000;
 const DEFAULT_STALE_RUNNING_TASK_MS = 15 * 60_000;
@@ -86,7 +87,21 @@ async function reconcileActiveRuns(
       continue;
     }
 
-    if (observed.status === "running") continue;
+    if (observed.status === "running") {
+      if (observed.metadata?.retrying === true) {
+        const task = await repo.getAgentTask(run.taskId);
+        if (task && task.currentStep !== "sandbox_retrying") {
+          await repo.markAgentTaskProgress({
+            taskId: run.taskId,
+            backend: run.backend,
+            step: "sandbox_retrying",
+            statusMessage: "The coding workspace stopped unexpectedly; retrying once automatically.",
+            metadata: { sandboxRunId: run.sandboxRunId, observed },
+          });
+        }
+      }
+      continue;
+    }
 
     if (observed.status === "succeeded") {
       await repo.markAgentTaskFailed({
@@ -103,12 +118,16 @@ async function reconcileActiveRuns(
       ...(observed.reason ? { reason: observed.reason } : {}),
       ...(observed.metadata ? { metadata: observed.metadata } : {}),
     };
+    const failureDiagnosis = diagnoseObservedSandboxFailure(observed);
     await repo.markAgentTaskFailed({
       taskId: run.taskId,
       error: observed.reason ?? (observed.status === "gone" ? "Sandbox job disappeared before completion." : "Sandbox job failed."),
       metadata: {
         sandboxRunId: run.sandboxRunId,
         observed: safeObserved,
+        failureCode: failureDiagnosis.code,
+        diagnosticsStatus: failureDiagnosis.diagnosticsStatus,
+        failureDiagnosis,
         ...(diagnosticArtifactId ? { diagnosticArtifactId } : {}),
       }
     });

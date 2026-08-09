@@ -76,14 +76,20 @@ export async function main() {
     await recordCodegenFailureDiagnosis(env, diagnosis).catch((diagnosisError) => {
       console.error("Failed to record codegen failure diagnosis", diagnosisError);
     });
-    await complete(env, {
-      status: diagnosis.status,
-      error: message,
-      metadata: { timingsMs: timings, failureDiagnosis: diagnosis }
-    }).catch((callbackError) => {
+    try {
+      await complete(env, {
+        status: diagnosis.status,
+        error: message,
+        metadata: { timingsMs: timings, failureDiagnosis: diagnosis }
+      });
+    } catch (callbackError) {
       console.error("Failed to post terminal task callback", callbackError);
-    });
-    throw error;
+      throw callbackError;
+    }
+    // The application now owns this handled terminal failure. Exit cleanly so
+    // Kubernetes retries only a runner crash, eviction, resource kill, or lost
+    // callback—not a deterministic code or verification failure.
+    return;
   }
 }
 

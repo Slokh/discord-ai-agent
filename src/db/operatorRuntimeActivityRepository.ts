@@ -7,6 +7,7 @@ const TRACE_METADATA_KEYS = new Set([
   "errorCode", "errorName", "retryable", "latencyBudgetMs", "latencyBudgetExceeded", "successfulMutationCount",
   "resumed", "attempt", "instructionBytes", "turnContextBytes", "toolSchemaBytes", "sizeBytes", "binary",
   "state", "headRevision", "mergeRevision", "revision", "deploymentId", "pullRequestNumber",
+  "failureCode", "diagnosticsStatus",
 ]);
 
 export async function executionActivityTrace(pool: DbPool, executionId: string) {
@@ -111,7 +112,9 @@ function dashboardTraceSummary(eventName: string, value: unknown, metadata: Reco
   if (eventName === "agent.task.command") return "Sandbox command recorded; command and output remain private.";
   if (eventName === "agent.task.artifact") return "Private evidence retained in the runtime ledger.";
   if (eventName === "agent.task.completed") {
-    return String(metadata.status) === "failed" ? "Repository work failed." : "Repository work completed.";
+    if (String(metadata.status) !== "failed") return "Repository work completed.";
+    const diagnosis = record(metadata.failureDiagnosis);
+    return nullable(diagnosis.summary) ?? "Repository work failed.";
   }
   if (eventName === "agent.task.pull_request_reconciled") return nullable(value);
   if (eventName === "agent.task.deployed") return "Verified production deployment recorded.";

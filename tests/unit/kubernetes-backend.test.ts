@@ -53,6 +53,7 @@ describe("KubernetesExecutionBackend", () => {
       expect(secret?.AGENT_TASK_CALLBACK_SECRET).not.toBe("task-secret");
       const job = vi.mocked(clients.batch.createNamespacedJob).mock.calls[0]?.[0].body;
       expect(job?.spec?.template.spec?.containers[0]?.image).toBe("registry.example/sandbox:test");
+      expect(job?.spec?.backoffLimit).toBe(1);
       expect(job?.spec?.template.spec).not.toHaveProperty("volumes");
     });
   });
@@ -96,6 +97,9 @@ describe("KubernetesExecutionBackend", () => {
       reason: "BackoffLimitExceeded",
       diagnosticLog: "last useful failure line",
       metadata: {
+        diagnosticsStatus: "available",
+        podAttemptCount: 1,
+        podAttempts: [expect.objectContaining({ containerReason: "Error", exitCode: 137 })],
         podName: "agent-task-test-abc",
         podPhase: "Failed",
         containerReason: "Error",
@@ -108,6 +112,38 @@ describe("KubernetesExecutionBackend", () => {
       tailLines: 200,
       limitBytes: 40_000,
     }));
+  });
+
+  it("keeps observing while Kubernetes retries one failed sandbox pod", async () => {
+    const listNamespacedPod = vi.fn(async () => ({ items: [] } as any));
+    const clients = fakeClients({
+      readNamespacedJob: vi.fn(async () => ({
+        status: { active: 1, failed: 1, conditions: [] },
+      })),
+    }, { listNamespacedPod });
+    const backend = new KubernetesExecutionBackend(loadConfig(), clients);
+
+    await expect(backend.observeRun(sandboxRun())).resolves.toEqual({
+      status: "running",
+      metadata: { active: 1, failed: 1, succeeded: null, retrying: true },
+    });
+    expect(listNamespacedPod).not.toHaveBeenCalled();
+  });
+
+  it("records when pod diagnostics cannot be read", async () => {
+    const clients = fakeClients({
+      readNamespacedJob: vi.fn(async () => ({
+        status: { failed: 2, conditions: [{ type: "Failed", status: "True", reason: "BackoffLimitExceeded" }] },
+      })),
+    }, {
+      listNamespacedPod: vi.fn(async () => { throw new Error("forbidden"); }),
+    });
+    const backend = new KubernetesExecutionBackend(loadConfig(), clients);
+
+    await expect(backend.observeRun(sandboxRun())).resolves.toMatchObject({
+      status: "failed",
+      metadata: { diagnosticsStatus: "read_failed" },
+    });
   });
 
   it("has one execution backend", () => {

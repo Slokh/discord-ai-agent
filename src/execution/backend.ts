@@ -142,12 +142,17 @@ export class KubernetesExecutionBackend implements ExecutionBackend {
       const job = response;
       const conditions = job.status?.conditions ?? [];
       const failed = conditions.find((condition) => condition.type === "Failed" && condition.status === "True");
-      if (failed || (job.status?.failed ?? 0) > 0) {
+      if (failed) {
         const diagnostics = await this.failedPodDiagnostics(run.namespace, run.backendJobName);
         return {
           status: "failed",
           reason: failed?.message ?? failed?.reason ?? "Kubernetes Job failed.",
-          metadata: { failed: job.status?.failed ?? null, succeeded: job.status?.succeeded ?? null, ...diagnostics.metadata },
+          metadata: {
+            jobFailureReason: failed.reason ?? null,
+            failed: job.status?.failed ?? null,
+            succeeded: job.status?.succeeded ?? null,
+            ...diagnostics.metadata,
+          },
           diagnosticLog: diagnostics.log
         };
       }
@@ -164,7 +169,8 @@ export class KubernetesExecutionBackend implements ExecutionBackend {
         metadata: {
           active: job.status?.active ?? null,
           failed: job.status?.failed ?? null,
-          succeeded: job.status?.succeeded ?? null
+          succeeded: job.status?.succeeded ?? null,
+          retrying: (job.status?.failed ?? 0) > 0,
         }
       };
     } catch (error) {
@@ -174,15 +180,20 @@ export class KubernetesExecutionBackend implements ExecutionBackend {
   }
 
   private async failedPodDiagnostics(namespace: string, jobName: string) {
-    if (!this.core.listNamespacedPod) return { metadata: {}, log: undefined };
+    if (!this.core.listNamespacedPod) {
+      return { metadata: { diagnosticsStatus: "api_unavailable" }, log: undefined };
+    }
     try {
       const pods = await this.core.listNamespacedPod({ namespace, labelSelector: `job-name=${jobName}` });
-      const pod = [...(pods.items ?? [])].sort((left, right) =>
+      const attempts = [...(pods.items ?? [])].sort((left, right) =>
         String(right.metadata?.creationTimestamp ?? "").localeCompare(String(left.metadata?.creationTimestamp ?? ""))
-      )[0];
-      if (!pod) return { metadata: {}, log: undefined };
-      const container = pod.status?.containerStatuses?.find((status) => status.name === "sandbox") ?? pod.status?.containerStatuses?.[0];
+      );
+      const pod = attempts[0];
+      if (!pod) return { metadata: { diagnosticsStatus: "pod_missing", podAttemptCount: 0 }, log: undefined };
+      const podAttempts = attempts.slice(0, 2).map((attempt) => podAttemptDiagnostic(attempt));
+      const container = sandboxContainerStatus(pod);
       const terminated = container?.state?.terminated ?? container?.lastState?.terminated;
+      const waiting = container?.state?.waiting ?? container?.lastState?.waiting;
       let log: string | undefined;
       if (pod.metadata?.name && this.core.readNamespacedPodLog) {
         log = await this.core.readNamespacedPodLog({
@@ -196,9 +207,13 @@ export class KubernetesExecutionBackend implements ExecutionBackend {
       }
       return {
         metadata: {
+          diagnosticsStatus: "available",
+          podAttemptCount: attempts.length,
+          podAttempts,
           podName: pod.metadata?.name ?? null,
           podPhase: pod.status?.phase ?? null,
-          containerReason: terminated?.reason ?? null,
+          podReason: pod.status?.reason ?? null,
+          containerReason: terminated?.reason ?? waiting?.reason ?? null,
           exitCode: terminated?.exitCode ?? null,
           signal: terminated?.signal ?? null,
           restartCount: container?.restartCount ?? null,
@@ -207,7 +222,7 @@ export class KubernetesExecutionBackend implements ExecutionBackend {
         log,
       };
     } catch {
-      return { metadata: {}, log: undefined };
+      return { metadata: { diagnosticsStatus: "read_failed" }, log: undefined };
     }
   }
 
@@ -279,7 +294,11 @@ export class KubernetesExecutionBackend implements ExecutionBackend {
       },
       spec: {
         activeDeadlineSeconds: this.config.execution.sandbox.taskTimeoutSeconds,
-        backoffLimit: 0,
+        // A non-zero container exit means the runner itself disappeared before
+        // it could send its signed terminal callback. Handled code, verification,
+        // and publication failures callback and exit cleanly, so retry only this
+        // infrastructure boundary once.
+        backoffLimit: 1,
         ttlSecondsAfterFinished: k8sConfig.ttlSecondsAfterFinished,
         template: {
           metadata: { labels: input.labels },
@@ -331,6 +350,24 @@ export class KubernetesExecutionBackend implements ExecutionBackend {
       if (!isKubernetesNotFound(error)) throw error;
     }
   }
+}
+
+function sandboxContainerStatus(pod: k8s.V1Pod) {
+  return pod.status?.containerStatuses?.find((status) => status.name === "sandbox") ?? pod.status?.containerStatuses?.[0];
+}
+
+function podAttemptDiagnostic(pod: k8s.V1Pod) {
+  const container = sandboxContainerStatus(pod);
+  const terminated = container?.state?.terminated ?? container?.lastState?.terminated;
+  const waiting = container?.state?.waiting ?? container?.lastState?.waiting;
+  return {
+    podPhase: pod.status?.phase ?? null,
+    podReason: pod.status?.reason ?? null,
+    containerReason: terminated?.reason ?? waiting?.reason ?? null,
+    exitCode: terminated?.exitCode ?? null,
+    signal: terminated?.signal ?? null,
+    finishedAt: terminated?.finishedAt ?? null,
+  };
 }
 
 function isKubernetesConflict(error: unknown) {

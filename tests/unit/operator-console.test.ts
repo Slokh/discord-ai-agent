@@ -157,7 +157,8 @@ describe("operator console", () => {
     expect(stylesheetText).toContain(".console-content{display:flow-root");
     expect(stylesheetText).toContain("@keyframes skeleton-shimmer");
     expect(stylesheetText).toContain("animation:none!important");
-    expect(stylesheetText).toContain("grid-template-columns:94px 7px 72px minmax(0,1fr) 48px");
+    expect(stylesheetText).toContain("grid-template-columns:120px 7px 72px minmax(0,1fr) 48px");
+    expect(stylesheetText).toContain("grid-template-columns:112px 7px 62px minmax(0,1fr) 42px");
     expect(stylesheetText).not.toMatch(/font(?:-size)?:10px/);
     expect(stylesheetText).not.toContain("font-size:9px");
     expect(stylesheetText).toContain("@media(prefers-reduced-motion:reduce)");

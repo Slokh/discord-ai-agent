@@ -11,6 +11,62 @@ permissions:
   id-token: write
 
 jobs:
+  console-health:
+    concurrency:
+      group: production-console-health
+      cancel-in-progress: false
+    if: vars.AWS_REGION != '' && vars.EKS_CLUSTER_NAME != ''
+    runs-on: ubuntu-latest
+    env:
+      AWS_REGION: ${{ vars.AWS_REGION }}
+      EKS_CLUSTER_NAME: ${{ vars.EKS_CLUSTER_NAME }}
+      HELM_RELEASE: ${{ vars.HELM_RELEASE || 'discord-ai-agent' }}
+      K8S_NAMESPACE: ${{ vars.K8S_NAMESPACE || 'discord-ai-agent' }}
+      CONSOLE_TUNNEL_ENABLED: ${{ vars.CONSOLE_TUNNEL_ENABLED }}
+    steps:
+      - uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+      - name: Verify Console boundary and production projection
+        run: |
+          aws eks update-kubeconfig --region "$AWS_REGION" --name "$EKS_CLUSTER_NAME"
+          revision="$(kubectl --namespace "$K8S_NAMESPACE" get deployment "$HELM_RELEASE-console" -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name=="APP_REVISION")].value}')"
+          run_key="github-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          kubectl --namespace "$K8S_NAMESPACE" exec "deployment/$HELM_RELEASE-worker" -- \
+            node dist/scripts/recordConsoleHealth.js --revision "$revision" --run-key "$run_key" --status started
+          args=(--revision "$revision" --internal-url http://127.0.0.1:8081)
+          if [ "${CONSOLE_TUNNEL_ENABLED:-}" = "true" ]; then
+            args+=(--public-url https://console.mindcool.dev)
+          fi
+          set +e
+          kubectl --namespace "$K8S_NAMESPACE" exec "deployment/$HELM_RELEASE-console" -- \
+            node dist/scripts/consoleHealth.js "${args[@]}" > console-health.json
+          health_status="$?"
+          set -e
+          if [ "$health_status" -eq 0 ]; then
+            producer_status=succeeded
+            outcome_code=healthy
+          else
+            producer_status=failed
+            outcome_code=check_failed
+            if [ ! -s console-health.json ]; then
+              jq -n --arg revision "$revision" '{status:"unhealthy",revision:$revision,checks:[],activity:{sampled:false,detailSampled:false}}' > console-health.json
+            fi
+          fi
+          kubectl --namespace "$K8S_NAMESPACE" exec "deployment/$HELM_RELEASE-worker" -- \
+            node dist/scripts/recordConsoleHealth.js --revision "$revision" --run-key "$run_key" \
+            --status "$producer_status" --outcome-code "$outcome_code"
+          jq '{status, checkedAt, revision, checks, activity}' console-health.json >> "$GITHUB_STEP_SUMMARY"
+          exit "$health_status"
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: console-health
+          path: console-health.json
+          if-no-files-found: error
+          retention-days: 14
+
   improvement-watchdog:
     # Do not let the slower six-hour observation job delay the watchdog past
     # its liveness budget. Watchdog runs are idempotent by GitHub run key.

@@ -26,6 +26,18 @@ export type ImprovementProofProducerPolicy = {
 
 export const IMPROVEMENT_PROOF_PRODUCERS: readonly ImprovementProofProducerPolicy[] = Object.freeze([
   producer({
+    trigger: "console_health",
+    mode: "scheduled",
+    observedBy: "improvement_reconciliation",
+    maxSilenceMs: 60 * 60 * 1_000,
+    expectedIntervalMs: 15 * 60 * 1_000,
+    maxRunDurationMs: 5 * 60 * 1_000,
+    consecutiveFailureThreshold: 2,
+    source: "runtime_detection",
+    summary: "The production Console route, authentication boundary, or data projection is stale or repeatedly failing.",
+    owningDomain: "console",
+  }),
+  producer({
     trigger: "improvement_reconciliation",
     mode: "scheduled",
     observedBy: "improvement_watchdog",

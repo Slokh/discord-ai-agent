@@ -326,7 +326,7 @@ describe.skipIf(!runDbTests)("operator dashboard database projection", () => {
     expect(snapshot.improvements.cases[0]).toMatchObject({ caseId: "imp-dashboard", automationState: "blocked", pullRequestUrl: "https://github.com/owner/repo/pull/1" });
     expect(snapshot.improvements.cases[0]).toMatchObject({ title: "Reported reply: Earlier assistant reply" });
     expect(snapshot.deployments[0]).toMatchObject({ revision: "revision-a", deploymentId: "deployment-a" });
-    expect(snapshot.producers).toHaveLength(5);
+    expect(snapshot.producers).toHaveLength(6);
     expect(snapshot.messages).not.toContainEqual(expect.objectContaining({ id: "source-b" }));
     expect(snapshot.messages).toContainEqual(expect.objectContaining({
       id: "mention-source", preview: "@AI @AI role balances", authorLabel: "Member A", embedded: true,

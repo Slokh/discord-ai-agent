@@ -100,7 +100,7 @@ describe.skipIf(!runDbTests)("improvement effectiveness database projection", ()
       retryAttempts: 2,
       retryExhaustedCases: 1,
     });
-    expect(report.automation.proofProducers).toMatchObject({ healthy: 0, unhealthy: 0, unobserved: 5 });
+    expect(report.automation.proofProducers).toMatchObject({ healthy: 0, unhealthy: 0, unobserved: 6 });
     expect(report.automation.humanIntervention).toMatchObject({
       operatorActionCases: 1,
       operatorActionRate: 1 / 3,

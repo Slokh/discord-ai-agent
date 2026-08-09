@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 import { verifyDeploymentStability } from "./deploymentHealth.js";
 import { rollbackRelease } from "./rollbackRelease.js";
 
-export type PostDeployStage = "deployment_health" | "capability_canary" | "private_regressions" | "stability" | "promotion";
+export type PostDeployStage = "deployment_health" | "capability_canary" | "console_health" | "private_regressions" | "stability" | "promotion";
 export type PostDeployVerificationResult = {
   status: "passed" | "rolled_back" | "verification_failed" | "rollback_failed";
   expectedRevision: string;
@@ -23,6 +23,7 @@ export async function verifyReleaseWithRecovery(input: {
   sleep?: (milliseconds: number) => Promise<void>;
   verifyHealth: (stabilitySeconds: number) => Promise<void>;
   verifyCapabilities: () => Promise<void>;
+  verifyConsole: () => Promise<void>;
   verifyPrivateRegressions: () => Promise<void>;
   promote: () => Promise<void>;
   rollback: (helmRevision: number) => Promise<{ expectedRevision: string }>;
@@ -36,6 +37,7 @@ export async function verifyReleaseWithRecovery(input: {
   const stages: Array<[PostDeployStage, () => Promise<void>]> = [
     ["deployment_health", () => input.verifyHealth(0)],
     ["capability_canary", input.verifyCapabilities],
+    ["console_health", input.verifyConsole],
     ["private_regressions", input.verifyPrivateRegressions],
     ["stability", () => input.verifyHealth(30)],
     ["promotion", input.promote],
@@ -179,6 +181,16 @@ async function runCli() {
         "node", "dist/scripts/postDeployCanary.js",
       ], 8 * 60_000);
     },
+    verifyConsole: async () => {
+      const healthArgs = [
+        "--namespace", args.namespace, "exec", `deployment/${args.release}-console`, "--",
+        "node", "dist/scripts/consoleHealth.js",
+        "--revision", args.expectedRevision,
+        "--internal-url", "http://127.0.0.1:8081",
+      ];
+      if (args.consolePublicUrl) healthArgs.push("--public-url", args.consolePublicUrl);
+      command("kubectl", healthArgs);
+    },
     verifyPrivateRegressions: async () => {
       command("kubectl", [
         "--namespace", args.namespace, "exec", `deployment/${args.release}-worker`, "--",
@@ -260,6 +272,7 @@ function parseArgs(argv: string[]) {
     attempts,
     namespace: values.get("namespace") ?? "discord-ai-agent",
     release: values.get("release") ?? "discord-ai-agent",
+    consolePublicUrl: values.get("console-public-url") ?? null,
   };
 }
 

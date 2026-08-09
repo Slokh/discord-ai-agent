@@ -111,7 +111,7 @@ export async function recordAgentTasksDeployed(
        WHERE pull_request_merge_revision = $1
          AND (deployed_revision IS DISTINCT FROM $1 OR deployment_id IS DISTINCT FROM $2
               OR ($3::timestamptz IS NOT NULL AND deployed_at IS DISTINCT FROM $3))
-       RETURNING task_id
+       RETURNING task_id,deployed_at
      ), updated_execution AS (
        UPDATE agent_runtime_executions execution SET
          event_sequence = event_sequence + 1,
@@ -119,14 +119,15 @@ export async function recordAgentTasksDeployed(
        FROM deployed
        WHERE execution.task_id = deployed.task_id
        RETURNING execution.session_id,execution.execution_id,execution.trace_id,
-                 execution.event_sequence AS sequence,execution.task_id
+                 execution.event_sequence AS sequence,execution.task_id,deployed.deployed_at
      ), recorded AS (
        INSERT INTO agent_runtime_events(
-         session_id,execution_id,trace_id,sequence,kind,level,event_name,summary,metadata
+         session_id,execution_id,trace_id,sequence,kind,level,event_name,summary,metadata,created_at
        )
        SELECT session_id,execution_id,trace_id,sequence,'deployment','info',
               'agent.task.deployed','Code change deployed and verified.',
-              jsonb_build_object('taskId',task_id,'revision',$1::text,'deploymentId',$2::text)
+              jsonb_build_object('taskId',task_id,'revision',$1::text,'deploymentId',$2::text),
+              deployed_at
        FROM updated_execution
      )
      SELECT count(*)::int AS count FROM deployed`,

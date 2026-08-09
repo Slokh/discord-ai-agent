@@ -126,11 +126,13 @@ describe.skipIf(!runDbTests)("agent task command runtime projection", () => {
       deployed_at: verified.rows[0].verified_at,
     });
     const events = await pool.query(
-      `SELECT event_name FROM agent_runtime_events WHERE execution_id = $1 ORDER BY sequence`,
+      `SELECT event_name,created_at FROM agent_runtime_events WHERE execution_id = $1 ORDER BY sequence`,
       [executionId],
     );
     expect(events.rows.map((row) => row.event_name)).toEqual(expect.arrayContaining([
       "agent.task.pull_request_reconciled", "agent.task.deployed",
     ]));
+    expect(events.rows.find((row) => row.event_name === "agent.task.deployed")?.created_at)
+      .toEqual(verified.rows[0].verified_at);
   });
 });

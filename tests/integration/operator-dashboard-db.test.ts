@@ -82,6 +82,15 @@ describe.skipIf(!runDbTests)("operator dashboard database projection", () => {
        )`,
     );
     await pool.query(
+      `INSERT INTO agent_runtime_events(
+         session_id,execution_id,sequence,kind,level,event_name,summary,metadata,duration_ms
+       ) VALUES
+         ('agent-session-complete','agent-execution-attempt-2',3,'status','info','agent.tool.started',
+          'readData','{"toolName":"readData","callId":"call-dashboard","argumentsPreview":"{\\"query\\":\\"latest\\"}"}',NULL),
+         ('agent-session-complete','agent-execution-attempt-2',4,'status','info','agent.tool.complete',
+          'readData: 80 chars','{"toolName":"readData","callId":"call-dashboard","status":"ok","outputChars":80,"fileCount":1}',700)`,
+    );
+    await pool.query(
       `INSERT INTO discord_delivery_obligations(
          execution_id,thread_key,guild_id,channel_id,status_channel_id,status_message_id,source_message_id,state
        ) VALUES
@@ -128,7 +137,10 @@ describe.skipIf(!runDbTests)("operator dashboard database projection", () => {
       `INSERT INTO agent_runtime_messages(message_id,session_id,client_message_id,role,parts,metadata,created_at) VALUES
          ('runtime-deleted-bot','agent-session-complete','deleted-bot','assistant','[{"type":"text","text":"Retained deleted reply"}]','{"executionId":"older-execution"}',now() - interval '4 minutes'),
          ('runtime-user-b','agent-session-complete','source-b','user','[{"type":"text","text":"Current member prompt"}]','{"executionId":"agent-execution-attempt-2","userDisplayName":"Member A"}',now() - interval '1 minute'),
-         ('runtime-assistant-b','agent-session-complete','reply-b','assistant','[{"type":"text","text":"Final assistant reply"}]','{"executionId":"agent-execution-attempt-2","discordUrl":"https://discord.com/channels/guild-a/channel-a/reply-b"}',now())`,
+         ('runtime-assistant-b','agent-session-complete','reply-b','assistant','[{"type":"text","text":"Final assistant reply"}]','{"executionId":"agent-execution-attempt-2","discordUrl":"https://discord.com/channels/guild-a/channel-a/reply-b"}',now()),
+         ('runtime-tool-b','agent-session-complete','tool-call-dashboard','tool',
+          '[{"type":"tool_result","toolCallId":"call-dashboard","toolName":"readData","content":"{\\"rows\\":[{\\"id\\":1}],\\"apiKey\\":\\"secret-value\\",\\"url\\":\\"https://example.test/data?signature=secret-signature\\"}","files":[{"name":"data.json","contentType":"application/json","bytes":80}],"tables":[{"name":"Rows","rows":1,"columns":["id"]}]}]',
+          '{"executionId":"agent-execution-attempt-2","toolCallId":"call-dashboard","toolName":"readData","responseRedacted":false}',now())`,
     );
     await pool.query(
       `INSERT INTO agent_tasks(task_id,task_type,title,request,requested_by,status,current_step)
@@ -353,14 +365,14 @@ describe.skipIf(!runDbTests)("operator dashboard database projection", () => {
       title: "@AI role Current member prompt",
       authorLabel: "Member A",
       attempts: 2,
-      eventCount: 2,
+      eventCount: 4,
       deliveryState: "delivered",
       hasParent: true,
       sourceUrl: "https://discord.com/channels/guild-a/channel-a/source-b",
       responseUrl: "https://discord.com/channels/guild-a/channel-a/reply-b",
       responseKind: "reply",
       events: [
-        expect.objectContaining({ name: "agent.model.call.completed" }),
+        expect.objectContaining({ name: "agent.tool.complete" }),
       ],
     });
     expect(snapshot.activity.filter((story) => story.kind === "improvement")).toHaveLength(1);
@@ -426,12 +438,48 @@ describe.skipIf(!runDbTests)("operator dashboard database projection", () => {
         phases: expect.arrayContaining([
           expect.objectContaining({ id: "context", summary: "**Earlier assistant reply** -# 5.9s" }),
           expect.objectContaining({ id: "prompt", summary: "<@&456> Current member prompt" }),
-          expect.objectContaining({ id: "agent", metadata: expect.objectContaining({ model: "model-a", totalTokens: 1234 }) }),
+          expect.objectContaining({
+            id: "agent",
+            metadata: expect.objectContaining({ model: "model-a", totalTokens: 1234 }),
+            tools: [expect.objectContaining({
+              callId: "call-dashboard",
+              title: "readData",
+              arguments: { query: "latest" },
+              resultAvailable: true,
+              outputChars: 80,
+              fileCount: 1,
+            })],
+          }),
           expect.objectContaining({ id: "response", summary: "Final assistant reply" }),
         ]),
       }),
     });
     expect(JSON.stringify(conversation)).not.toContain("private secret");
+    expect(JSON.stringify(conversation)).not.toContain("secret-value");
+
+    const toolResult = await repository.activityToolResult({
+      kind: "conversation",
+      id: "runtime-agent-execution-attempt-2",
+      callId: "call-dashboard",
+      revision: "revision-a",
+    });
+    expect(toolResult).toMatchObject({
+      callId: "call-dashboard",
+      toolName: "readData",
+      format: "json",
+      content: {
+        rows: [{ id: 1 }],
+        apiKey: "[REDACTED]",
+        url: "https://example.test/data?signature=[REDACTED]",
+      },
+      truncated: false,
+      responseRedacted: false,
+      files: [{ name: "data.json", contentType: "application/json", bytes: 80 }],
+      tables: [{ name: "Rows", rows: 1, columns: ["id"] }],
+    });
+    await expect(repository.activityToolResult({
+      kind: "conversation", id: "runtime-agent-execution-attempt-2", callId: "missing", revision: "revision-a",
+    })).resolves.toBeNull();
 
     const codeChange = await new OperatorDashboardRepository(pool).activityDetail({
       kind: "code_change", id: "code-change-task:task-current-orphan", revision: "revision-a",

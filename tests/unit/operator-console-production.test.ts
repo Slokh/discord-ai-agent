@@ -14,7 +14,9 @@ import { EventEmitter } from "node:events";
 describe("production operator console access", () => {
   it("streams versioned production Console resources through loopback", async () => {
     const fetchSnapshot = vi.fn(async (url: string) => new Response(JSON.stringify(
-      url.includes("/api/activity/conversation/")
+      url.includes("/tool/")
+        ? { schemaVersion: 1, environment: "production", callId: "call-a", content: { rows: 2 } }
+        : url.includes("/api/activity/conversation/")
         ? { schemaVersion: 2, environment: "production", kind: "conversation", messages: [{ id: "message-a" }] }
         : url.includes("/api/activity")
           ? { schemaVersion: 3, environment: "production", active: [], recent: [] }
@@ -39,6 +41,13 @@ describe("production operator console access", () => {
     });
     expect(fetchSnapshot).toHaveBeenCalledWith(
       "http://127.0.0.1:18081/api/activity/conversation/runtime-execution-a",
+      expect.objectContaining({ cache: "no-store" }),
+    );
+    await expect(source.activityToolResult?.({
+      kind: "conversation", id: "runtime-execution-a", callId: "call-a", revision: "ignored",
+    })).resolves.toMatchObject({ callId: "call-a", content: { rows: 2 } });
+    expect(fetchSnapshot).toHaveBeenCalledWith(
+      "http://127.0.0.1:18081/api/activity/conversation/runtime-execution-a/tool/call-a",
       expect.objectContaining({ cache: "no-store" }),
     );
   });

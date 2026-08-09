@@ -2,13 +2,21 @@ type TraceRecord = Record<string, unknown>;
 
 export type ConversationTraceTool = {
   id: string;
+  callId: string | null;
   title: string;
   status: string;
+  resultStatus: string | null;
   occurredAt: unknown;
   durationMs: number | null;
   summary: string | null;
   arguments: unknown | null;
   argumentsTruncated: boolean;
+  resultAvailable: boolean;
+  outputChars: number | null;
+  fileCount: number;
+  tableCount: number;
+  errorCode: string | null;
+  retryable: boolean | null;
   sourceEventIds: string[];
 };
 
@@ -55,6 +63,7 @@ export type ConversationTraceProjection = {
 export function projectConversationTrace(input: {
   messages: TraceRecord[];
   traceEvents: TraceRecord[];
+  resultCallIds?: string[];
 }): ConversationTraceProjection {
   const messages = [...input.messages].sort((left, right) => time(left.createdAt) - time(right.createdAt));
   const events = [...input.traceEvents].sort((left, right) => time(left.occurredAt) - time(right.occurredAt));
@@ -80,7 +89,7 @@ export function projectConversationTrace(input: {
   const usage = record(usageMetadata?.usage);
   const totalTokens = finiteNumber(usage?.total_tokens ?? usage?.totalTokens ?? usage?.total);
   const estimatedCostUsd = finiteNumber(costMetadata?.estimatedCostUsd);
-  const tools = projectTools(events);
+  const tools = projectTools(events, new Set(input.resultCallIds ?? []));
   const reusedToolCount = events.filter((event) => record(event.metadata)?.status === "reused").length;
   const reportedToolCount = [...events].reverse()
     .filter((event) => String(event.code ?? "") === "agent.nanocodex.complete")
@@ -232,7 +241,7 @@ function eventPhase(input: {
   };
 }
 
-function projectTools(events: TraceRecord[]): ConversationTraceTool[] {
+function projectTools(events: TraceRecord[], resultCallIds: Set<string>): ConversationTraceTool[] {
   const toolEvents = events.filter((event) => (
     String(event.type) === "tool" || String(event.code ?? "").includes(".tool.")
   ) && record(event.metadata)?.status !== "reused");
@@ -242,6 +251,7 @@ function projectTools(events: TraceRecord[]): ConversationTraceTool[] {
   const usedStarts = new Set<TraceRecord>();
   return selected.map((event, index) => {
     const metadata = record(event.metadata);
+    const resultStatus = text(metadata?.status);
     const callId = text(metadata?.callId);
     const toolName = text(metadata?.toolName);
     const startedEvent = started.find((candidate) => {
@@ -255,13 +265,23 @@ function projectTools(events: TraceRecord[]): ConversationTraceTool[] {
     const startedMetadata = record(startedEvent?.metadata);
     return {
       id: `tool-${index}-${String(event.id)}`,
+      callId,
       title: toolName ?? String(event.title ?? "Tool call"),
-      status: String(event.status ?? (event.level === "error" ? "failed" : "done")),
+      status: resultStatus === "error"
+        ? "failed"
+        : resultStatus === "partial" ? "blocked" : String(event.status ?? (event.level === "error" ? "failed" : "done")),
+      resultStatus,
       occurredAt: event.occurredAt,
       durationMs: finiteNumber(event.durationMs),
       summary: text(event.summary),
       arguments: parseToolArguments(startedMetadata?.argumentsPreview),
       argumentsTruncated: startedMetadata?.argumentsTruncated === true,
+      resultAvailable: callId != null && resultCallIds.has(callId),
+      outputChars: finiteNumber(metadata?.outputChars),
+      fileCount: finiteNumber(metadata?.fileCount) ?? 0,
+      tableCount: finiteNumber(metadata?.tableCount) ?? 0,
+      errorCode: text(metadata?.errorCode),
+      retryable: typeof metadata?.retryable === "boolean" ? metadata.retryable : null,
       sourceEventIds: [startedEvent, event].filter(Boolean).map((item) => String(item?.id)),
     };
   });

@@ -2,6 +2,9 @@ import { projectConversationTrace } from "../console/conversationTrace.js";
 import type { DbPool } from "./pool.js";
 import { dashboardTraceEvent } from "./operatorRuntimeActivityRepository.js";
 import { discordMentionLabels, discordMentions, discordRoleMentions } from "./operatorDiscordIdentity.js";
+import { redactSensitiveData, redactSensitiveText } from "../observability/redaction.js";
+
+const TOOL_RESULT_CONTENT_LIMIT = 65_536;
 
 export async function conversationActivityDetail(pool: DbPool, activityId: string) {
   const executionId = executionIdFromActivityId(activityId);
@@ -21,7 +24,7 @@ export async function conversationActivityDetail(pool: DbPool, activityId: strin
   if (!context) return null;
   const sourceMessageId = nullable(context.source_message_id);
   const guildId = nullable(context.guild_id);
-  const [archive, runtime, trace] = await Promise.all([
+  const [archive, runtime, trace, toolResults] = await Promise.all([
     sourceMessageId
       ? pool.query(
         `WITH RECURSIVE chain AS (
@@ -74,6 +77,15 @@ export async function conversationActivityDetail(pool: DbPool, activityId: strin
        ORDER BY sequence ASC,id ASC
        LIMIT 200`,
       [executionId],
+    ),
+    pool.query(
+      `SELECT DISTINCT metadata->>'toolCallId' AS call_id
+       FROM agent_runtime_messages
+       WHERE session_id = $1
+         AND metadata->>'executionId' = $2
+         AND role = 'tool'
+         AND nullif(metadata->>'toolCallId','') IS NOT NULL`,
+      [String(context.session_id), executionId],
     ),
   ]);
   const fallbackIds = archive.rows
@@ -157,8 +169,93 @@ export async function conversationActivityDetail(pool: DbPool, activityId: strin
     executionId,
     messages: resolvedMessages,
     traceEvents,
-    conversationTrace: projectConversationTrace({ messages: resolvedMessages, traceEvents }),
+    conversationTrace: projectConversationTrace({
+      messages: resolvedMessages,
+      traceEvents,
+      resultCallIds: toolResults.rows.map((row) => String(row.call_id)),
+    }),
   };
+}
+
+export async function conversationToolResult(pool: DbPool, activityId: string, callId: string) {
+  const executionId = executionIdFromActivityId(activityId);
+  if (!executionId || !callId || callId.length > 256) return null;
+  const result = await pool.query(
+    `SELECT message.metadata,
+            tool_part.part->>'toolName' AS part_tool_name,
+            left(coalesce(tool_part.part->>'content',''),$3) AS content,
+            char_length(coalesce(tool_part.part->>'content','')) AS content_chars,
+            coalesce(tool_part.part->'files','[]'::jsonb) AS files,
+            coalesce(tool_part.part->'tables','[]'::jsonb) AS tables
+     FROM agent_runtime_executions execution
+     JOIN agent_runtime_messages message
+       ON message.session_id = execution.session_id
+      AND message.role = 'tool'
+      AND message.metadata->>'executionId' = execution.execution_id
+     CROSS JOIN LATERAL (
+       SELECT part
+       FROM jsonb_array_elements(message.parts) part
+       WHERE part->>'type' = 'tool_result'
+         AND part->>'toolCallId' = $2
+       LIMIT 1
+     ) tool_part
+     WHERE execution.execution_id = $1
+       AND coalesce(message.metadata->>'toolCallId',tool_part.part->>'toolCallId') = $2
+     ORDER BY message.created_at DESC,message.message_id DESC
+     LIMIT 1`,
+    [executionId, callId, TOOL_RESULT_CONTENT_LIMIT],
+  );
+  const row = result.rows[0];
+  if (!row) return null;
+  const metadata = record(row.metadata);
+  const rawContent = String(row.content ?? "");
+  const parsed = parseToolResultContent(rawContent);
+  const contentChars = Number(row.content_chars);
+  return {
+    callId,
+    toolName: nullable(metadata.toolName) ?? nullable(row.part_tool_name) ?? "Tool",
+    format: parsed.format,
+    content: parsed.content,
+    truncated: Number.isFinite(contentChars) && contentChars > TOOL_RESULT_CONTENT_LIMIT,
+    contentChars: Number.isFinite(contentChars) ? contentChars : rawContent.length,
+    responseRedacted: metadata.responseRedacted === true,
+    files: toolResultFiles(row.files),
+    tables: toolResultTables(row.tables),
+  };
+}
+
+function parseToolResultContent(value: string): { format: "json" | "text"; content: unknown } {
+  try {
+    return { format: "json", content: redactSensitiveData(JSON.parse(value)) };
+  } catch {
+    return { format: "text", content: redactSensitiveText(value).text };
+  }
+}
+
+function toolResultFiles(value: unknown) {
+  if (!Array.isArray(value)) return [];
+  return value.slice(0, 20).map((item) => {
+    const file = record(item);
+    const bytes = Number(file.bytes);
+    return {
+      name: nullable(file.name),
+      contentType: nullable(file.contentType),
+      bytes: Number.isFinite(bytes) ? bytes : null,
+    };
+  });
+}
+
+function toolResultTables(value: unknown) {
+  if (!Array.isArray(value)) return [];
+  return value.slice(0, 20).map((item) => {
+    const table = record(item);
+    const rows = Number(table.rows);
+    return {
+      name: nullable(table.name),
+      rows: Number.isFinite(rows) ? rows : null,
+      columns: Array.isArray(table.columns) ? table.columns.slice(0, 50).map(String) : [],
+    };
+  });
 }
 
 function executionIdFromActivityId(id: string): string | null {

@@ -14,6 +14,7 @@ export type DashboardSnapshotSource = {
   overview?(input: { revision: string }): Promise<Record<string, unknown>>;
   activityPage?(input: ActivityPageRequest & { revision: string }): Promise<Record<string, unknown>>;
   activityDetail(input: { kind: string; id: string; revision: string }): Promise<Record<string, unknown> | null>;
+  activityToolResult?(input: { kind: string; id: string; callId: string; revision: string }): Promise<Record<string, unknown> | null>;
 };
 
 export type ActivityPageRequest = { cursor?: string | null; limit?: number; filter?: string; types?: string[]; search?: string | null; selectedKind?: string | null; selectedId?: string | null };
@@ -40,6 +41,7 @@ export async function startOperatorConsole(input: {
   const reloadClients = new Set<import("node:http").ServerResponse>();
   let projectionInFlight: Promise<ConsoleProjection> | null = null;
   const activityDetailInFlight = new Map<string, Promise<Record<string, unknown> | null>>();
+  const toolResultInFlight = new Map<string, Promise<Record<string, unknown> | null>>();
   const server = createServer(async (request, response) => {
     try {
       const url = new URL(request.url ?? "/", "http://console.internal");
@@ -80,6 +82,30 @@ export async function startOperatorConsole(input: {
         return sendJson(request, response, 200, {
           ...page, schemaVersion: 3, environment: input.sourceEnvironment ?? input.config.nodeEnv,
         }, "activity_index", startedAt);
+      }
+      const toolResultApi = path.match(/^\/api\/activity\/([^/]+)\/([^/]+)\/tool\/([^/]+)$/);
+      if (toolResultApi) {
+        const startedAt = performance.now();
+        const kind = decodeURIComponent(toolResultApi[1]!);
+        const id = decodeURIComponent(toolResultApi[2]!);
+        const callId = decodeURIComponent(toolResultApi[3]!);
+        const resultKey = `${kind}:${id}:${callId}`;
+        let resultRequest = toolResultInFlight.get(resultKey);
+        if (!resultRequest) {
+          resultRequest = (input.repository.activityToolResult?.({
+            kind, id, callId, revision: input.config.appRevision,
+          }) ?? Promise.resolve(null)).finally(() => {
+            if (toolResultInFlight.get(resultKey) === resultRequest) toolResultInFlight.delete(resultKey);
+          });
+          toolResultInFlight.set(resultKey, resultRequest);
+        }
+        const result = await resultRequest;
+        if (!result) return sendJson(request, response, 404, { error: "tool_result_not_found" }, "tool_result", startedAt);
+        return sendJson(request, response, 200, {
+          ...result,
+          schemaVersion: 1,
+          environment: input.sourceEnvironment ?? input.config.nodeEnv,
+        }, "tool_result", startedAt);
       }
       const activityApi = path.match(/^\/api\/activity\/([^/]+)\/([^/]+)$/);
       if (activityApi) {

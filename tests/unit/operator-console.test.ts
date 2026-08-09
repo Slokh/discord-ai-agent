@@ -18,6 +18,10 @@ describe("operator console", () => {
     config.consoleServer.host = "127.0.0.1";
     config.consoleServer.port = 0;
     const repository = {
+      activityToolResult: async ({ kind, id, callId }: { kind: string; id: string; callId: string; revision: string }) =>
+        kind === "conversation" && id === "runtime-example" && callId === "call-a"
+          ? { callId, toolName: "readData", format: "json", content: { rows: 2 }, truncated: false }
+          : null,
       activityDetail: async ({ kind, id }: { kind: string; id: string; revision: string }) => kind === "conversation" && id === "runtime-example"
         ? {
           kind,
@@ -285,7 +289,10 @@ describe("operator console", () => {
     expect(stylesheetText).toContain(".trace-context summary{");
     expect(stylesheetText).toContain(".trace-tools{display:flex");
     expect(stylesheetText).toContain(".trace-tool-arguments{");
+    expect(stylesheetText).toContain(".trace-tool-result{");
     expect(clientScript).toContain("const toolArguments=");
+    expect(clientScript).toContain("const toolResult=");
+    expect(clientScript).toContain("async function loadToolResult");
     expect(stylesheetText).toContain(".trace-exceptions{display:flex");
     expect(clientScript).toContain('return story.attempts+" attempts"');
     expect(clientScript).toContain("discord\\.com\\/channels");
@@ -344,6 +351,15 @@ describe("operator console", () => {
       messages: [{ id: "message-a", content: "Hello" }],
     });
     expect((await fetch(`${baseUrl}/api/activity/conversation/missing`)).status).toBe(404);
+    await expect(fetch(`${baseUrl}/api/activity/conversation/runtime-example/tool/call-a`).then((response) => response.json()))
+      .resolves.toMatchObject({
+        schemaVersion: 1,
+        environment: "test",
+        callId: "call-a",
+        format: "json",
+        content: { rows: 2 },
+      });
+    expect((await fetch(`${baseUrl}/api/activity/conversation/runtime-example/tool/missing`)).status).toBe(404);
 
     const detailPage = await fetch(`${baseUrl}/activity/conversation/runtime-example`);
     expect(detailPage.status).toBe(200);

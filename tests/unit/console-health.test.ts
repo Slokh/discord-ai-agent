@@ -4,6 +4,29 @@ import { checkConsoleHealth } from "../../scripts/consoleHealth.js";
 const now = Date.parse("2026-08-09T00:00:00.000Z");
 
 describe("production Console health", () => {
+  it("can verify the public boundary without attempting the cluster-internal data path", async () => {
+    const fetchImpl = vi.fn(async (input: string | URL) => {
+      const url = new URL(String(input));
+      if (url.pathname === "/healthz") return json({ ok: true });
+      if (url.pathname === "/") return new Response(null, { status: 302, headers: { location: "/auth/login?returnTo=%2F" } });
+      return json({ error: "authentication_required" }, 401);
+    });
+
+    const result = await checkConsoleHealth({
+      expectedRevision: "revision-a",
+      internalUrl: null,
+      publicUrl: "https://console.example.com",
+      fetchImpl: fetchImpl as typeof fetch,
+    });
+
+    expect(result.status).toBe("healthy");
+    expect(result.activity).toEqual({ sampled: false, detailSampled: false });
+    expect(result.checks.map((check) => check.name)).toEqual([
+      "public_health", "public_auth_redirect", "public_api_boundary",
+    ]);
+    expect(fetchImpl).toHaveBeenCalledTimes(3);
+  });
+
   it("verifies the public auth boundary and fresh production data path", async () => {
     const fetchImpl = vi.fn(async (input: string | URL) => {
       const url = new URL(String(input));

@@ -11,7 +11,7 @@ export type ConsoleHealthResult = {
 
 export async function checkConsoleHealth(input: {
   expectedRevision: string;
-  internalUrl: string;
+  internalUrl?: string | null;
   publicUrl?: string | null;
   fetchImpl?: typeof fetch;
   now?: () => number;
@@ -19,6 +19,7 @@ export async function checkConsoleHealth(input: {
   maxLatencyMs?: number;
   timeoutMs?: number;
 }): Promise<ConsoleHealthResult> {
+  if (!input.internalUrl && !input.publicUrl) throw new Error("At least one Console health endpoint is required.");
   const fetchImpl = input.fetchImpl ?? fetch;
   const now = input.now ?? Date.now;
   const maxAgeMs = input.maxAgeMs ?? 120_000;
@@ -69,43 +70,45 @@ export async function checkConsoleHealth(input: {
     }
   }
 
-  const internalBase = checkedHttpUrl(input.internalUrl, "internalUrl");
   let activitySampled = false;
   let activityStory: { kind: string; id: string } | null = null;
-  const overview = await request("production_overview", new URL("/api/overview", internalBase));
-  if (overview) {
-    const payload = await overview.response.json().catch(() => null) as Record<string, unknown> | null;
-    const generatedAt = Date.parse(String(payload?.generatedAt ?? ""));
-    const fresh = Number.isFinite(generatedAt) && Math.abs(now() - generatedAt) <= maxAgeMs;
-    const valid = overview.response.status === 200
-      && payload?.schemaVersion === 3
-      && payload?.environment === "production"
-      && payload?.revision === input.expectedRevision
-      && fresh;
-    const code = payload?.revision !== input.expectedRevision ? "revision_mismatch" : !fresh ? "projection_stale" : "invalid_overview";
-    record("production_overview", overview.durationMs, valid, code, overview.slow);
-  }
-  const activity = await request("production_activity", new URL("/api/activity?types=conversation,improvement,code_change&limit=1", internalBase));
-  if (activity) {
-    const payload = await activity.response.json().catch(() => null) as Record<string, unknown> | null;
-    const rows = [...array(payload?.active), ...array(payload?.recent)];
-    const candidate = rows.find((row) => typeof row.kind === "string" && typeof row.id === "string");
-    activityStory = candidate ? { kind: String(candidate.kind), id: String(candidate.id) } : null;
-    const valid = activity.response.status === 200 && payload?.schemaVersion === 3 && payload?.environment === "production";
-    activitySampled = valid;
-    record("production_activity", activity.durationMs, valid, "invalid_activity", activity.slow);
-  }
-  if (activityStory) {
-    const detailUrl = new URL(`/api/activity/${encodeURIComponent(activityStory.kind)}/${encodeURIComponent(activityStory.id)}`, internalBase);
-    const detail = await request("production_activity_detail", detailUrl);
-    if (detail) {
-      const payload = await detail.response.json().catch(() => null) as Record<string, unknown> | null;
-      const valid = detail.response.status === 200
-        && payload?.schemaVersion === 2
+  if (input.internalUrl) {
+    const internalBase = checkedHttpUrl(input.internalUrl, "internalUrl");
+    const overview = await request("production_overview", new URL("/api/overview", internalBase));
+    if (overview) {
+      const payload = await overview.response.json().catch(() => null) as Record<string, unknown> | null;
+      const generatedAt = Date.parse(String(payload?.generatedAt ?? ""));
+      const fresh = Number.isFinite(generatedAt) && Math.abs(now() - generatedAt) <= maxAgeMs;
+      const valid = overview.response.status === 200
+        && payload?.schemaVersion === 3
         && payload?.environment === "production"
-        && payload?.kind === activityStory.kind
-        && payload?.id === activityStory.id;
-      record("production_activity_detail", detail.durationMs, valid, "invalid_activity_detail", detail.slow);
+        && payload?.revision === input.expectedRevision
+        && fresh;
+      const code = payload?.revision !== input.expectedRevision ? "revision_mismatch" : !fresh ? "projection_stale" : "invalid_overview";
+      record("production_overview", overview.durationMs, valid, code, overview.slow);
+    }
+    const activity = await request("production_activity", new URL("/api/activity?types=conversation,improvement,code_change&limit=1", internalBase));
+    if (activity) {
+      const payload = await activity.response.json().catch(() => null) as Record<string, unknown> | null;
+      const rows = [...array(payload?.active), ...array(payload?.recent)];
+      const candidate = rows.find((row) => typeof row.kind === "string" && typeof row.id === "string");
+      activityStory = candidate ? { kind: String(candidate.kind), id: String(candidate.id) } : null;
+      const valid = activity.response.status === 200 && payload?.schemaVersion === 3 && payload?.environment === "production";
+      activitySampled = valid;
+      record("production_activity", activity.durationMs, valid, "invalid_activity", activity.slow);
+    }
+    if (activityStory) {
+      const detailUrl = new URL(`/api/activity/${encodeURIComponent(activityStory.kind)}/${encodeURIComponent(activityStory.id)}`, internalBase);
+      const detail = await request("production_activity_detail", detailUrl);
+      if (detail) {
+        const payload = await detail.response.json().catch(() => null) as Record<string, unknown> | null;
+        const valid = detail.response.status === 200
+          && payload?.schemaVersion === 2
+          && payload?.environment === "production"
+          && payload?.kind === activityStory.kind
+          && payload?.id === activityStory.id;
+        record("production_activity_detail", detail.durationMs, valid, "invalid_activity_detail", detail.slow);
+      }
     }
   }
 

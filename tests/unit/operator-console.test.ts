@@ -211,6 +211,7 @@ describe("operator console", () => {
     expect(clientScript).toContain("aria-expanded");
     expect(clientScript).not.toContain('class="context-history-toggle"');
     expect(clientScript).toContain("trace-time-link");
+    expect(clientScript).toContain('minute:"2-digit",second:"2-digit"');
     expect(clientScript).not.toContain('safeLink(message.url,"Open ↗")');
     expect(clientScript).toContain("activityPath");
     expect(clientScript).not.toContain("disclosureState");

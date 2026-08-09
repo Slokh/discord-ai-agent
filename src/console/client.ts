@@ -91,7 +91,7 @@ const exactTime=(value)=>value?new Intl.DateTimeFormat(undefined,{dateStyle:"med
 const detailMetric=(label,value,tone="")=>value==null||value===""?"":'<div class="detail-metric '+esc(tone)+'"><span>'+esc(label)+'</span><strong>'+esc(value)+'</strong></div>';
 const detailLinks=(story)=>{const links=safeLink(story.sourceUrl,"Open source ↗")+safeLink(story.responseUrl,"Open reply ↗")+safeLink(story.pullRequestUrl,"Open pull request ↗");return links?'<div class="detail-links">'+links+'</div>':""};
 const detailSpecialLinks=(detail)=>detail?.release?.comparisonUrl?safeLink(detail.release.comparisonUrl,"Compare changes ↗"):detail?.codeChange?.pullRequestUrl?safeLink(detail.codeChange.pullRequestUrl,"Open pull request ↗"):"";
-const traceTime=(value)=>value?new Intl.DateTimeFormat(undefined,{month:"short",day:"numeric",hour:"numeric",minute:"2-digit"}).format(new Date(value)):"—";
+const traceTime=(value)=>value?new Intl.DateTimeFormat(undefined,{month:"short",day:"numeric",hour:"numeric",minute:"2-digit",second:"2-digit"}).format(new Date(value)):"—";
 const traceLevel=(tone)=>tone==="danger"?"error":tone==="warning"?"warn":"info";
 const traceState=(item)=>item.status||(["error"].includes(item.level)?"failed":item.level==="warn"?"blocked":"done");
 const traceType=(value)=>String(value||"event").replaceAll("_"," ");

@@ -44,6 +44,7 @@ export type ConversationTraceProjection = {
   totalTokens: number | null;
   estimatedCostUsd: number | null;
   toolCount: number;
+  reusedToolCount: number;
   contextCount: number;
   rawEventCount: number;
   phases: ConversationTracePhase[];
@@ -78,8 +79,9 @@ export function projectConversationTrace(input: {
   const totalTokens = finiteNumber(usage?.total_tokens ?? usage?.totalTokens ?? usage?.total);
   const estimatedCostUsd = finiteNumber(costMetadata?.estimatedCostUsd);
   const tools = projectTools(events);
+  const reusedToolCount = events.filter((event) => record(event.metadata)?.status === "reused").length;
   const reportedToolCount = [...events].reverse()
-    .map((event) => finiteNumber(record(event.metadata)?.toolCount))
+    .map((event) => finiteNumber(record(event.metadata)?.toolCalls ?? record(event.metadata)?.toolCount))
     .find((value) => value != null);
   const toolCount = reportedToolCount ?? tools.length;
   const phases: ConversationTracePhase[] = [];
@@ -109,7 +111,9 @@ export function projectConversationTrace(input: {
   phases.push(eventPhase({
     id: "agent",
     title: "Agent",
-    summary: toolCount ? `Completed with ${toolCount} tool ${toolCount === 1 ? "call" : "calls"}.` : "Completed without tools.",
+    summary: toolCount
+      ? `Completed with ${toolCount} tool ${toolCount === 1 ? "call" : "calls"}${reusedToolCount ? `; ${reusedToolCount} duplicate ${reusedToolCount === 1 ? "call" : "calls"} reused` : ""}.`
+      : "Completed without tools.",
     startedAt: agentStart ?? promptAt,
     completedAt: agentEnd,
     durationMs: agentDurationMs,
@@ -119,6 +123,7 @@ export function projectConversationTrace(input: {
       totalTokens,
       estimatedCostUsd,
       toolCount,
+      reusedToolCount,
     },
     tools,
   }));
@@ -156,6 +161,7 @@ export function projectConversationTrace(input: {
     totalTokens,
     estimatedCostUsd,
     toolCount,
+    reusedToolCount,
     contextCount,
     rawEventCount: events.length,
     phases,
@@ -224,7 +230,9 @@ function eventPhase(input: {
 }
 
 function projectTools(events: TraceRecord[]): ConversationTraceTool[] {
-  const toolEvents = events.filter((event) => String(event.type) === "tool" || String(event.code ?? "").includes(".tool."));
+  const toolEvents = events.filter((event) => (
+    String(event.type) === "tool" || String(event.code ?? "").includes(".tool.")
+  ) && record(event.metadata)?.status !== "reused");
   const terminal = toolEvents.filter((event) => /complete|completed|failed|error/.test(String(event.code ?? "")));
   const selected = terminal.length ? terminal : toolEvents;
   return selected.map((event, index) => {

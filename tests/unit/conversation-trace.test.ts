@@ -85,6 +85,30 @@ describe("conversation trace projection", () => {
     });
     expect(JSON.stringify(projection)).not.toContain("argumentsPreview");
   });
+
+  it("counts executed tools separately from deduplicated attempts", () => {
+    const projection = projectConversationTrace({
+      messages: [message("prompt", "member", "Generate it", "2026-08-09T12:00:00.000Z", { current: true })],
+      traceEvents: [
+        event("tool-complete", "agent.tool.complete", "2026-08-09T12:00:01.000Z", {
+          type: "tool", metadata: { toolName: "generateImage", status: "ok" },
+        }),
+        event("tool-reused", "agent.tool.complete", "2026-08-09T12:00:02.000Z", {
+          type: "tool", metadata: { toolName: "generateImage", status: "reused" },
+        }),
+        event("complete", "agent.nanocodex.complete", "2026-08-09T12:00:03.000Z", {
+          metadata: { toolCalls: 1, toolAttempts: 2, reusedToolCalls: 1 },
+        }),
+      ],
+    });
+
+    expect(projection).toMatchObject({ toolCount: 1, reusedToolCount: 1 });
+    expect(projection.phases.find((phase) => phase.id === "agent")).toMatchObject({
+      summary: "Completed with 1 tool call; 1 duplicate call reused.",
+      metadata: { toolCount: 1, reusedToolCount: 1 },
+      tools: [{ title: "generateImage" }],
+    });
+  });
 });
 
 function message(

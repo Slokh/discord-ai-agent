@@ -202,13 +202,19 @@ describe("toolRegistry", () => {
     expect(contracts.find((tool) => tool.name === "getSpotifyItem")?.toolClass).toBe("external");
   });
 
-  it("assigns internal latency budgets without exposing them to the model", () => {
+  it("turns long latency budgets into Code Mode wait guidance", () => {
     expect(toolRegistry.every((tool) => Number.isFinite(tool.latencyBudgetMs) && tool.latencyBudgetMs > 0)).toBe(true);
     expect(toolRegistry.find((tool) => tool.name === "getRecentDiscordMessages")?.latencyBudgetMs).toBe(15_000);
     expect(toolRegistry.find((tool) => tool.name === "getDiscordStats")?.latencyBudgetMs).toBe(20_000);
     expect(toolRegistry.find((tool) => tool.name === "inspectDiscordImages")?.latencyBudgetMs).toBe(60_000);
     expect(toolRegistry.find((tool) => tool.name === "generateImage")?.latencyBudgetMs).toBe(120_000);
-    expect(JSON.stringify(localToolDefinitionsForModel())).not.toContain("latencyBudgetMs");
+    const definitions = localToolDefinitionsForModel();
+    const generatedImage = definitions.find((tool) => tool.function.name === "generateImage")?.function.description;
+    expect(generatedImage).toContain('// @exec: {"yield_time_ms":120000}');
+    expect(generatedImage).toContain("await once—never call wait or resubmit");
+    expect(definitions.find((tool) => tool.function.name === "getWalletBalance")?.function.description)
+      .not.toContain("@exec");
+    expect(JSON.stringify(definitions)).not.toContain("latencyBudgetMs");
   });
 
   it("exports OpenRouter-compatible local function and server tool definitions", () => {

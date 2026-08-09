@@ -88,7 +88,9 @@ function toolDescriptionForModel(tool: ToolRegistryEntry): string {
   // name their evidence shape. Repeating generic output taxonomies on every
   // model call adds thousands of static prompt bytes without changing schema.
   const needsExplicitOutput = tool.mutates || ["coding", "generation", "external"].includes(tool.toolClass);
-  return needsExplicitOutput
+  const description = needsExplicitOutput
     ? `${tool.description}\nReturns: ${tool.outputContract.join("; ")}.`
     : tool.description;
+  if (tool.latencyBudgetMs <= 10_000 || tool.repeatPolicy !== "reuse_identical_success") return description;
+  return `${description}\nCode Mode: prefix exec with // @exec: {"yield_time_ms":${tool.latencyBudgetMs}}; await once—never call wait or resubmit.`;
 }

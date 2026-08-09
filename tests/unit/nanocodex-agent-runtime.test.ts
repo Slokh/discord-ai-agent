@@ -474,6 +474,11 @@ describe("NanoCodex agent runtime executor", () => {
         latencyBudgetExceeded: false,
       }),
     }));
+    expect(runtime.recordEvent).toHaveBeenCalledWith(expect.objectContaining({
+      eventName: "agent.nanocodex.complete",
+      summary: "NanoCodex completed with 1 executed tool call; 1 duplicate call reused",
+      metadata: expect.objectContaining({ toolCalls: 1, toolAttempts: 2, reusedToolCalls: 1 }),
+    }));
   });
 
   it("delivers generated files when the hard timeout wins the runtime race", async () => {

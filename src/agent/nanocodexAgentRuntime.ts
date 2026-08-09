@@ -159,6 +159,8 @@ async function runRetainedNanoCodexTurn(input: {
     : initialPrompt;
   const allowedTools = new Set<ToolName>(localTools.map((tool) => tool.name));
   let toolSequence = 0;
+  let executedToolCount = 0;
+  let reusedToolCount = 0;
   const promptSizes = {
     instructionBytes: Buffer.byteLength(prompt.instructions, "utf8"),
     turnContextBytes: Buffer.byteLength(prompt.prompt, "utf8"),
@@ -225,6 +227,7 @@ async function runRetainedNanoCodexTurn(input: {
       const repeatKey = `${route.name}\0${route.argumentsText}`;
       const reusable = tool.repeatPolicy === "reuse_identical_success" ? reusableToolResults.get(repeatKey) : undefined;
       if (reusable) {
+        reusedToolCount += 1;
         const elapsed = durationMs(startedAt);
         const reusedResult = {
           ...reusable.result,
@@ -258,6 +261,7 @@ async function runRetainedNanoCodexTurn(input: {
         });
         return { success: true, output: reusedResult.content, metadata: { status: "reused", reusedCallId: reusable.callId } };
       }
+      executedToolCount += 1;
       await recordAgentEvent(ctx, {
         eventName: "agent.tool.started",
         summary: route.name,
@@ -323,7 +327,9 @@ async function runRetainedNanoCodexTurn(input: {
       level: "error",
       summary: "NanoCodex runtime ended before a final assistant message.",
       metadata: {
-        toolCalls: toolSequence,
+        toolCalls: executedToolCount,
+        toolAttempts: toolSequence,
+        reusedToolCalls: reusedToolCount,
         successfulMutationObserved: successfulMutatingToolResults.length > 0,
         successfulMutationCount: successfulMutatingToolResults.length,
         ...runtimeErrorDimensions(error),
@@ -343,7 +349,9 @@ async function runRetainedNanoCodexTurn(input: {
         ? "NanoCodex ended after a successful mutation; returning the durable tool result."
         : "NanoCodex ended after a successful file-producing tool; returning its delivered output.",
       metadata: {
-        toolCalls: toolSequence,
+        toolCalls: executedToolCount,
+        toolAttempts: toolSequence,
+        reusedToolCalls: reusedToolCount,
         successfulMutationCount: successfulMutatingToolResults.length,
         error: error instanceof Error ? previewText(error.message, 300) : previewText(String(error), 300),
       },
@@ -380,12 +388,14 @@ async function runRetainedNanoCodexTurn(input: {
   };
   await recordAgentEvent(ctx, {
     eventName: "agent.nanocodex.complete",
-    summary: `NanoCodex completed with ${toolSequence} tool calls`,
+    summary: `NanoCodex completed with ${executedToolCount} executed tool ${executedToolCount === 1 ? "call" : "calls"}${reusedToolCount ? `; ${reusedToolCount} duplicate ${reusedToolCount === 1 ? "call" : "calls"} reused` : ""}`,
     metadata: {
       turnUsage: normalizeNanoCodexUsage(result.usage),
       estimatedCostUsd: nanoCodexEstimatedCostUsd(result.usage),
       model: ctx.config.openRouter.chatModel,
-      toolCalls: toolSequence,
+      toolCalls: executedToolCount,
+      toolAttempts: toolSequence,
+      reusedToolCalls: reusedToolCount,
       resumed: Boolean(resume),
     },
   });

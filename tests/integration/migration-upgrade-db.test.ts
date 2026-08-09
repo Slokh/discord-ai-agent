@@ -223,7 +223,7 @@ describe.skipIf(!runDbTests)("forward migration upgrades", () => {
           ('legacy-question','legacy-question-signal','reporter'),
           ('legacy-final','legacy-final-signal','reporter');
       `);
-      for (const version of ["057_console_latest_message", "058_improvement_bot_update_case_dedupe", "059_skip_console_only_announcements", "060_discord_delivery_source_message_index", "061_improvement_replies_in_source_channel"]) {
+      for (const version of ["057_console_latest_message", "058_improvement_bot_update_case_dedupe", "059_skip_console_only_announcements", "060_discord_delivery_source_message_index", "061_improvement_replies_in_source_channel", "062_console_health_producer"]) {
         await client.query(await readFile(path.resolve(`migrations/${version}.sql`), "utf8"));
       }
       await expect(client.query(`
@@ -252,7 +252,7 @@ describe.skipIf(!runDbTests)("forward migration upgrades", () => {
       await expect(client.query("SELECT trigger,run_key,status,completed_at FROM improvement_proof_producer_runs LIMIT 0"))
         .resolves.toEqual(expect.objectContaining({ rows: [] }));
       await expect(client.query("SELECT count(*)::int AS producers FROM improvement_proof_producers"))
-        .resolves.toEqual(expect.objectContaining({ rows: [{ producers: 5 }] }));
+        .resolves.toEqual(expect.objectContaining({ rows: [{ producers: 6 }] }));
       await expect(client.query("SELECT case_id,producer_trigger,liveness_reason,delivery_message_id FROM improvement_bot_updates LIMIT 0"))
         .resolves.toEqual(expect.objectContaining({ rows: [] }));
       await expect(client.query("SELECT automation_details FROM improvement_cases WHERE case_id = 'linked-case'"))

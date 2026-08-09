@@ -22,6 +22,7 @@
     "console:dev:ui": "tsx watch scripts/operatorConsole.ts --confirm-production --local-ui",
     "console:local": "tsx watch src/index.ts console",
     "console:provision": "tsx scripts/provisionConsoleDatabase.ts --confirm-production",
+    "console:health": "tsx scripts/consoleHealth.ts",
     "start": "node dist/src/index.js",
     "start:api": "node dist/src/index.js api",
     "start:bot": "node dist/src/index.js bot",

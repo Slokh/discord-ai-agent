@@ -14,6 +14,7 @@ describe("improvement producer health observation", () => {
       unhealthy("improvement_reconciliation"),
       unhealthy("improvement_watchdog"),
       unhealthy("production_observation"),
+      unhealthy("console_health"),
     ];
 
     const external = await recordObservedProofProducerDetections({
@@ -38,8 +39,8 @@ describe("improvement producer health observation", () => {
       appRevision: "revision-a",
       observer: "improvement_reconciliation",
     });
-    expect(reconciliation.map((result) => result.trigger)).toEqual(["improvement_watchdog", "production_observation"]);
-    expect(recordImprovementSignal).toHaveBeenCalledTimes(2);
+    expect(reconciliation.map((result) => result.trigger)).toEqual(["improvement_watchdog", "production_observation", "console_health"]);
+    expect(recordImprovementSignal).toHaveBeenCalledTimes(3);
   });
 });
 

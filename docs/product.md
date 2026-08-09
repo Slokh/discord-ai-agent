@@ -121,6 +121,8 @@ Prompt, reply, and standalone message rows include the retained Discord author's
 
 The Console transport uses three explicit read models rather than a monolithic snapshot: a compact overview, a server-filtered cursor-paginated activity index, and a targeted lazy detail response that never reconstructs the seven-day index. This transport contract supersedes earlier references to an already-loaded search projection or an identity-free overview. Command-K searches the complete eligible seven-day projection on the server. The index contains bounded previews and the retained author's resolved display label, but not user IDs, full transcripts, artifacts, secret-bearing metadata, or private model reasoning. Privacy-deleted and unavailable identities render as `Unknown author`. Clients retain the last successful view during transient failures, identify it as stale, bound requests with a timeout, and retry automatically.
 
+Deployment and scheduled health checks independently prove the hosted Console route, unauthenticated OAuth/API boundary, exact deployed revision, projection freshness, activity index, and a sampled lazy detail. Their content-free receipts appear with the other proof producers; sustained failure enters the unified improvement stream and a later successful receipt proves recovery.
+
 ## Non-goals
 
 - Slash commands as the normal product interface.

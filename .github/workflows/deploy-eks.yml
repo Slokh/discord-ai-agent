@@ -94,4 +94,7 @@ jobs:
           if [ -n "${PREVIOUS_HELM_REVISION:-}" ]; then
             args+=(--previous-helm-revision "$PREVIOUS_HELM_REVISION")
           fi
+          if [ "${CONSOLE_TUNNEL_ENABLED:-}" = "true" ]; then
+            args+=(--console-public-url "https://console.mindcool.dev")
+          fi
           npx tsx scripts/postDeployVerification.ts "${args[@]}"

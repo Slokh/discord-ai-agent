@@ -35,6 +35,7 @@ const AUTOMATED_SOURCES = new Set<ImprovementSignalSource>(AUTOMATED_IMPROVEMENT
 
 const REVISION_QUALITY_CLUSTER_REFERENCE = /^revision-quality:(runtime_event|tool|tool_latency|delivery|answer_status|quality_metric):[a-f0-9]{24}$/;
 const POST_DEPLOY_REFERENCES = new Set([
+  "post-deploy-console_health",
   "post-deploy-deployment_health",
   "post-deploy-capability_canary",
   "post-deploy-stability",

@@ -21,6 +21,7 @@ describe("post-deploy verification recovery", () => {
       previousHelmRevision: 40,
       verifyHealth: vi.fn(async () => undefined),
       verifyCapabilities,
+      verifyConsole: vi.fn(async () => undefined),
       verifyPrivateRegressions: vi.fn(async () => undefined),
       promote: vi.fn(async () => undefined),
       rollback,
@@ -38,6 +39,7 @@ describe("post-deploy verification recovery", () => {
       previousHelmRevision: 40,
       verifyHealth: vi.fn(async () => undefined),
       verifyCapabilities: vi.fn(async () => { throw new Error("canary failed"); }),
+      verifyConsole: vi.fn(async () => undefined),
       verifyPrivateRegressions: vi.fn(async () => undefined),
       promote: vi.fn(async () => undefined),
       rollback,
@@ -55,6 +57,24 @@ describe("post-deploy verification recovery", () => {
     expect(recordFailureDetection).toHaveBeenCalledWith({ failedStage: "capability_canary" });
   });
 
+  it("treats Console health as its own retryable release stage", async () => {
+    const verifyConsole = vi.fn(async () => { throw new Error("Console projection stale"); });
+    const result = await verifyReleaseWithRecovery({
+      expectedRevision: "revision-b",
+      previousHelmRevision: null,
+      attempts: 1,
+      verifyHealth: vi.fn(async () => undefined),
+      verifyCapabilities: vi.fn(async () => undefined),
+      verifyConsole,
+      verifyPrivateRegressions: vi.fn(async () => undefined),
+      promote: vi.fn(async () => undefined),
+      rollback: vi.fn(async () => ({ expectedRevision: "revision-a" })),
+    });
+
+    expect(result).toMatchObject({ status: "verification_failed", failedStage: "console_health" });
+    expect(verifyConsole).toHaveBeenCalledOnce();
+  });
+
   it("retries detection after rollback without changing the release outcome", async () => {
     const recordFailureDetection = vi.fn()
       .mockRejectedValueOnce(new Error("new worker unavailable"))
@@ -66,6 +86,7 @@ describe("post-deploy verification recovery", () => {
       attempts: 1,
       verifyHealth: vi.fn(async () => undefined),
       verifyCapabilities: vi.fn(async () => { throw new Error("canary failed"); }),
+      verifyConsole: vi.fn(async () => undefined),
       verifyPrivateRegressions: vi.fn(async () => undefined),
       promote: vi.fn(async () => undefined),
       rollback: vi.fn(async () => ({ expectedRevision: "revision-a" })),
@@ -87,6 +108,7 @@ describe("post-deploy verification recovery", () => {
       attempts: 1,
       verifyHealth: vi.fn(async () => undefined),
       verifyCapabilities: vi.fn(async () => undefined),
+      verifyConsole: vi.fn(async () => undefined),
       verifyPrivateRegressions: vi.fn(async () => { throw new Error("regression failed"); }),
       promote: vi.fn(async () => undefined),
       rollback: vi.fn(async () => { throw new Error("rollback failed"); }),

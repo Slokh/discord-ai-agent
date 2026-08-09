@@ -286,6 +286,9 @@ describe("operator console", () => {
     expect(clientScript).toContain('event.key==="Escape"');
     expect(clientScript).toContain('setAttribute("aria-selected"');
     expect(clientScript).toContain("if(refreshInFlight)return refreshInFlight");
+    expect(clientScript).toContain("activityIndexInFlight?.query===query");
+    expect(clientScript).toContain("if(latestSnapshot)renderActivity(latestSnapshot)");
+    expect(clientScript).toContain("reconcileFilteredSelection");
     expect(clientScript).toContain("activityDetailVersion");
     expect(clientScript).toContain("AbortController");
     expect(clientScript).toContain("Data stale · reconnecting automatically");

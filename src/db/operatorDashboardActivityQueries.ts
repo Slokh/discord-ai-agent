@@ -1,9 +1,10 @@
-export function recentTaskActivityQuery(activityEventLimit: number) {
+export function recentTaskActivityQuery(activityEventLimit: number, includeSystem = true) {
   const eventLimit = activityEventLimit === 12 ? 12 : 1;
   return `WITH recent_tasks AS (
            SELECT * FROM agent_tasks
            WHERE status NOT IN ('queued','running')
              AND task_type <> 'post-deploy-canary'
+             ${includeSystem ? "" : "AND task_type <> 'improvement_report'"}
              AND updated_at >= $1::timestamptz - interval '7 days'
              AND (
                improvement_case_id IS NOT NULL

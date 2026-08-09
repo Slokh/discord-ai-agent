@@ -7,9 +7,37 @@ import { projectActivitySources } from "./operatorDashboardProjection.js";
 import { recentTaskActivityQuery } from "./operatorDashboardActivityQueries.js";
 import { dashboardTraceEvent, executionActivityTrace, taskActivityTrace } from "./operatorRuntimeActivityRepository.js";
 import { discordMentionLabels, discordMentions, discordRoleMentions, resolvedDiscordSourceTitle } from "./operatorDiscordIdentity.js";
+import { deriveOperatorActivity, retainOpenImprovementActivity, summarizeOperatorActivity } from "../console/activity.js";
+import { paginateActivity, type ActivityPageRequest } from "../console/server.js";
 const COMPONENTS = ["bot", "worker", "api", "console"] as const;
 export class OperatorDashboardRepository {
   constructor(private readonly pool: DbPool) {}
+  async overview(input: { revision: string }) {
+    const snapshot = await this.snapshot({ revision: input.revision, includeRecentActivity: false });
+    return {
+      generatedAt: snapshot.generatedAt,
+      revision: snapshot.revision,
+      services: snapshot.services,
+      producers: snapshot.producers,
+      deployments: snapshot.deployments,
+      summary: snapshot.summary,
+    };
+  }
+
+  async activityPage(input: ActivityPageRequest & { revision: string }) {
+    const activityTypes = input.types?.length ? input.types : ["conversation", "improvement", "code_change"];
+    const snapshot = await this.snapshot({
+      revision: input.revision,
+      activityOnly: true,
+      activityTypes,
+    });
+    const activity = summarizeOperatorActivity(retainOpenImprovementActivity(
+      deriveOperatorActivity(snapshot),
+      snapshot.improvements,
+    ));
+    return paginateActivity(activity, input);
+  }
+
   async activityDetail(input: { kind: string; id: string; revision: string }) {
     const detail = {
       kind: input.kind,
@@ -237,16 +265,31 @@ export class OperatorDashboardRepository {
     return { ...detail, executionId, messages: resolvedMessages, traceEvents: trace.rows.map(dashboardTraceEvent) };
   }
 
-  async snapshot(input: { revision: string; now?: Date }) {
+  async snapshot(input: {
+    revision: string;
+    now?: Date;
+    activityOnly?: boolean;
+    activityTypes?: string[];
+    includeRecentActivity?: boolean;
+  }) {
     const now = input.now ?? new Date();
     const activityEventLimit = 1;
-    const heartbeatTable = await this.pool.query(
+    const activityOnly = input.activityOnly === true;
+    const includeRecentActivity = input.includeRecentActivity !== false;
+    const activityTypes = new Set(input.activityTypes ?? ["conversation", "improvement", "code_change", "message", "release", "system"]);
+    const includeConversation = activityTypes.has("conversation");
+    const includeCodeChanges = activityTypes.has("code_change");
+    const includeImprovements = activityTypes.has("improvement");
+    const includeMessages = activityTypes.has("message");
+    const includeReleases = activityTypes.has("release");
+    const includeSystem = activityTypes.has("system");
+    const heartbeatTable = activityOnly ? { rows: [] } : await this.pool.query(
       `SELECT EXISTS (
          SELECT 1 FROM information_schema.tables
          WHERE table_schema = current_schema() AND table_name = 'service_runtime_heartbeats'
        ) AS available`,
     );
-    const heartbeatAvailable = Boolean(heartbeatTable.rows[0]?.available);
+    const heartbeatAvailable = !activityOnly && Boolean(heartbeatTable.rows[0]?.available);
     const heartbeatQuery = heartbeatAvailable
       ? this.pool.query(
         `SELECT component,instance_id,revision,started_at,last_seen_at
@@ -258,7 +301,7 @@ export class OperatorDashboardRepository {
       : Promise.resolve({ rows: [] });
     const [heartbeats, executions, tasks, cases, caseCounts, runtimeEvents, taskEvents, caseEvents, deployments, producers, messages] = await Promise.all([
       heartbeatQuery,
-      this.pool.query(
+      !activityOnly || includeConversation || includeSystem ? this.pool.query(
         `SELECT execution.execution_id,execution.session_id,execution.task_id,execution.status,
                 execution.model,execution.provider,execution.pr_url,execution.started_at,
                 execution.created_at,execution.updated_at,
@@ -294,8 +337,8 @@ export class OperatorDashboardRepository {
          WHERE execution.status IN ('queued','running')
            AND coalesce(nullif(execution.metadata->>'qualityCohort',''),nullif(session.metadata->>'qualityCohort','')) IS DISTINCT FROM 'synthetic'
          ORDER BY execution.updated_at DESC LIMIT 30`,
-      ),
-      this.pool.query(
+      ) : emptyRows(),
+      !activityOnly || includeCodeChanges || includeSystem ? this.pool.query(
         `SELECT task_id,improvement_case_id,task_type,title,status,current_step,status_message,
                 branch_name,pr_url,verify_passed,guild_id,channel_id,trace_id,
                 discord_response_channel_id,discord_response_message_id,created_at,started_at,updated_at
@@ -303,8 +346,8 @@ export class OperatorDashboardRepository {
          FROM agent_tasks WHERE status IN ('queued','running')
            AND task_type <> 'post-deploy-canary'
          ORDER BY updated_at DESC LIMIT 30`,
-      ),
-      this.pool.query(
+      ) : emptyRows(),
+      !activityOnly || includeImprovements ? this.pool.query(
         `SELECT case_row.case_id,case_row.title,case_row.status,case_row.classification,
                 case_row.severity,case_row.owning_domain,case_row.automation_state,
                 case_row.automation_blocker,case_row.automation_next_action,
@@ -343,25 +386,29 @@ export class OperatorDashboardRepository {
          ORDER BY
            CASE case_row.severity WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 ELSE 3 END,
            case_row.updated_at DESC LIMIT 40`,
-      ),
-      this.pool.query(
+      ) : emptyRows(),
+      activityOnly ? emptyRows() : this.pool.query(
         `SELECT status,count(*)::int AS count,
                 count(*) FILTER (WHERE automation_state = 'blocked' OR severity = 'critical')::int AS attention_count
          FROM improvement_cases
          WHERE merged_into_case_id IS NULL GROUP BY status ORDER BY status`,
       ),
-      this.pool.query(
+      includeRecentActivity && (includeConversation || includeSystem) ? this.pool.query(
         `WITH execution_rollup AS (
            SELECT execution.execution_id,execution.session_id,execution.attempt,
                   coalesce(execution.started_at,execution.created_at) AS story_started_at,
                   execution.updated_at AS story_updated_at,
-                  (session.harness = 'background_job' OR session.metadata->>'kind' = 'background_job') AS is_system
+                  coalesce(session.harness = 'background_job' OR session.metadata->>'kind' = 'background_job',false) AS is_system
            FROM agent_runtime_executions execution
            JOIN agent_runtime_sessions session USING (session_id)
            WHERE execution.task_id IS NULL
              AND execution.status NOT IN ('queued','running')
              AND coalesce(nullif(execution.metadata->>'qualityCohort',''),nullif(session.metadata->>'qualityCohort','')) IS DISTINCT FROM 'synthetic'
-             AND execution.updated_at >= $1::timestamptz - interval '7 days'
+              AND execution.updated_at >= $1::timestamptz - interval '7 days'
+              AND (
+                ($2::boolean AND NOT coalesce(session.harness = 'background_job' OR session.metadata->>'kind' = 'background_job',false))
+                OR ($3::boolean AND coalesce(session.harness = 'background_job' OR session.metadata->>'kind' = 'background_job',false))
+              )
          )
          SELECT recent.execution_id,recent.session_id,recent.attempt,recent.story_started_at,recent.story_updated_at,recent.is_system,
                 coalesce(nullif(execution.metadata->>'title',''),session.title) AS title,
@@ -400,10 +447,12 @@ export class OperatorDashboardRepository {
            LIMIT ${activityEventLimit}
          ) event ON true
          ORDER BY recent.story_updated_at DESC,event.created_at DESC,event.id DESC`,
-        [now],
-      ),
-      this.pool.query(recentTaskActivityQuery(activityEventLimit), [now]),
-      this.pool.query(
+        [now, includeConversation, includeSystem],
+      ) : emptyRows(),
+      includeRecentActivity && (includeCodeChanges || includeSystem)
+        ? this.pool.query(recentTaskActivityQuery(activityEventLimit, includeSystem), [now])
+        : emptyRows(),
+      includeRecentActivity && includeImprovements ? this.pool.query(
         `WITH recent_cases AS (
            SELECT event.case_id,max(event.created_at) AS story_updated_at
            FROM improvement_case_events event
@@ -467,14 +516,14 @@ export class OperatorDashboardRepository {
          ${RELATED_CASES_FOR_IMPROVEMENT_SQL}
          ORDER BY recent.story_updated_at DESC,event.created_at DESC,event.event_id DESC`,
         [now],
-      ),
-      this.pool.query(
+      ) : emptyRows(),
+      !activityOnly || includeRecentActivity && includeReleases ? this.pool.query(
         `SELECT revision,deployment_id,verified_at FROM deployment_verifications
          WHERE verified_at >= $1::timestamptz - interval '7 days'
          ORDER BY verified_at DESC`,
         [now],
-      ),
-      this.pool.query(
+      ) : emptyRows(),
+      activityOnly ? emptyRows() : this.pool.query(
         `SELECT producer.trigger,producer.activated_at,run.status,run.revision,
                 run.outcome_code,run.started_at,run.completed_at
          FROM improvement_proof_producers producer
@@ -484,7 +533,7 @@ export class OperatorDashboardRepository {
            ORDER BY candidate.started_at DESC,candidate.run_id DESC LIMIT 1
          ) run ON true ORDER BY producer.trigger`,
       ),
-      recentMessageActivities(this.pool, now),
+      includeRecentActivity && includeMessages ? recentMessageActivities(this.pool, now) : Promise.resolve([]),
     ]);
 
     const heartbeatRows = heartbeats.rows.map((row) => ({
@@ -583,6 +632,9 @@ export class OperatorDashboardRepository {
       activity: activities,
     };
   }
+}
+function emptyRows(): Promise<{ rows: Array<Record<string, unknown>> }> {
+  return Promise.resolve({ rows: [] });
 }
 function nullable(value: unknown): string | null {
   return value == null ? null : String(value);

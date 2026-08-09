@@ -15,10 +15,11 @@ The sandbox supervisor never receives the Discord token or database URL. It rece
 1. `src/tools/agentTaskTools.ts` records the task projection and exactly one task-linked runtime execution, then returns a status result to the parent chat turn.
 2. `src/jobs/agentTaskEnqueue.ts` atomically hands the task to pg-boss. The parent tool call does not wait for the PR.
 3. Discord task notification code creates or edits one progress message for queued, running, and terminal state.
-4. `src/execution/backend.ts` creates an isolated Kubernetes Job.
-5. `src/execution/runnerPipeline.ts` runs the complete repository pipeline.
-6. Sandbox progress, commands, timings, cache state, and terminal callbacks become `agent.task.*` events in the canonical runtime ledger. Command output is retained as a redacted runtime artifact referenced by its event.
-7. The task ends as succeeded, failed, cancelled, or no-change, with a PR link or concrete reason.
+4. The task worker admits one repository sandbox at a time on the shared production node. Later work remains durably queued, and the worker holds the active queue job until its task reaches a durable terminal state.
+5. `src/execution/backend.ts` creates an isolated Kubernetes Job.
+6. `src/execution/runnerPipeline.ts` runs the complete repository pipeline.
+7. Sandbox progress, commands, timings, cache state, and terminal callbacks become `agent.task.*` events in the canonical runtime ledger. Command output is retained as a redacted runtime artifact referenced by its event.
+8. The task ends as succeeded, failed, cancelled, or no-change, with a PR link or concrete reason.
 
 Report signals enter the unified improvement worker rather than a reaction-specific execution path. Each signal snapshot gets one deterministic assessment task. The sandbox first performs evidence-only triage and code enforces a clean checkout. Expected behavior, non-reproduction, or an already-fixed source dismisses the report without GitHub work. A specific ambiguity moves the case to `needs_evidence` with the exact clarification required. Only `confirmed_unfixed` with a registered machine-executable contract starts the mutation-capable repair phase; it never replays the original Discord request or publishes private report content.
 
@@ -67,6 +68,10 @@ GitHub App installation credentials are preferred in production. A local PAT sho
 
 This backend creates one Job, Secret, and ConfigMap per task. The worker service account can manage those resources and has read-only Pod and Pod-log access for failed-task diagnostics; the sandbox service account has no Kubernetes API permissions. Callback tokens bind task and sandbox-run identity, timestamp, and body. Terminal callbacks are accepted once. Before failed Job cleanup, reconciliation retains the pod phase, termination reason, exit code, signal, and restart count as typed task evidence, plus a bounded redacted log tail as a private runtime artifact.
 
+A handled repository, code, verification, or publication failure sends its signed terminal callback and exits the container cleanly. An unhandled runner exit, eviction, resource kill, or lost terminal callback gets one Kubernetes pod retry under the same task identity. A failed first pod remains running work while that retry is active. If the retry is exhausted, reconciliation classifies the retained evidence as memory exhaustion, eviction, deadline, startup failure, runner crash, disappearance, or explicitly unknown before cleanup.
+
+The shared node deliberately runs one repository sandbox at a time. Increasing that limit requires dedicated measured capacity and durable admission; increasing worker replicas or relying on container limits alone must not reintroduce concurrent memory pressure.
+
 NetworkPolicy should allow only DNS, the internal callback API, and the external hosts required for GitHub, OpenRouter, and package installation. A task uses only ephemeral local cache state; correctness never depends on cache persistence.
 
 ## Recovery
@@ -82,6 +87,8 @@ Reconcilers handle:
 - CI or verification failures with retained command summaries.
 
 Recovery produces an explicit terminal reason. It never silently publishes an unverified diff or marks a task successful only because a process exited.
+
+Discord failure rendering includes command output only for a command with a non-zero exit. A last successful setup command is progress evidence, never a guessed failure cause. Infrastructure failures use the retained pod classification and keep raw Kubernetes wording and bounded logs in private Console/runtime evidence.
 
 Members can add `🔄` or `🔃` to a terminal task update to queue a fresh retry. The reaction is durably deduplicated per member and target message, and the new task links back to the failed task. Tasks linked to an improvement case create a new source-independent work attempt while retaining the case projection; the case remains `in_progress` during the retry and still requires explicit deployed verification before resolution.
 

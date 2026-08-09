@@ -277,6 +277,34 @@ describe("formatAgentTaskResult", () => {
     expect(response).not.toContain("the sandbox failed");
   });
 
+  it("does not present a successful command as the cause of an infrastructure failure", () => {
+    const response = formatAgentTaskResult({
+      taskId: "task-1",
+      jobId: "job-1",
+      job: {
+        taskId: "task-1",
+        pgBossJobId: "job-1",
+        status: "failed",
+        title: "update status",
+        error: "Job has reached the specified backoff limit",
+        updatedAt: new Date("2026-01-01T00:00:00Z")
+      } as any,
+      commandEvents: [{
+        step: "dependencies",
+        command: "npm ci",
+        exitCode: 0,
+        durationMs: 34_407,
+        outputTail: "added 342 packages",
+      }] as any,
+    });
+
+    expect(response).toContain("The coding workspace stopped unexpectedly");
+    expect(response).toContain("React with 🔄 to retry");
+    expect(response).not.toContain("backoff limit");
+    expect(response).not.toContain("Last sandbox command");
+    expect(response).not.toContain("npm ci");
+  });
+
 });
 
 describe("Discord lookup tools", () => {

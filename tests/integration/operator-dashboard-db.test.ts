@@ -418,6 +418,18 @@ describe.skipIf(!runDbTests)("operator dashboard database projection", () => {
           metadata: expect.objectContaining({ model: "model-a", reasoningEffort: "high", estimatedCostUsd: 0.0123 }),
         }),
       ]),
+      conversationTrace: expect.objectContaining({
+        model: "model-a",
+        totalTokens: 1234,
+        estimatedCostUsd: 0.0123,
+        contextCount: 3,
+        phases: expect.arrayContaining([
+          expect.objectContaining({ id: "context", summary: "**Earlier assistant reply** -# 5.9s" }),
+          expect.objectContaining({ id: "prompt", summary: "<@&456> Current member prompt" }),
+          expect.objectContaining({ id: "agent", metadata: expect.objectContaining({ model: "model-a", totalTokens: 1234 }) }),
+          expect.objectContaining({ id: "response", summary: "Final assistant reply" }),
+        ]),
+      }),
     });
     expect(JSON.stringify(conversation)).not.toContain("private secret");
 

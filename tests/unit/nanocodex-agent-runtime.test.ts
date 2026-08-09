@@ -43,6 +43,8 @@ describe("NanoCodex agent runtime executor", () => {
       expect(input.sessionId).not.toBe("018f1f9a-7b3c-7a01-8000-000000000001");
       expect(input.hostedWebSearch).toBe(false);
       expect(input.instructions).not.toContain("Current Discord requester: Kartik");
+      expect(input.tools.find((tool: any) => tool.function.name === "inspectDiscordImages")?.function.description)
+        .toContain("pass its direct text result to text(...); do not read .content or repeat the call");
       expect(input.prompt).toContain("Current Discord requester: Kartik");
       expect(input.prompt).toContain("Current NanoCodex model for this turn: `openai/gpt-5.6-luna`");
       expect(input.prompt).toContain("Configured Discord chat default: `openai/gpt-5.6-luna` (Luna).");
@@ -473,6 +475,45 @@ describe("NanoCodex agent runtime executor", () => {
         latencyBudgetMs: 120_000,
         latencyBudgetExceeded: false,
       }),
+    }));
+    expect(runtime.recordEvent).toHaveBeenCalledWith(expect.objectContaining({
+      eventName: "agent.nanocodex.complete",
+      summary: "NanoCodex completed with 1 executed tool call; 1 duplicate call reused",
+      metadata: expect.objectContaining({ toolCalls: 1, toolAttempts: 2, reusedToolCalls: 1 }),
+    }));
+  });
+
+  it("executes an identical image inspection only once and reuses its evidence", async () => {
+    const runtime = agentRuntime();
+    const executeToolRoute = vi.fn(async () => ({ content: "Vision result: the image contains a sourced claim." }));
+    const runRuntime = vi.fn(async (input: any) => {
+      const first = await input.executeTool({
+        callId: "call-1",
+        name: "inspectDiscordImages",
+        arguments: { messageIdOrUrl: "message-1", question: "What claim is shown?" },
+      });
+      const repeated = await input.executeTool({
+        callId: "call-2",
+        name: "inspectDiscordImages",
+        arguments: { messageIdOrUrl: "message-1", question: "What claim is shown?" },
+      });
+      expect(first.output).toBe("Vision result: the image contains a sourced claim.");
+      expect(repeated).toMatchObject({
+        success: true,
+        output: expect.stringContaining("Vision result: the image contains a sourced claim."),
+        metadata: { status: "reused", reusedCallId: "call-1" },
+      });
+      return result("done");
+    });
+
+    await expect(executeNanoCodexAgentRuntime({
+      toolContext: toolContext(runtime), text: "inspect this image", timeoutMs: 1_000,
+      runRuntime: runRuntime as never, executeToolRoute: executeToolRoute as never,
+    })).resolves.toMatchObject({ content: "done" });
+    expect(executeToolRoute).toHaveBeenCalledTimes(1);
+    expect(runtime.recordEvent).toHaveBeenCalledWith(expect.objectContaining({
+      eventName: "agent.nanocodex.complete",
+      metadata: expect.objectContaining({ toolCalls: 1, toolAttempts: 2, reusedToolCalls: 1 }),
     }));
   });
 

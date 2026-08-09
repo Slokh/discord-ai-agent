@@ -68,7 +68,7 @@ jobs:
                 ;;
             esac
             case "$path" in
-              Dockerfile|.dockerignore|docker-bake.hcl|package.json|package-lock.json|tsconfig.json|vite.console.config.ts|src/*|scripts/*|migrations/*|skills/*|native/*|deploy/helm/*)
+              .github/workflows/deploy-eks.yml|Dockerfile|.dockerignore|docker-bake.hcl|package.json|package-lock.json|tsconfig.json|vite.console.config.ts|src/*|scripts/*|migrations/*|skills/*|native/*|deploy/helm/*)
                 deployable=true
                 ;;
             esac

@@ -61,8 +61,12 @@ describe("architecture guardrails", () => {
     expect(consoleDeployment).toContain("kind: Service");
     expect(consoleDeployment).not.toContain("kind: Ingress");
     expect(deploymentWorkflow).toContain("CONSOLE_TLS_CERTIFICATE_ARN");
+    expect(deploymentWorkflow).toContain("CONSOLE_ROUTE53_HOSTED_ZONE_ID");
     expect(deploymentWorkflow).toContain("aws-load-balancer-ssl-cert");
     expect(deploymentWorkflow).toContain("aws-load-balancer-type=nlb");
+    expect(deploymentWorkflow).toContain("aws route53 change-resource-record-sets");
+    expect(deploymentWorkflow).toContain("aws route53 wait resource-record-sets-changed");
+    expect(deploymentWorkflow).toContain("aws elbv2 describe-load-balancers");
     expect(deploymentWorkflow).not.toContain("CONSOLE_TUNNEL_ENABLED");
   });
 

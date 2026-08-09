@@ -240,13 +240,13 @@ The reference deployment is the Helm chart in `deploy/helm/discord-ai-agent/`; `
 
 The production Console is published at `https://console.mindcool.dev` through a dedicated internet-facing AWS Network Load Balancer. TLS terminates with an ACM certificate and the backend forwards plain HTTP only inside the cluster to the Console service. Route 53 owns the hostname. The callback API and other application roles remain internal-only.
 
-Provisioning has three explicit prerequisites before setting the GitHub Actions variable `CONSOLE_TLS_CERTIFICATE_ARN`:
+Provisioning has three explicit prerequisites before setting the GitHub Actions variables `CONSOLE_TLS_CERTIFICATE_ARN` and `CONSOLE_ROUTE53_HOSTED_ZONE_ID`:
 
 1. Add the Discord OAuth redirect `https://console.mindcool.dev/auth/callback` to the configured Discord application.
 2. Add `DISCORD_CLIENT_SECRET` and a randomly generated `CONSOLE_SESSION_SECRET` to the existing `discord-ai-agent-env` Kubernetes Secret.
-3. Issue or select an ACM certificate covering `console.mindcool.dev`, store its ARN as `CONSOLE_TLS_CERTIFICATE_ARN`, deploy once to create the public load balancer, and create a Route 53 alias from `console.mindcool.dev` to that load balancer.
+3. Issue or select an ACM certificate covering `console.mindcool.dev`, store its ARN as `CONSOLE_TLS_CERTIFICATE_ARN`, and store the public `mindcool.dev` hosted-zone ID as `CONSOLE_ROUTE53_HOSTED_ZONE_ID`.
 
-The deployment workflow enables the public service only when `CONSOLE_TLS_CERTIFICATE_ARN` is non-empty. That same condition enables external route and authentication-boundary checks during deployment and scheduled Console health observation. Removing the variable removes the Helm-managed public service on the next deployment without changing the internal Console endpoint.
+The deployment workflow enables the public service only when `CONSOLE_TLS_CERTIFICATE_ARN` is non-empty. It waits for the load balancer, resolves its canonical zone, and atomically upserts the `console.mindcool.dev` Route 53 alias before running external route and authentication-boundary checks. Scheduled Console health observation uses the same public-TLS condition. Removing the certificate variable removes the Helm-managed public service on the next deployment without changing the internal Console endpoint; remove the DNS alias separately when intentionally decommissioning the hostname.
 
 Production Console startup fails closed when its Discord client ID, client secret, guild ID, or session secret is missing. Discord OAuth requests only `identify guilds`, checks the exact configured guild, discards the access token after the callback, and issues a signed 12-hour `Secure`, `HttpOnly`, `SameSite=Lax` session cookie. `/healthz` stays public for cluster probes; all non-loopback Console pages, assets, and APIs require the session. The socket-level loopback exception preserves `npm run console`, `npm run console:dev`, and the existing read-only Kubernetes port-forward workflow without creating a header-based bypass.
 

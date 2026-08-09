@@ -22,7 +22,7 @@ jobs:
       EKS_CLUSTER_NAME: ${{ vars.EKS_CLUSTER_NAME }}
       HELM_RELEASE: ${{ vars.HELM_RELEASE || 'discord-ai-agent' }}
       K8S_NAMESPACE: ${{ vars.K8S_NAMESPACE || 'discord-ai-agent' }}
-      CONSOLE_TUNNEL_ENABLED: ${{ vars.CONSOLE_TUNNEL_ENABLED }}
+      CONSOLE_TLS_CERTIFICATE_ARN: ${{ vars.CONSOLE_TLS_CERTIFICATE_ARN }}
     steps:
       - uses: aws-actions/configure-aws-credentials@v6
         with:
@@ -36,7 +36,7 @@ jobs:
           kubectl --namespace "$K8S_NAMESPACE" exec "deployment/$HELM_RELEASE-worker" -- \
             node dist/scripts/recordConsoleHealth.js --revision "$revision" --run-key "$run_key" --status started
           args=(--revision "$revision" --internal-url http://127.0.0.1:8081)
-          if [ "${CONSOLE_TUNNEL_ENABLED:-}" = "true" ]; then
+          if [ -n "${CONSOLE_TLS_CERTIFICATE_ARN:-}" ]; then
             args+=(--public-url https://console.mindcool.dev)
           fi
           set +e

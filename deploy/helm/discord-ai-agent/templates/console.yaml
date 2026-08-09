@@ -73,3 +73,27 @@ spec:
     - name: http
       port: {{ .Values.console.port }}
       targetPort: http
+{{- if .Values.console.publicService.enabled }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "discord-ai-agent.fullname" . }}-console-public
+  labels:
+    {{- include "discord-ai-agent.labels" . | nindent 4 }}
+    app.kubernetes.io/component: console
+  {{- with .Values.console.publicService.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  type: {{ .Values.console.publicService.type }}
+  selector:
+    app.kubernetes.io/name: {{ include "discord-ai-agent.name" . }}
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: console
+  ports:
+    - name: https
+      port: {{ .Values.console.publicService.port }}
+      targetPort: http
+{{- end }}

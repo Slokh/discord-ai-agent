@@ -26,7 +26,7 @@ jobs:
       HELM_RELEASE: ${{ vars.HELM_RELEASE || 'discord-ai-agent' }}
       K8S_NAMESPACE: ${{ vars.K8S_NAMESPACE || 'discord-ai-agent' }}
       DISCORD_BOT_CHANNEL_ID: ${{ vars.DISCORD_BOT_CHANNEL_ID }}
-      CONSOLE_TUNNEL_ENABLED: ${{ vars.CONSOLE_TUNNEL_ENABLED }}
+      CONSOLE_TLS_CERTIFICATE_ARN: ${{ vars.CONSOLE_TLS_CERTIFICATE_ARN }}
       IMAGE_TAG: ${{ inputs.image_tag }}
     steps:
       - uses: aws-actions/configure-aws-credentials@v6
@@ -73,8 +73,15 @@ jobs:
           if [ -n "${DISCORD_BOT_CHANNEL_ID:-}" ]; then
             helm_args+=(--set-string "config.botChannelId=$DISCORD_BOT_CHANNEL_ID")
           fi
-          if [ "${CONSOLE_TUNNEL_ENABLED:-}" = "true" ]; then
-            helm_args+=(--set "console.tunnel.enabled=true")
+          if [ -n "${CONSOLE_TLS_CERTIFICATE_ARN:-}" ]; then
+            helm_args+=(
+              --set "console.publicService.enabled=true"
+              --set-string "console.publicService.annotations.service\\.beta\\.kubernetes\\.io/aws-load-balancer-type=nlb"
+              --set-string "console.publicService.annotations.service\\.beta\\.kubernetes\\.io/aws-load-balancer-scheme=internet-facing"
+              --set-string "console.publicService.annotations.service\\.beta\\.kubernetes\\.io/aws-load-balancer-ssl-cert=$CONSOLE_TLS_CERTIFICATE_ARN"
+              --set-string "console.publicService.annotations.service\\.beta\\.kubernetes\\.io/aws-load-balancer-ssl-ports=https"
+              --set-string "console.publicService.annotations.service\\.beta\\.kubernetes\\.io/aws-load-balancer-backend-protocol=http"
+            )
           fi
           helm upgrade --install "$HELM_RELEASE" deploy/helm/discord-ai-agent \
             --rollback-on-failure \
@@ -94,7 +101,7 @@ jobs:
           if [ -n "${PREVIOUS_HELM_REVISION:-}" ]; then
             args+=(--previous-helm-revision "$PREVIOUS_HELM_REVISION")
           fi
-          if [ "${CONSOLE_TUNNEL_ENABLED:-}" = "true" ]; then
+          if [ -n "${CONSOLE_TLS_CERTIFICATE_ARN:-}" ]; then
             args+=(--console-public-url "https://console.mindcool.dev")
           fi
           npx tsx scripts/postDeployVerification.ts "${args[@]}"

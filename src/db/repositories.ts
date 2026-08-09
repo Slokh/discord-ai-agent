@@ -1,6 +1,7 @@
 import type { DbPool } from "./pool.js";
 import * as agentSettings from "./agentSettingsRepository.js";
 import * as agentTasks from "./agentTaskRepository.js";
+import * as agentTaskPublications from "./agentTaskPublicationRepository.js";
 import * as audit from "./auditRepository.js";
 import * as conversationMemory from "./conversationMemoryRepository.js";
 import * as deploymentAnnouncements from "./deploymentAnnouncementRepository.js";
@@ -48,6 +49,7 @@ export function createAppDatabase(pool: DbPool) {
   return {
     ...bindRepository(pool, agentSettings),
     ...bindRepository(pool, agentTasks),
+    ...bindRepository(pool, agentTaskPublications),
     ...bindRepository(pool, audit),
     ...bindRepository(pool, conversationMemory),
     ...bindRepository(pool, deploymentAnnouncements),

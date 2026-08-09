@@ -333,6 +333,11 @@ export async function markAgentTaskSucceeded(pool: DbPool, input: {
               status_message = 'Opened pull request.',
               branch_name = $2,
               pr_url = $3,
+              pull_request_state = 'open',
+              pull_request_head_revision = $6,
+              pull_request_merge_revision = NULL,
+              pull_request_merged_at = NULL,
+              pull_request_reconciled_at = now(),
               draft = $4,
               verify_passed = $5,
               error = NULL,
@@ -349,7 +354,7 @@ export async function markAgentTaskSucceeded(pool: DbPool, input: {
         )
         SELECT task_id FROM updated
       `,
-      [input.taskId, input.branchName, input.prUrl, input.draft, input.verifyPassed]
+      [input.taskId, input.branchName, input.prUrl, input.draft, input.verifyPassed, metadataString(input.metadata, "headRevision")]
     );
     await pool
       .query(

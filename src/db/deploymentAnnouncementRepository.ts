@@ -1,4 +1,5 @@
 import type { DbPool } from "./pool.js";
+import { recordAgentTasksDeployed } from "./agentTaskPublicationRepository.js";
 
 export type DeploymentAnnouncementClaim = {
   guildId: string;
@@ -15,6 +16,7 @@ export async function markDeploymentVerified(pool: DbPool, input: { revision: st
      ON CONFLICT(revision, deployment_id) DO UPDATE SET verified_at = EXCLUDED.verified_at`,
     [input.revision, input.deploymentId],
   );
+  await recordAgentTasksDeployed(pool, input);
 }
 
 export async function isDeploymentVerified(pool: DbPool, input: { revision: string; deploymentId: string }) {

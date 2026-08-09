@@ -289,6 +289,9 @@ describe("operator console", () => {
     expect(clientScript).toContain("activityIndexInFlight?.query===query");
     expect(clientScript).toContain("if(latestSnapshot)renderActivity(latestSnapshot)");
     expect(clientScript).toContain("reconcileFilteredSelection");
+    expect(clientScript).toContain('function setActivityFilter(filter){activityFilter=filter;updateActivityQuery();el("activity-scroll").scrollTo({top:0});if(latestSnapshot){renderActivity(latestSnapshot);reconcileFilteredSelection()}}');
+    expect(clientScript).toContain('new URLSearchParams({filter:"all"');
+    expect(clientScript).toContain("extra.limit||2000");
     expect(clientScript).toContain("activityDetailVersion");
     expect(clientScript).toContain("AbortController");
     expect(clientScript).toContain("Data stale · reconnecting automatically");

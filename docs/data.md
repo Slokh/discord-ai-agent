@@ -27,7 +27,7 @@ Focused repositories under `src/db/` own persistence:
 | Original-report replies and clarification ingestion | `improvementReporterConversationRepository.ts` |
 | Final Discord rendering obligations | `deliveryObligationsRepository.ts` |
 | Components V2 actions | `discordComponentActionRepository.ts` |
-| Code-update projections | `agentTaskRepository.ts` and focused read repositories |
+| Code-update projections | `agentTaskRepository.ts`, `agentTaskPublicationRepository.ts`, and focused read repositories |
 | Audits and costs | `auditRepository.ts` |
 | Payments and randomness | focused payment repositories and `rngRepository.ts` |
 | Server overlays and model settings | `serverOverlayRepository.ts`, `agentSettingsRepository.ts` |
@@ -95,7 +95,7 @@ The `agent_runtime_*` tables explain chat, code-update, and durable background-j
 - task-linked executions record isolated code-update lifecycle and outcomes;
 - background-job executions retain crawl and embedding progress without a parallel ledger.
 
-Chat, code updates, crawls, and embedding batches record only in the canonical runtime ledger. Code-update task rows are projections linked to the task runtime execution, which is also the sole artifact store for sandbox callbacks.
+Chat, code updates, crawls, and embedding batches record only in the canonical runtime ledger. Code-update task rows are projections linked to the task runtime execution, which is also the sole artifact store for sandbox callbacks. Publication reconciliation adds the exact GitHub PR head, state, merge revision, and merge time to that projection; verified release promotion adds deployment identity only when its revision exactly matches the recorded merge. Both transitions append typed runtime events, so the Console can group attempts without losing their chronology.
 
 Artifacts have explicit content type, size, checksum, sensitivity, and retention behavior. Binary delivery artifacts are stored once and referenced by the delivery manifest.
 

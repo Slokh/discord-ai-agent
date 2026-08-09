@@ -11,6 +11,7 @@ import {
   improvementTriageApplication,
 } from "./triage.js";
 import { reconcileImprovementPullRequestWork } from "./work.js";
+import { reconcileAgentTaskPullRequests } from "../execution/taskPublication.js";
 import {
   IMPROVEMENT_ASSESSMENT_EVIDENCE_VERSION,
   renderPrivateAssessmentEvidence,
@@ -44,6 +45,10 @@ type ImprovementReconciliationRepository = Pick<
   | "listImprovementCaseIdsNeedingHealth"
   | "updateImprovementCaseHealth"
 > & Partial<Pick<DiscordAiAgentRepository, "listImprovementProofProducerHealth" | "recordImprovementSignal">>;
+type TaskPublicationReader = Partial<Pick<
+  DiscordAiAgentRepository,
+  "listAgentTaskPullRequestsForReconciliation" | "recordAgentTaskPullRequestSnapshot"
+>>;
 
 type RuntimeReader = ImprovementAssessmentRuntimeReader;
 type DeliveryReader = Pick<DeliveryObligationsRepository, "getByExecutionId">;
@@ -58,6 +63,7 @@ export type ImprovementReconciliationResult = {
     error?: string;
   }>;
   pullRequests: Awaited<ReturnType<typeof reconcileImprovementPullRequestWork>>;
+  taskPullRequests: Awaited<ReturnType<typeof reconcileAgentTaskPullRequests>>;
   verification: {
     deployment: { revision: string; deploymentId: string } | null;
     cases: Awaited<ReturnType<ImprovementReconciliationRepository["verifyImprovementCasesForDeployment"]>>;
@@ -89,6 +95,10 @@ export async function runImprovementReconciliationOnce(input: {
     : [];
   const triage = await reconcileTriage(input);
   const pullRequests = await reconcileImprovementPullRequestWork(input.repo, input.config, ACTOR_ID);
+  const publicationRepo = input.repo as ImprovementReconciliationRepository & TaskPublicationReader;
+  const taskPullRequests = publicationRepo.listAgentTaskPullRequestsForReconciliation && publicationRepo.recordAgentTaskPullRequestSnapshot
+    ? await reconcileAgentTaskPullRequests(publicationRepo as ImprovementReconciliationRepository & Required<TaskPublicationReader>, input.config)
+    : [];
   const deployment = await input.repo.latestDeploymentVerification();
   const verificationCases = deployment
     ? await input.repo.verifyImprovementCasesForDeployment({
@@ -104,6 +114,7 @@ export async function runImprovementReconciliationOnce(input: {
     proofProducerDetections,
     triage,
     pullRequests,
+    taskPullRequests,
     verification: {
       deployment: deployment ? { revision: deployment.revision, deploymentId: deployment.deploymentId } : null,
       cases: verificationCases,

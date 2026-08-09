@@ -35,6 +35,7 @@ export type OperatorActivitySource = {
   startedAt: Date;
   durationMs: number | null;
   attempts: number | null;
+  failedAttempts: number | null;
   eventCount: number;
   rollupKey: string | null;
   responseStatus: string | null;
@@ -45,6 +46,10 @@ export type OperatorActivitySource = {
   hasParent: boolean;
   pullRequestUrl: string | null;
   branchName: string | null;
+  pullRequestState: string | null;
+  mergeRevision: string | null;
+  deployedRevision: string | null;
+  deploymentId: string | null;
   improvementCaseId: string | null;
   relatedImprovementCaseIds: string[];
   failureReason: string | null;

@@ -78,4 +78,55 @@ describe.skipIf(!runDbTests)("agent task command runtime projection", () => {
       case: expect.objectContaining({ status: "open" }), workAttempts: [],
     }));
   });
+
+  it("records pull request merge and exact verified deployment transitions", async () => {
+    const taskId = `task-${randomUUID()}`;
+    const traceId = `trace-${randomUUID()}`;
+    const sessionId = `agent-session-${taskId}`;
+    const executionId = `agent-task-execution-${taskId}`;
+    await repo.upsertAgentTaskQueued({
+      taskId, traceId, taskType: "code_update", title: "publication lifecycle",
+      request: "publish and deploy", requestedBy: "test",
+    });
+    await agentRuntime.upsertSession({
+      sessionId, traceId, threadKey: `task:${taskId}`, title: "publication lifecycle",
+      request: "publish and deploy", requestedBy: "test",
+    });
+    await agentRuntime.createExecution({ executionId, sessionId, taskId, traceId, status: "running" });
+    await repo.markAgentTaskSucceeded({
+      taskId, branchName: "kartik/publication", prUrl: "https://github.com/example/repo/pull/999",
+      draft: false, verifyPassed: true, metadata: { headRevision: "head-999" },
+    });
+
+    await expect(repo.listAgentTaskPullRequestsForReconciliation({ limit: 10 })).resolves.toContainEqual({
+      taskId, pullRequestUrl: "https://github.com/example/repo/pull/999",
+    });
+    await repo.markDeploymentVerified({ revision: "merge-999", deploymentId: "deployment-999" });
+    await expect(repo.recordAgentTaskPullRequestSnapshot({
+      taskId,
+      pullRequest: {
+        repository: "example/repo", pullRequestNumber: 999,
+        pullRequestUrl: "https://github.com/example/repo/pull/999", state: "merged",
+        headRevision: "head-999", mergeRevision: "merge-999",
+        mergedAt: new Date("2026-08-08T12:00:00Z"),
+      },
+    })).resolves.toEqual({ changed: true });
+
+    const publication = await pool.query(
+      `SELECT pull_request_state,pull_request_merge_revision,deployed_revision,deployment_id,deployed_at
+       FROM agent_tasks WHERE task_id = $1`,
+      [taskId],
+    );
+    expect(publication.rows[0]).toMatchObject({
+      pull_request_state: "merged", pull_request_merge_revision: "merge-999",
+      deployed_revision: "merge-999", deployment_id: "deployment-999", deployed_at: expect.any(Date),
+    });
+    const events = await pool.query(
+      `SELECT event_name FROM agent_runtime_events WHERE execution_id = $1 ORDER BY sequence`,
+      [executionId],
+    );
+    expect(events.rows.map((row) => row.event_name)).toEqual(expect.arrayContaining([
+      "agent.task.pull_request_reconciled", "agent.task.deployed",
+    ]));
+  });
 });

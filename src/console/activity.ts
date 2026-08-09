@@ -18,8 +18,13 @@ export type ActivityStory = {
   durationMs: number | null;
   latencyTone: "normal" | "slow" | "very_slow" | null;
   attempts: number | null;
+  failedAttempts: number | null;
   branchName: string | null;
   pullRequestUrl: string | null;
+  pullRequestState: string | null;
+  mergeRevision: string | null;
+  deployedRevision: string | null;
+  deploymentId: string | null;
   sourceUrl: string | null;
   responseUrl: string | null;
   responseKind: string | null;
@@ -126,7 +131,7 @@ function activeTaskStory(task: DashboardRecord, execution?: DashboardRecord): Ac
   const latestEvent = nullableString(execution?.latestEvent);
   const system = task.taskType === "improvement_report";
   return storyDefaults({
-    id: `task-${string(task.taskId)}`,
+    id: system ? `task-${string(task.taskId)}` : `code-change-${string(task.storyId, `task:${string(task.taskId)}`)}`,
     kind: system ? "system" : "code_change",
     category: system ? "system" : "product",
     title: string(task.title, system ? "Background work" : "Untitled code change"),
@@ -138,6 +143,8 @@ function activeTaskStory(task: DashboardRecord, execution?: DashboardRecord): Ac
     startedAt: task.startedAt ?? task.createdAt,
     branchName: nullableString(task.branchName),
     pullRequestUrl: nullableString(task.pullRequestUrl) ?? nullableString(execution?.pullRequestUrl),
+    attempts: nullableNumber(task.attempts),
+    failedAttempts: nullableNumber(task.failedAttempts),
     sourceUrl: nullableString(task.sourceUrl),
     responseUrl: nullableString(task.responseUrl),
     responseKind: nullableString(task.responseKind),
@@ -199,15 +206,20 @@ function projectRecentStory(source: DashboardRecord): ActivityStory {
     authorLabel: kind === "conversation" ? nullableString(source.authorLabel) : null,
     status: outcome.status,
     tone: outcome.tone,
-    workState: kind === "improvement" ? improvementWorkState(source) : null,
+    workState: kind === "improvement" ? improvementWorkState(source) : kind === "code_change" ? codeChangeWorkState(executionStatus) : null,
     summary: outcome.summary,
     occurredAt: source.occurredAt ?? source.createdAt,
     startedAt: source.startedAt ?? source.occurredAt ?? source.createdAt,
     durationMs,
     latencyTone: latencyTone(durationMs),
     attempts: nullableNumber(source.attempts),
+    failedAttempts: nullableNumber(source.failedAttempts),
     branchName: nullableString(source.branchName),
     pullRequestUrl: nullableString(source.pullRequestUrl),
+    pullRequestState: nullableString(source.pullRequestState),
+    mergeRevision: nullableString(source.mergeRevision),
+    deployedRevision: nullableString(source.deployedRevision),
+    deploymentId: nullableString(source.deploymentId),
     sourceUrl: nullableString(source.sourceUrl),
     responseUrl: nullableString(source.responseUrl),
     responseKind: nullableString(source.responseKind),
@@ -251,6 +263,15 @@ function activityOutcome(
     };
     if (deliveryState === "delivered") return { status, tone: "success", summary: "Reply delivered" };
     return { status, tone: isSuccess(status) ? "success" : "neutral", summary: "Reply generated" };
+  }
+  if (kind === "code_change") {
+    if (status === "deployed") return { status, tone: "success", summary: "Deployed and verified" };
+    if (status === "merged") return { status, tone: "warning", summary: "Merged · awaiting deployment" };
+    if (status === "pull_request_open" || status === "succeeded") return { status: "pull_request_open", tone: "warning", summary: "Pull request open" };
+    if (status === "pull_request_closed") return { status, tone: "danger", summary: "Pull request closed without merging" };
+    if (status === "no_changes") return { status, tone: "neutral", summary: "No changes required" };
+    if (status === "dismissed") return { status, tone: "neutral", summary: "Dismissed after assessment" };
+    if (status === "resolved") return { status, tone: "success", summary: "Resolved and verified" };
   }
   if (isFailure(status)) return {
     status,
@@ -443,6 +464,13 @@ function improvementWorkState(value: DashboardRecord): Exclude<ActivityWorkState
   return "active";
 }
 
+function codeChangeWorkState(status: string): Exclude<ActivityWorkState, null> {
+  if (["queued", "running"].includes(status)) return "active";
+  if (["pull_request_open", "merged", "succeeded"].includes(status)) return "waiting";
+  if (["failed", "pull_request_closed", "blocked", "timed_out", "timeout", "error"].includes(status)) return "blocked";
+  return "terminal";
+}
+
 function improvementTone(workState: ActivityWorkState, fallback: StoryTone): StoryTone {
   if (workState === "blocked") return "danger";
   if (workState === "waiting") return "warning";
@@ -514,7 +542,9 @@ function releaseStory(deployment: DashboardRecord): ActivityStory {
 
 function storyDefaults(input: Partial<ActivityStory> & Pick<ActivityStory, "id" | "kind" | "category" | "title" | "status" | "tone" | "summary" | "occurredAt" | "startedAt">): ActivityStory {
   return {
-    authorLabel: null, durationMs: null, latencyTone: null, attempts: null, branchName: null, pullRequestUrl: null, workState: null,
+    authorLabel: null, durationMs: null, latencyTone: null, attempts: null, failedAttempts: null,
+    branchName: null, pullRequestUrl: null, pullRequestState: null, mergeRevision: null,
+    deployedRevision: null, deploymentId: null, workState: null,
     sourceUrl: null, responseUrl: null, responseKind: null, hasParent: false, improvementCaseId: null,
     relatedImprovementCaseIds: [], failureReason: null, rollupKey: null,
     runCount: null, successCount: null, failureCount: null, p95DurationMs: null,
@@ -591,7 +621,7 @@ function isFailure(status: string): boolean {
 }
 
 function isSuccess(status: string): boolean {
-  return ["succeeded", "completed", "resolved", "verified", "no_changes"].includes(status);
+  return ["succeeded", "completed", "resolved", "verified", "deployed", "no_changes", "dismissed"].includes(status);
 }
 
 function humanize(value: string): string {

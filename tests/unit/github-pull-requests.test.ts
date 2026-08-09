@@ -39,6 +39,7 @@ describe("GitHub pull request snapshots", () => {
         state: "merged",
       headRevision: "head-sha",
       mergeRevision: "merge-sha",
+      mergedAt: new Date("2026-08-05T00:00:00Z"),
       nodeId: null,
       draft: false,
       mergeable: "unknown",

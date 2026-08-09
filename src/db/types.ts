@@ -176,6 +176,7 @@ export type ImprovementPullRequestSnapshot = {
   state: "open" | "closed" | "merged";
   headRevision: string;
   mergeRevision?: string | null;
+  mergedAt?: Date | null;
   nodeId?: string | null;
   draft?: boolean;
   mergeable?: "mergeable" | "conflicting" | "unknown";

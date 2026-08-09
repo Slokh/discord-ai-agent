@@ -8,6 +8,7 @@ import { PRIMARY_AGENT_REASONING } from "./modelPolicy.js";
 import { loadSkills, renderSkillsForPrompt } from "../skills/loader.js";
 import { durationMs, previewText } from "../util/logger.js";
 import { runtimeErrorDimensions } from "../observability/errorDimensions.js";
+import { redactSensitiveData } from "../observability/redaction.js";
 import type { AgentCapabilityRuntime } from "./capabilityRuntime.js";
 import { isAgentRuntimeTimeoutError, withAgentRuntimeTimeouts } from "./runtimeTimeouts.js";
 import { loadPromptOverlayText } from "./promptOverlay.js";
@@ -262,10 +263,17 @@ async function runRetainedNanoCodexTurn(input: {
         return { success: true, output: reusedResult.content, metadata: { status: "reused", reusedCallId: reusable.callId } };
       }
       executedToolCount += 1;
+      const safeArgumentsText = JSON.stringify(redactSensitiveData(args));
+      const argumentsPreview = previewText(safeArgumentsText, 4_000);
       await recordAgentEvent(ctx, {
         eventName: "agent.tool.started",
         summary: route.name,
-        metadata: { toolName: route.name, callId: route.id, argumentsPreview: previewText(route.argumentsText, 300) },
+        metadata: {
+          toolName: route.name,
+          callId: route.id,
+          argumentsPreview,
+          argumentsTruncated: argumentsPreview.length < safeArgumentsText.length,
+        },
       });
       const toolResult = await (input.executeToolRoute ?? executeLocalToolRoute)(ctx, route, text);
       if (tool.mutates && isRecoverableMutationResult(route.name, toolResult)) {

@@ -1,4 +1,5 @@
 import type { DbPool } from "./pool.js";
+import { redactSensitiveData, redactSensitiveText } from "../observability/redaction.js";
 
 const TRACE_METADATA_KEYS = new Set([
   "purpose", "requestedModel", "model", "reasoningEffort", "messageCount", "toolCount", "offeredTools",
@@ -8,6 +9,7 @@ const TRACE_METADATA_KEYS = new Set([
   "resumed", "attempt", "instructionBytes", "turnContextBytes", "toolSchemaBytes", "sizeBytes", "binary",
   "state", "headRevision", "mergeRevision", "revision", "deploymentId", "pullRequestNumber",
   "failureCode", "diagnosticsStatus",
+  "callId", "argumentsTruncated",
 ]);
 
 export async function executionActivityTrace(pool: DbPool, executionId: string) {
@@ -99,7 +101,7 @@ export function dashboardTraceEvent(row: Record<string, unknown>) {
     durationMs: row.duration_ms == null ? null : number(row.duration_ms),
     spanId: nullable(row.span_id),
     parentSpanId: nullable(row.parent_span_id),
-    metadata: dashboardTraceMetadata(metadata),
+    metadata: dashboardTraceMetadata(eventName, metadata),
     occurredAt: date(row.created_at),
   };
 }
@@ -147,10 +149,21 @@ function traceEventTitle(eventName: string, metadata: Record<string, unknown>) {
   return eventName.split(".").slice(-2).map((part) => part.replaceAll("_", " ")).join(" ").replace(/^./, (value) => value.toUpperCase());
 }
 
-function dashboardTraceMetadata(metadata: Record<string, unknown>) {
-  return Object.fromEntries([...TRACE_METADATA_KEYS]
+function dashboardTraceMetadata(eventName: string, metadata: Record<string, unknown>) {
+  const projected = Object.fromEntries([...TRACE_METADATA_KEYS]
     .filter((key) => metadata[key] != null)
     .map((key) => [key, safeTraceValue(metadata[key])]));
+  if (eventName !== "agent.tool.started" || metadata.argumentsPreview == null) return projected;
+  return { ...projected, argumentsPreview: safeToolArgumentsPreview(metadata.argumentsPreview) };
+}
+
+function safeToolArgumentsPreview(value: unknown) {
+  const raw = String(value);
+  try {
+    return JSON.stringify(redactSensitiveData(JSON.parse(raw))).slice(0, 4_000);
+  } catch {
+    return redactSensitiveText(raw).text.slice(0, 4_000);
+  }
 }
 
 function safeTraceValue(value: unknown, depth = 0): unknown {

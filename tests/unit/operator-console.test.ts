@@ -284,6 +284,8 @@ describe("operator console", () => {
     expect(stylesheetText).toContain(".trace-phase-summary{display:grid");
     expect(stylesheetText).toContain(".trace-context summary{");
     expect(stylesheetText).toContain(".trace-tools{display:flex");
+    expect(stylesheetText).toContain(".trace-tool-arguments{");
+    expect(clientScript).toContain("const toolArguments=");
     expect(stylesheetText).toContain(".trace-exceptions{display:flex");
     expect(clientScript).toContain('return story.attempts+" attempts"');
     expect(clientScript).toContain("discord\\.com\\/channels");

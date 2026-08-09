@@ -16,10 +16,17 @@ describe("conversation trace projection", () => {
           type: "model", metadata: { model: "model-a" }, status: "running",
         }),
         event("tool-start", "agent.tool.started", "2026-08-09T12:05:04.000Z", {
-          type: "tool", metadata: { toolName: "readData" }, status: "running",
+          type: "tool",
+          metadata: {
+            toolName: "readData",
+            callId: "call-1",
+            argumentsPreview: '{"source":"production","query":{"limit":25}}',
+            argumentsTruncated: false,
+          },
+          status: "running",
         }),
         event("tool-complete", "agent.tool.complete", "2026-08-09T12:05:05.000Z", {
-          type: "tool", metadata: { toolName: "readData" }, durationMs: 1_000,
+          type: "tool", metadata: { toolName: "readData", callId: "call-1" }, durationMs: 1_000,
         }),
         event("model-complete", "agent.nanocodex.model.call.completed", "2026-08-09T12:05:07.000Z", {
           type: "model",
@@ -58,7 +65,13 @@ describe("conversation trace projection", () => {
       completedAt: "2026-08-09T12:05:07.000Z",
       durationMs: 4_000,
       metadata: { model: "model-a", totalTokens: 1_234, estimatedCostUsd: 0.0123, toolCount: 1 },
-      tools: [{ title: "readData", durationMs: 1_000, sourceEventIds: ["tool-complete"] }],
+      tools: [{
+        title: "readData",
+        durationMs: 1_000,
+        arguments: { source: "production", query: { limit: 25 } },
+        argumentsTruncated: false,
+        sourceEventIds: ["tool-start", "tool-complete"],
+      }],
     });
     expect(projection.phases.find((phase) => phase.id === "response")?.startedAt).toBe("2026-08-09T12:05:07.000Z");
   });
@@ -108,6 +121,26 @@ describe("conversation trace projection", () => {
       metadata: { toolCount: 1, reusedToolCount: 1 },
       tools: [{ title: "generateImage" }],
     });
+  });
+
+  it("derives legacy tool totals from executions rather than nested provider metadata", () => {
+    const projection = projectConversationTrace({
+      messages: [message("prompt", "member", "Check this", "2026-08-09T12:00:00.000Z", { current: true })],
+      traceEvents: [
+        event("tool-a", "agent.tool.complete", "2026-08-09T12:00:01.000Z", {
+          type: "tool", metadata: { toolName: "inspectDiscordImages", status: "ok" },
+        }),
+        event("tool-b", "agent.tool.complete", "2026-08-09T12:00:02.000Z", {
+          type: "tool", metadata: { toolName: "inspectDiscordImages", status: "ok" },
+        }),
+        event("provider", "agent.model.call.completed", "2026-08-09T12:00:03.000Z", {
+          type: "model", metadata: { toolCount: 1 },
+        }),
+      ],
+    });
+
+    expect(projection.toolCount).toBe(2);
+    expect(projection.phases.find((phase) => phase.id === "agent")?.tools).toHaveLength(2);
   });
 });
 

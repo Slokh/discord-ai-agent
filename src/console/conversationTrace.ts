@@ -7,6 +7,8 @@ export type ConversationTraceTool = {
   occurredAt: unknown;
   durationMs: number | null;
   summary: string | null;
+  arguments: unknown | null;
+  argumentsTruncated: boolean;
   sourceEventIds: string[];
 };
 
@@ -81,7 +83,8 @@ export function projectConversationTrace(input: {
   const tools = projectTools(events);
   const reusedToolCount = events.filter((event) => record(event.metadata)?.status === "reused").length;
   const reportedToolCount = [...events].reverse()
-    .map((event) => finiteNumber(record(event.metadata)?.toolCalls ?? record(event.metadata)?.toolCount))
+    .filter((event) => String(event.code ?? "") === "agent.nanocodex.complete")
+    .map((event) => finiteNumber(record(event.metadata)?.toolCalls))
     .find((value) => value != null);
   const toolCount = reportedToolCount ?? tools.length;
   const phases: ConversationTracePhase[] = [];
@@ -235,18 +238,42 @@ function projectTools(events: TraceRecord[]): ConversationTraceTool[] {
   ) && record(event.metadata)?.status !== "reused");
   const terminal = toolEvents.filter((event) => /complete|completed|failed|error/.test(String(event.code ?? "")));
   const selected = terminal.length ? terminal : toolEvents;
+  const started = events.filter((event) => String(event.code ?? "") === "agent.tool.started");
+  const usedStarts = new Set<TraceRecord>();
   return selected.map((event, index) => {
     const metadata = record(event.metadata);
+    const callId = text(metadata?.callId);
+    const toolName = text(metadata?.toolName);
+    const startedEvent = started.find((candidate) => {
+      if (usedStarts.has(candidate) || time(candidate.occurredAt) > time(event.occurredAt)) return false;
+      const candidateMetadata = record(candidate.metadata);
+      return callId
+        ? text(candidateMetadata?.callId) === callId
+        : toolName != null && text(candidateMetadata?.toolName) === toolName;
+    }) ?? null;
+    if (startedEvent) usedStarts.add(startedEvent);
+    const startedMetadata = record(startedEvent?.metadata);
     return {
       id: `tool-${index}-${String(event.id)}`,
-      title: text(metadata?.toolName) ?? String(event.title ?? "Tool call"),
+      title: toolName ?? String(event.title ?? "Tool call"),
       status: String(event.status ?? (event.level === "error" ? "failed" : "done")),
       occurredAt: event.occurredAt,
       durationMs: finiteNumber(event.durationMs),
       summary: text(event.summary),
-      sourceEventIds: [String(event.id)],
+      arguments: parseToolArguments(startedMetadata?.argumentsPreview),
+      argumentsTruncated: startedMetadata?.argumentsTruncated === true,
+      sourceEventIds: [startedEvent, event].filter(Boolean).map((item) => String(item?.id)),
     };
   });
+}
+
+function parseToolArguments(value: unknown) {
+  if (typeof value !== "string" || !value) return null;
+  try {
+    return JSON.parse(value);
+  } catch {
+    return value;
+  }
 }
 
 function deliverySummary(events: TraceRecord[]) {

@@ -167,7 +167,7 @@ Do not begin with browser scraping, provider blame, or source speculation when t
 
 ## Improvement inbox
 
-The Unicode `🐛` reaction creates a private `member_report` signal for the current requester. `listMyImprovementSignals` returns only their active signals in channels they may currently see. Removing the reaction withdraws that signal; if it was the last signal on an untriaged case, the case is dismissed.
+The Unicode `🐛` reaction on a response authored by the configured assistant bot creates a private `member_report` signal for the current requester. Reactions on user-authored messages or other bots are ignored. `listMyImprovementSignals` returns only the requester's active signals in channels they may currently see. Removing the reaction withdraws that signal; if it was the last signal on an untriaged case, the case is dismissed.
 
 Every source feeds the same case stream. Source keys provide exact idempotency; deterministic fingerprints coalesce only high-confidence matches; uncertain semantic matches require the explicit `merge` command. A report authorizes an isolated assessment and confirmed repair, but never replays the reported Discord request or grants the sandbox production access.
 

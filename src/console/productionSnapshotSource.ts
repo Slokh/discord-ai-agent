@@ -33,6 +33,26 @@ export function createProductionSnapshotSource(input: {
       }
       return payload;
     },
+    activityToolResult: async ({ kind, id, callId }) => {
+      const url = new URL(
+        `/api/activity/${encodeURIComponent(kind)}/${encodeURIComponent(id)}/tool/${encodeURIComponent(callId)}`,
+        baseUrl,
+      ).toString();
+      const response = await fetchSnapshot(url, {
+        cache: "no-store",
+        headers: { accept: "application/json" },
+      });
+      if (response.status === 404) return null;
+      if (!response.ok) throw new Error(`Production console returned HTTP ${response.status}.`);
+      const payload: unknown = await response.json();
+      if (!isRecord(payload) || payload.schemaVersion !== 1) {
+        throw new Error("Production console returned an invalid tool result.");
+      }
+      if (payload.environment !== "production") {
+        throw new Error("Refusing to label non-production Console data as production.");
+      }
+      return payload;
+    },
   };
 
   async function read(pathOrUrl: string, schemaVersion: number, label: string) {

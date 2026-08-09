@@ -4,6 +4,7 @@ import { projectConversationTrace } from "../../src/console/conversationTrace.js
 describe("conversation trace projection", () => {
   it("turns raw execution evidence into one readable end-to-end timeline", () => {
     const projection = projectConversationTrace({
+      resultCallIds: ["call-1"],
       messages: [
         message("ancestor", "assistant", "Earlier context", "2026-08-09T12:00:00.000Z"),
         message("parent", "assistant", "Deployment update", "2026-08-09T12:04:00.000Z", { directParent: true }),
@@ -26,7 +27,10 @@ describe("conversation trace projection", () => {
           status: "running",
         }),
         event("tool-complete", "agent.tool.complete", "2026-08-09T12:05:05.000Z", {
-          type: "tool", metadata: { toolName: "readData", callId: "call-1" }, durationMs: 1_000,
+          type: "tool", metadata: {
+            toolName: "readData", callId: "call-1", outputChars: 4821,
+            fileCount: 1, tableCount: 2, status: "ok", retryable: false,
+          }, durationMs: 1_000,
         }),
         event("model-complete", "agent.nanocodex.model.call.completed", "2026-08-09T12:05:07.000Z", {
           type: "model",
@@ -66,10 +70,16 @@ describe("conversation trace projection", () => {
       durationMs: 4_000,
       metadata: { model: "model-a", totalTokens: 1_234, estimatedCostUsd: 0.0123, toolCount: 1 },
       tools: [{
+        callId: "call-1",
         title: "readData",
         durationMs: 1_000,
         arguments: { source: "production", query: { limit: 25 } },
         argumentsTruncated: false,
+        resultAvailable: true,
+        outputChars: 4821,
+        fileCount: 1,
+        tableCount: 2,
+        retryable: false,
         sourceEventIds: ["tool-start", "tool-complete"],
       }],
     });

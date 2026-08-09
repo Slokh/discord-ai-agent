@@ -1,6 +1,6 @@
 import type { DbPool } from "./pool.js";
 import { releaseActivityDetail } from "./operatorActivityDetailRepository.js";
-import { conversationActivityDetail } from "./operatorConversationActivityRepository.js";
+import { conversationActivityDetail, conversationToolResult } from "./operatorConversationActivityRepository.js";
 import { messageActivityDetail, recentMessageActivities } from "./operatorMessageActivityRepository.js";
 import { improvementActivityContext, improvementActivityTrace } from "./operatorImprovementActivityRepository.js";
 import { codeChangeActivityDetail } from "./operatorCodeChangeActivityRepository.js";
@@ -116,6 +116,11 @@ export class OperatorDashboardRepository {
     if (input.kind !== "conversation") return null;
     const conversation = await conversationActivityDetail(this.pool, input.id);
     return conversation ? { ...detail, ...conversation } : null;
+  }
+
+  async activityToolResult(input: { kind: string; id: string; callId: string; revision: string }) {
+    if (input.kind !== "conversation") return null;
+    return conversationToolResult(this.pool, input.id, input.callId);
   }
 
   async snapshot(input: {

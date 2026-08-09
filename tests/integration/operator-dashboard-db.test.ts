@@ -317,7 +317,8 @@ describe.skipIf(!runDbTests)("operator dashboard database projection", () => {
        )`,
     );
 
-    const snapshot = await new OperatorDashboardRepository(pool).snapshot({ revision: "revision-a" });
+    const repository = new OperatorDashboardRepository(pool);
+    const snapshot = await repository.snapshot({ revision: "revision-a" });
 
     expect(snapshot.summary).toMatchObject({ serviceTelemetryAvailable: true, activeRuns: 1, activeTasks: 1, openImprovements: 1, needsAttention: 1 });
     expect(snapshot.services.find((service) => service.component === "worker")).toMatchObject({ status: "healthy", instances: 1, revision: "revision-a" });
@@ -371,7 +372,26 @@ describe.skipIf(!runDbTests)("operator dashboard database projection", () => {
     expect(JSON.stringify(snapshot.activity)).not.toContain("Executing prompt");
     expect(JSON.stringify(snapshot)).not.toContain('"requestedBy"');
 
-    const conversation = await new OperatorDashboardRepository(pool).activityDetail({
+    await expect(repository.overview({ revision: "revision-a" })).resolves.toMatchObject({
+      revision: "revision-a",
+      summary: { serviceTelemetryAvailable: true, activeRuns: 1, activeTasks: 1 },
+      services: expect.arrayContaining([expect.objectContaining({ component: "worker", status: "healthy" })]),
+    });
+    const issuePage = await repository.activityPage({
+      revision: "revision-a",
+      filter: "issues",
+      types: ["conversation", "improvement", "code_change"],
+      limit: 1,
+    });
+    expect(issuePage).toMatchObject({
+      total: expect.any(Number),
+      counts: expect.objectContaining({ all: expect.any(Number), issues: expect.any(Number) }),
+      recent: expect.any(Array),
+    });
+    expect(issuePage.recent).toHaveLength(1);
+    expect(issuePage.recent[0]).toMatchObject({ tone: expect.stringMatching(/danger|warning/) });
+
+    const conversation = await repository.activityDetail({
       kind: "conversation",
       id: "runtime-agent-execution-attempt-2",
       revision: "revision-a",

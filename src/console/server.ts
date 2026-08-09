@@ -216,7 +216,7 @@ function activityPageRequest(url: URL): ActivityPageRequest {
   };
 }
 
-function paginateActivity(activity: ConsoleProjection["activity"], input: ActivityPageRequest) {
+export function paginateActivity(activity: ConsoleProjection["activity"], input: ActivityPageRequest) {
   const allowedTypes = new Set(input.types?.length ? input.types : ["conversation", "improvement", "code_change"]);
   const search = input.search?.trim().toLowerCase() ?? "";
   const activeKeys = new Set(activity.active.map((story) => `${story.kind}:${story.id}`));

@@ -53,15 +53,21 @@ describe("architecture guardrails", () => {
     expect(deployment).toMatch(/startupProbe:[\s\S]*periodSeconds: 5[\s\S]*failureThreshold: 24[\s\S]*readinessProbe:/);
   });
 
-  it("keeps hosted Console ingress outbound-only and explicitly gated", async () => {
-    const tunnel = await fs.readFile(path.join(process.cwd(), "deploy/helm/discord-ai-agent/templates/console-tunnel.yaml"), "utf8");
+  it("keeps hosted Console ingress dedicated, TLS-terminated, and explicitly gated", async () => {
     const consoleDeployment = await fs.readFile(path.join(process.cwd(), "deploy/helm/discord-ai-agent/templates/console.yaml"), "utf8");
-    const values = await fs.readFile(path.join(process.cwd(), "deploy/helm/discord-ai-agent/values.yaml"), "utf8");
-    expect(values).toContain("cloudflare/cloudflared:");
-    expect(tunnel).toContain("CLOUDFLARE_TUNNEL_TOKEN");
-    expect(tunnel).toContain("automountServiceAccountToken: false");
+    const deploymentWorkflow = await fs.readFile(path.join(process.cwd(), ".github/workflows/deploy-eks.yml"), "utf8");
     expect(consoleDeployment).toContain('include "discord-ai-agent.consoleAuthEnv"');
+    expect(consoleDeployment).toContain("console.publicService.enabled");
+    expect(consoleDeployment).toContain("kind: Service");
     expect(consoleDeployment).not.toContain("kind: Ingress");
+    expect(deploymentWorkflow).toContain("CONSOLE_TLS_CERTIFICATE_ARN");
+    expect(deploymentWorkflow).toContain("CONSOLE_ROUTE53_HOSTED_ZONE_ID");
+    expect(deploymentWorkflow).toContain("aws-load-balancer-ssl-cert");
+    expect(deploymentWorkflow).toContain("aws-load-balancer-type=nlb");
+    expect(deploymentWorkflow).toContain("aws route53 change-resource-record-sets");
+    expect(deploymentWorkflow).toContain("aws route53 wait resource-record-sets-changed");
+    expect(deploymentWorkflow).toContain("aws elbv2 describe-load-balancers");
+    expect(deploymentWorkflow).not.toContain("CONSOLE_TUNNEL_ENABLED");
   });
 
   it("keeps broad sandbox HTTPS egress away from private and metadata networks", async () => {

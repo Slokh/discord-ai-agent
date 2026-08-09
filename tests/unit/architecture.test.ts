@@ -67,6 +67,8 @@ describe("architecture guardrails", () => {
     expect(deploymentWorkflow).toContain("aws route53 change-resource-record-sets");
     expect(deploymentWorkflow).toContain("aws route53 wait resource-record-sets-changed");
     expect(deploymentWorkflow).toContain("aws elbv2 describe-load-balancers");
+    expect(deploymentWorkflow).toContain("aws elbv2 wait load-balancer-available");
+    expect(deploymentWorkflow).toContain("aws elbv2 describe-target-health");
     expect(deploymentWorkflow).not.toContain("CONSOLE_TUNNEL_ENABLED");
   });
 

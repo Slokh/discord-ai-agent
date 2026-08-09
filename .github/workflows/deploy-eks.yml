@@ -108,18 +108,52 @@ jobs:
               echo "Console load balancer did not publish a hostname" >&2
               exit 1
             fi
+            load_balancer_arn=""
             load_balancer_zone_id=""
             for _ in $(seq 1 30); do
-              load_balancer_zone_id="$(aws elbv2 describe-load-balancers \
-                --query "LoadBalancers[?DNSName=='$load_balancer_hostname'].CanonicalHostedZoneId | [0]" \
-                --output text)"
-              if [ -n "$load_balancer_zone_id" ] && [ "$load_balancer_zone_id" != "None" ]; then
+              load_balancer_json="$(aws elbv2 describe-load-balancers \
+                --query "LoadBalancers[?DNSName=='$load_balancer_hostname'] | [0].{arn:LoadBalancerArn,zoneId:CanonicalHostedZoneId}" \
+                --output json)"
+              load_balancer_arn="$(jq -r '.arn // empty' <<<"$load_balancer_json")"
+              load_balancer_zone_id="$(jq -r '.zoneId // empty' <<<"$load_balancer_json")"
+              if [ -n "$load_balancer_arn" ] && [ -n "$load_balancer_zone_id" ]; then
                 break
               fi
               sleep 5
             done
-            if [ -z "$load_balancer_zone_id" ] || [ "$load_balancer_zone_id" = "None" ]; then
-              echo "Could not resolve the Console load balancer hosted zone" >&2
+            if [ -z "$load_balancer_arn" ] || [ -z "$load_balancer_zone_id" ]; then
+              echo "Could not resolve the Console load balancer" >&2
+              exit 1
+            fi
+            aws elbv2 wait load-balancer-available --load-balancer-arns "$load_balancer_arn"
+            target_group_arn=""
+            for _ in $(seq 1 30); do
+              target_group_arn="$(aws elbv2 describe-target-groups \
+                --load-balancer-arn "$load_balancer_arn" \
+                --query 'TargetGroups[0].TargetGroupArn' \
+                --output text)"
+              if [ -n "$target_group_arn" ] && [ "$target_group_arn" != "None" ]; then
+                break
+              fi
+              sleep 5
+            done
+            if [ -z "$target_group_arn" ] || [ "$target_group_arn" = "None" ]; then
+              echo "Could not resolve the Console target group" >&2
+              exit 1
+            fi
+            healthy_targets=0
+            for _ in $(seq 1 60); do
+              healthy_targets="$(aws elbv2 describe-target-health \
+                --target-group-arn "$target_group_arn" \
+                --query 'length(TargetHealthDescriptions[?TargetHealth.State==`healthy`])' \
+                --output text)"
+              if [ "$healthy_targets" -gt 0 ]; then
+                break
+              fi
+              sleep 5
+            done
+            if [ "$healthy_targets" -eq 0 ]; then
+              echo "Console load balancer targets did not become healthy" >&2
               exit 1
             fi
             change_batch="$(jq -nc \

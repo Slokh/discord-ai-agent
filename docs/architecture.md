@@ -13,7 +13,7 @@ The application is TypeScript on Node.js 22 with Postgres, pgvector, Discord, Op
 | `api` | Internal signed sandbox callbacks and health probe |
 | `console` | Discord-authenticated read-only operator dashboard and public health probe |
 
-`all` starts all roles for a fully configured single-process environment. Production normally splits them. Chat requires the bot plus a worker with agent-runtime work enabled. Code updates also require task work and the API callback surface. The Console reads Postgres but does not start queues, a Discord gateway, models, or mutation capabilities. Its production HTTP surface is carried through an outbound Cloudflare Tunnel and requires a signed session created only after Discord OAuth confirms membership in the configured guild; local loopback development bypasses that hosted boundary.
+`all` starts all roles for a fully configured single-process environment. Production normally splits them. Chat requires the bot plus a worker with agent-runtime work enabled. Code updates also require task work and the API callback surface. The Console reads Postgres but does not start queues, a Discord gateway, models, or mutation capabilities. Its production HTTP surface has a dedicated AWS TLS load balancer and requires a signed session created only after Discord OAuth confirms membership in the configured guild; local loopback development bypasses that hosted boundary.
 
 ```text
 Discord message

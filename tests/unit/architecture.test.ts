@@ -30,7 +30,7 @@ describe("architecture guardrails", () => {
     expect(ci).toMatch(/deploy-eks:\n\s+needs: \[changes, verify, publish-images\]/);
     expect(ci).toContain("uses: ./.github/workflows/deploy-eks.yml");
     expect(ci).toContain("image_tag: ${{ github.sha }}");
-    expect(ci).toContain(".github/workflows/deploy-eks.yml|Dockerfile");
+    expect(ci).toContain(".github/workflows/ci.yml|.github/workflows/deploy-eks.yml|Dockerfile");
     expect(deployment).toContain("workflow_call:");
     expect(deployment).toContain("IMAGE_TAG: ${{ inputs.image_tag }}");
     expect(deployment).not.toContain("workflow_run:");

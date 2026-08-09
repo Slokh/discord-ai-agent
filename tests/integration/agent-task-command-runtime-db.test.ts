@@ -102,6 +102,9 @@ describe.skipIf(!runDbTests)("agent task command runtime projection", () => {
       taskId, pullRequestUrl: "https://github.com/example/repo/pull/999",
     });
     await repo.markDeploymentVerified({ revision: "merge-999", deploymentId: "deployment-999" });
+    const verified = await pool.query(
+      `SELECT verified_at FROM deployment_verifications WHERE revision = 'merge-999' AND deployment_id = 'deployment-999'`,
+    );
     await expect(repo.recordAgentTaskPullRequestSnapshot({
       taskId,
       pullRequest: {
@@ -119,7 +122,8 @@ describe.skipIf(!runDbTests)("agent task command runtime projection", () => {
     );
     expect(publication.rows[0]).toMatchObject({
       pull_request_state: "merged", pull_request_merge_revision: "merge-999",
-      deployed_revision: "merge-999", deployment_id: "deployment-999", deployed_at: expect.any(Date),
+      deployed_revision: "merge-999", deployment_id: "deployment-999",
+      deployed_at: verified.rows[0].verified_at,
     });
     const events = await pool.query(
       `SELECT event_name FROM agent_runtime_events WHERE execution_id = $1 ORDER BY sequence`,

@@ -244,7 +244,7 @@ Provisioning has three explicit prerequisites before setting the GitHub Actions 
 
 1. Add the Discord OAuth redirect `https://console.mindcool.dev/auth/callback` to the configured Discord application.
 2. Add `DISCORD_CLIENT_SECRET` and a randomly generated `CONSOLE_SESSION_SECRET` to the existing `discord-ai-agent-env` Kubernetes Secret.
-3. Issue or select an ACM certificate covering `console.mindcool.dev`, store its ARN as `CONSOLE_TLS_CERTIFICATE_ARN`, and store the public `mindcool.dev` hosted-zone ID as `CONSOLE_ROUTE53_HOSTED_ZONE_ID`.
+3. Issue or select an ACM certificate covering the Console hostname, store its ARN as `CONSOLE_TLS_CERTIFICATE_ARN`, and store the public domain's hosted-zone ID as `CONSOLE_ROUTE53_HOSTED_ZONE_ID`.
 
 The deployment workflow enables the public service only when `CONSOLE_TLS_CERTIFICATE_ARN` is non-empty. It waits for the load balancer, resolves its canonical zone, and atomically upserts the `console.mindcool.dev` Route 53 alias before running external route and authentication-boundary checks. Scheduled Console health observation uses the same public-TLS condition. Removing the certificate variable removes the Helm-managed public service on the next deployment without changing the internal Console endpoint; remove the DNS alias separately when intentionally decommissioning the hostname.
 

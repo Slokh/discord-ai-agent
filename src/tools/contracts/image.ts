@@ -7,8 +7,9 @@ export const imageToolContracts = [
     toolClass: "image",
     examples: ["@ai what is in this screenshot?"],
     description:
-      "Use a vision model to inspect images from the current Discord request, the replied-to message chain, explicit image URLs, or a Discord message link/ID. Use this when the user asks what is shown in an attached/replied image, screenshot, meme, chart, photo, or visual Discord attachment. Do not use it for text-only history questions.",
+      "Use a vision model to inspect images from the current Discord request, the replied-to message chain, explicit image URLs, or a Discord message link/ID. Use this when the user asks what is shown in an attached/replied image, screenshot, meme, chart, photo, or visual Discord attachment. Do not use it for text-only history questions. In Code Mode, pass its direct text result to text(...); do not read .content or repeat the call.",
     mutates: false,
+    repeatPolicy: "reuse_identical_success",
     group: "image",
     parameters: {
       type: "object",

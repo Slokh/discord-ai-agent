@@ -233,7 +233,7 @@ async function runRetainedNanoCodexTurn(input: {
           ...reusable.result,
           files: undefined,
           tables: undefined,
-          content: `The identical successful ${route.name} result from earlier in this turn is already available for final delivery. Do not call it again.`,
+          content: `${reusable.result.content}\n\n[Identical ${route.name} result reused; no new execution occurred.]`,
         };
         memoryEvents.push({ role: "tool", content: reusedResult.content, metadata: { toolName: route.name, arguments: args } });
         await appendAgentRuntimeToolResult(ctx, {

@@ -192,6 +192,7 @@ describe("toolRegistry", () => {
     expect(contracts.find((tool) => tool.name === "queryGeneratedTable")?.toolClass).toBe("stats");
     expect(contracts.find((tool) => tool.name === "summarizeDiscordHistory")?.toolClass).toBe("summary");
     expect(contracts.find((tool) => tool.name === "inspectDiscordImages")?.toolClass).toBe("image");
+    expect(contracts.find((tool) => tool.name === "inspectDiscordImages")?.repeatPolicy).toBe("reuse_identical_success");
     expect(contracts.find((tool) => tool.name === "getSpotifyPlaylistTracks")?.toolClass).toBe("external");
     expect(contracts.find((tool) => tool.name === "getSpotifyPlaylistTracks")?.category).toBe("external");
     expect(contracts.find((tool) => tool.name === "getSpotifyAlbumTracks")?.toolClass).toBe("external");

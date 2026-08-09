@@ -3,6 +3,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { verifyDeploymentStability } from "./deploymentHealth.js";
 import { rollbackRelease } from "./rollbackRelease.js";
+import { checkConsoleHealth } from "./consoleHealth.js";
 
 export type PostDeployStage = "deployment_health" | "capability_canary" | "console_health" | "private_regressions" | "stability" | "promotion";
 export type PostDeployVerificationResult = {
@@ -188,8 +189,18 @@ async function runCli() {
         "--revision", args.expectedRevision,
         "--internal-url", "http://127.0.0.1:8081",
       ];
-      if (args.consolePublicUrl) healthArgs.push("--public-url", args.consolePublicUrl);
       command("kubectl", healthArgs);
+      if (args.consolePublicUrl) {
+        const publicHealth = await checkConsoleHealth({
+          expectedRevision: args.expectedRevision,
+          internalUrl: null,
+          publicUrl: args.consolePublicUrl,
+        });
+        if (publicHealth.status !== "healthy") {
+          const failedCodes = publicHealth.checks.filter((check) => check.status === "failed").map((check) => check.code);
+          throw new Error(`Public Console boundary failed: ${failedCodes.join(",") || "unknown"}.`);
+        }
+      }
     },
     verifyPrivateRegressions: async () => {
       command("kubectl", [

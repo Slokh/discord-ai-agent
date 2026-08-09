@@ -1,5 +1,6 @@
 import type { DbPool } from "./pool.js";
 import { discordMentionLabels, discordMentions, discordRoleMentions, resolvedDiscordContent } from "./operatorDiscordIdentity.js";
+import { OPERATOR_ACTIVITY_WINDOW_DAYS } from "./operatorDashboardActivityQueries.js";
 
 export async function recentMessageActivities(pool: DbPool, now: Date) {
   const result = await pool.query(
@@ -8,7 +9,7 @@ export async function recentMessageActivities(pool: DbPool, now: Date) {
        FROM messages
        WHERE deleted_at IS NULL
          AND normalized_content <> ''
-         AND created_at >= $1::timestamptz - interval '7 days'
+         AND created_at >= $1::timestamptz - make_interval(days => ${OPERATOR_ACTIVITY_WINDOW_DAYS})
        ORDER BY created_at DESC,id DESC
      )
      SELECT message.id,message.guild_id,message.channel_id,
@@ -41,7 +42,7 @@ export async function recentMessageActivities(pool: DbPool, now: Date) {
            AND session.harness <> 'background_job'
            AND session.metadata->>'kind' IS DISTINCT FROM 'background_job'
            AND coalesce(nullif(execution.metadata->>'qualityCohort',''),nullif(session.metadata->>'qualityCohort','')) IS DISTINCT FROM 'synthetic'
-           AND (execution.status IN ('queued','running') OR execution.updated_at >= $1::timestamptz - interval '7 days')
+           AND (execution.status IN ('queued','running') OR execution.updated_at >= $1::timestamptz - make_interval(days => ${OPERATOR_ACTIVITY_WINDOW_DAYS}))
        )
        AND NOT EXISTS (
          SELECT 1 FROM privacy_deletions privacy WHERE privacy.user_id = message.author_id

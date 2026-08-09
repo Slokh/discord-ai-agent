@@ -15,13 +15,14 @@ export function projectActivitySources(
       id: key, kind: row.is_system ? "system" : "runtime", title: String(row.title),
       authorLabel: nullable(row.source_author_label), status: nullable(row.status), detail: null,
       occurredAt, startedAt, durationMs: Math.max(0, occurredAt.getTime() - startedAt.getTime()),
-      attempts: number(row.attempt) || 1, eventCount: number(row.group_event_count) || 1,
+      attempts: number(row.attempt) || 1, failedAttempts: null, eventCount: number(row.group_event_count) || 1,
       rollupKey: nullable(row.rollup_key), responseStatus: nullable(row.response_status),
       deliveryState: nullable(row.delivery_state),
       sourceUrl: discordUrl(row.delivery_guild_id, row.delivery_channel_id, row.source_message_id),
       responseUrl: discordUrl(row.delivery_guild_id, row.status_channel_id, row.status_message_id),
       responseKind: row.status_message_id == null ? null : "reply", hasParent: Boolean(row.has_parent),
-      pullRequestUrl: null, branchName: null, improvementCaseId: null,
+      pullRequestUrl: null, branchName: null, pullRequestState: null, mergeRevision: null,
+      deployedRevision: null, deploymentId: null, improvementCaseId: null,
       relatedImprovementCaseIds: textArray(row.related_case_ids), failureReason: null, events: [],
     };
     if (row.id != null && group.events.length < 12) group.events.push({
@@ -30,23 +31,29 @@ export function projectActivitySources(
     groups.set(key, group);
   }
   for (const row of taskRows) {
-    const key = `task-${row.task_id}`;
+    const improvement = row.task_type === "improvement_report";
+    const key = improvement ? `task-${row.task_id}` : `code-change-${row.story_id ?? `task:${row.task_id}`}`;
     const occurredAt = date(row.story_updated_at);
     const startedAt = date(row.story_started_at);
-    const improvement = row.task_type === "improvement_report";
     const group: OperatorActivitySource = groups.get(key) ?? {
       id: key, kind: improvement ? "system" : "code_change", title: String(row.title), authorLabel: null,
       status: nullable(row.status), detail: nullable(row.status_message) ?? nullable(row.current_step),
-      occurredAt, startedAt, durationMs: Math.max(0, occurredAt.getTime() - startedAt.getTime()),
-      attempts: number(row.attempts) || 1, eventCount: number(row.group_event_count),
+      occurredAt, startedAt,
+      durationMs: row.duration_ms == null ? Math.max(0, occurredAt.getTime() - startedAt.getTime()) : number(row.duration_ms),
+      attempts: number(row.attempts) || 1, failedAttempts: number(row.failed_attempts),
+      eventCount: number(row.group_event_count),
       rollupKey: improvement ? "improvement_report" : null, responseStatus: null, deliveryState: null,
       sourceUrl: discordUrl(row.guild_id, row.channel_id, row.trace_id),
       responseUrl: discordUrl(row.guild_id, row.discord_response_channel_id, row.discord_response_message_id),
       responseKind: row.discord_response_message_id == null ? null : "reply", hasParent: false,
       pullRequestUrl: nullable(row.pr_url), branchName: nullable(row.branch_name),
+      pullRequestState: nullable(row.pull_request_state), mergeRevision: nullable(row.pull_request_merge_revision),
+      deployedRevision: nullable(row.deployed_revision), deploymentId: nullable(row.deployment_id),
       improvementCaseId: nullable(row.improvement_case_id),
       relatedImprovementCaseIds: nullable(row.improvement_case_id) ? [String(row.improvement_case_id)] : [],
-      failureReason: operatorTaskFailureSummary(row.status, row.error), events: [],
+      failureReason: row.status === "pull_request_closed"
+        ? "The pull request closed without merging."
+        : operatorTaskFailureSummary(row.status, row.error), events: [],
     };
     if (row.id != null && group.events.length < 12) group.events.push({
       id: `task-event-${row.id}`, name: String(row.event_name), level: String(row.level), createdAt: date(row.created_at),
@@ -60,12 +67,13 @@ export function projectActivitySources(
     const group: OperatorActivitySource = groups.get(key) ?? {
       id: key, kind: "improvement", title: improvementConsoleTitle(row), authorLabel: null,
       status: String(row.status), detail: eventName, occurredAt, startedAt: date(row.first_seen_at),
-      durationMs: null, attempts: null, eventCount: number(row.group_event_count) || 1,
+      durationMs: null, attempts: null, failedAttempts: null, eventCount: number(row.group_event_count) || 1,
       rollupKey: null, responseStatus: null, deliveryState: null,
       sourceUrl: discordUrl(row.conversation_guild_id, row.source_channel_id, row.source_message_id),
       responseUrl: discordUrl(row.conversation_guild_id, row.delivery_channel_id, row.delivery_message_id),
       responseKind: nullable(row.delivery_kind), hasParent: false, pullRequestUrl: nullable(row.pull_request_url),
-      branchName: null, improvementCaseId: String(row.case_id),
+      branchName: null, pullRequestState: null, mergeRevision: null,
+      deployedRevision: null, deploymentId: null, improvementCaseId: String(row.case_id),
       relatedImprovementCaseIds: textArray(row.related_case_ids), failureReason: null, events: [],
     };
     if (row.event_id != null && group.events.length < 12) group.events.push({

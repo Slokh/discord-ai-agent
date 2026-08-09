@@ -2,6 +2,7 @@ import { loadConfig } from "../src/config/env.js";
 import { createPool } from "../src/db/pool.js";
 import { createAppDatabase } from "../src/db/repositories.js";
 import { reconcileImprovementPullRequestWork } from "../src/improvements/work.js";
+import { reconcileAgentTaskPullRequests } from "../src/execution/taskPublication.js";
 
 const revision = argument("--revision");
 const deploymentId = argument("--deployment-id");
@@ -20,6 +21,7 @@ const repo = createAppDatabase(pool);
 try {
   await recordProducer("started");
   const reconciledPullRequests = await reconcileImprovementPullRequestWork(repo, config);
+  const reconciledTaskPullRequests = await reconcileAgentTaskPullRequests(repo, config);
   await repo.markDeploymentVerified({ revision, deploymentId });
   await recordProducer("succeeded");
   let improvementVerification: Record<string, number>;
@@ -37,7 +39,11 @@ try {
     counts[result.status] = (counts[result.status] ?? 0) + 1;
     return counts;
   }, {});
-  process.stdout.write(`${JSON.stringify({ status: "promoted", revision, deploymentId, pullRequestReconciliation, improvementVerification })}\n`);
+  const taskPullRequestReconciliation = reconciledTaskPullRequests.reduce<Record<string, number>>((counts, result) => {
+    counts[result.status] = (counts[result.status] ?? 0) + 1;
+    return counts;
+  }, {});
+  process.stdout.write(`${JSON.stringify({ status: "promoted", revision, deploymentId, pullRequestReconciliation, taskPullRequestReconciliation, improvementVerification })}\n`);
 } catch (error) {
   await recordProducer("failed", "release_promotion_failed").catch(() => undefined);
   throw error;

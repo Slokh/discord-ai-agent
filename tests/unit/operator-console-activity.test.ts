@@ -24,7 +24,7 @@ describe("operator activity story projection", () => {
 
     expect(result.active).toHaveLength(2);
     expect(result.active[0]).toMatchObject({
-      id: "task-task-code", kind: "code_change", category: "product", title: "Improve the dashboard",
+      id: "code-change-task:task-code", kind: "code_change", category: "product", title: "Improve the dashboard",
       tone: "active", branchName: "kartik/dashboard",
     });
     expect(result.active[0]?.technicalEvents[0]).toMatchObject({ label: "Tool completed" });
@@ -99,7 +99,7 @@ describe("operator activity story projection", () => {
     expect(result.recent[1]).toMatchObject({ kind: "system", category: "system", summary: "Background work completed" });
   });
 
-  it("keeps every release supplied by the seven-day repository window", () => {
+  it("keeps every release supplied by the three-day repository window", () => {
     const deployments = Array.from({ length: 5 }, (_, index) => ({
       deploymentId: `deploy-${index}`,
       revision: `revision-${index}`,
@@ -334,7 +334,9 @@ describe("operator activity story projection", () => {
         authorLabel: null,
         status: "actionable", tone: "neutral", category: "product", workState: null, summary: "Marked actionable",
         occurredAt: "2026-08-06T12:00:00.000Z", startedAt: "2026-08-06T11:00:00.000Z",
-        durationMs: null, latencyTone: null, attempts: null, branchName: null, pullRequestUrl: null,
+        durationMs: null, latencyTone: null, attempts: null, failedAttempts: null,
+        branchName: null, pullRequestUrl: null, pullRequestState: null, mergeRevision: null,
+        deployedRevision: null, deploymentId: null,
         sourceUrl: null, responseUrl: null, responseKind: null, hasParent: false, failureReason: null, rollupKey: null,
         relatedImprovementCaseIds: ["case-a"],
         runCount: null, successCount: null, failureCount: null, p95DurationMs: null,

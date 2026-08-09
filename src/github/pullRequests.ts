@@ -92,6 +92,7 @@ export async function fetchGitHubPullRequestSnapshot(
     state,
     headRevision: pullRequest.head.sha,
     mergeRevision: pullRequest.merge_commit_sha ?? null,
+    mergedAt: pullRequest.merged_at ? new Date(pullRequest.merged_at) : null,
     nodeId: pullRequest.node_id ?? null,
     draft: pullRequest.draft ?? false,
     mergeable: pullRequest.mergeable === true ? "mergeable" : pullRequest.mergeable === false ? "conflicting" : "unknown",

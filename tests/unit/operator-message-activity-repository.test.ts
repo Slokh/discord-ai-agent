@@ -3,7 +3,7 @@ import { recentMessageActivities } from "../../src/db/operatorMessageActivityRep
 import type { DbPool } from "../../src/db/pool.js";
 
 describe("operator message activity repository", () => {
-  it("bounds eligibility joins to the indexed 24-hour message window", async () => {
+  it("bounds eligibility joins to the three-day activity window", async () => {
     const query = vi.fn().mockResolvedValue({ rows: [] });
     const now = new Date("2026-08-08T12:00:00.000Z");
 
@@ -11,7 +11,7 @@ describe("operator message activity repository", () => {
 
     const sql = String(query.mock.calls[0]?.[0]);
     expect(sql).toContain("WITH recent_messages AS MATERIALIZED");
-    expect(sql).toContain("created_at >= $1::timestamptz - interval '7 days'");
+    expect(sql).toContain("created_at >= $1::timestamptz - make_interval(days => 3)");
     expect(sql).toContain("ORDER BY created_at DESC,id DESC");
     expect(sql).toContain("FROM recent_messages message");
     expect(sql).toContain("FROM discord_delivery_obligations delivery");

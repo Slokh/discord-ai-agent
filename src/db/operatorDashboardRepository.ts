@@ -2,10 +2,11 @@ import type { DbPool } from "./pool.js";
 import { releaseActivityDetail } from "./operatorActivityDetailRepository.js";
 import { messageActivityDetail, recentMessageActivities } from "./operatorMessageActivityRepository.js";
 import { improvementActivityContext, improvementActivityTrace } from "./operatorImprovementActivityRepository.js";
+import { codeChangeActivityDetail } from "./operatorCodeChangeActivityRepository.js";
 import { RELATED_CASES_FOR_EXECUTION_SQL, RELATED_CASES_FOR_IMPROVEMENT_SQL } from "./operatorActivityLinks.js";
 import { projectActivitySources } from "./operatorDashboardProjection.js";
-import { recentTaskActivityQuery } from "./operatorDashboardActivityQueries.js";
-import { dashboardTraceEvent, executionActivityTrace, taskActivityTrace } from "./operatorRuntimeActivityRepository.js";
+import { OPERATOR_ACTIVITY_WINDOW_DAYS, recentTaskActivityQuery } from "./operatorDashboardActivityQueries.js";
+import { dashboardTraceEvent, executionActivityTrace } from "./operatorRuntimeActivityRepository.js";
 import { discordMentionLabels, discordMentions, discordRoleMentions, resolvedDiscordSourceTitle } from "./operatorDiscordIdentity.js";
 import { deriveOperatorActivity, retainOpenImprovementActivity, summarizeOperatorActivity } from "../console/activity.js";
 import { paginateActivity, type ActivityPageRequest } from "../console/server.js";
@@ -23,7 +24,6 @@ export class OperatorDashboardRepository {
       summary: snapshot.summary,
     };
   }
-
   async activityPage(input: ActivityPageRequest & { revision: string }) {
     const activityTypes = input.types?.length ? input.types : ["conversation", "improvement", "code_change"];
     const snapshot = await this.snapshot({
@@ -37,7 +37,6 @@ export class OperatorDashboardRepository {
     ));
     return paginateActivity(activity, input);
   }
-
   async activityDetail(input: { kind: string; id: string; revision: string }) {
     const detail = {
       kind: input.kind,
@@ -77,10 +76,10 @@ export class OperatorDashboardRepository {
       ]);
       return { ...detail, traceEvents, improvement };
     }
-    if (input.kind === "code_change" && input.id.startsWith("task-")) return {
-      ...detail,
-      traceEvents: await taskActivityTrace(this.pool, input.id.slice("task-".length)),
-    };
+    if (input.kind === "code_change" && input.id.startsWith("code-change-")) {
+      const codeChange = await codeChangeActivityDetail(this.pool, input.id);
+      return codeChange ? { ...detail, ...codeChange } : null;
+    }
     if (input.kind === "system") {
       if (input.id.startsWith("system-rollup-")) {
         const rollupKey = input.id.slice("system-rollup-".length);
@@ -92,7 +91,7 @@ export class OperatorDashboardRepository {
            FROM agent_runtime_executions execution
            JOIN agent_runtime_sessions session USING (session_id)
            WHERE coalesce(nullif(execution.metadata->>'jobKind',''),nullif(session.metadata->>'jobKind','')) = $1
-             AND execution.updated_at >= now() - interval '7 days'
+             AND execution.updated_at >= now() - make_interval(days => ${OPERATOR_ACTIVITY_WINDOW_DAYS})
              AND execution.status NOT IN ('queued','running')
            ORDER BY execution.updated_at DESC
            LIMIT 100`,
@@ -336,16 +335,54 @@ export class OperatorDashboardRepository {
          ) latest ON true
          WHERE execution.status IN ('queued','running')
            AND coalesce(nullif(execution.metadata->>'qualityCohort',''),nullif(session.metadata->>'qualityCohort','')) IS DISTINCT FROM 'synthetic'
+           AND coalesce(nullif(execution.metadata->>'source',''),nullif(session.metadata->>'source','')) IS DISTINCT FROM 'cli.prompt'
          ORDER BY execution.updated_at DESC LIMIT 30`,
       ) : emptyRows(),
       !activityOnly || includeCodeChanges || includeSystem ? this.pool.query(
-        `SELECT task_id,improvement_case_id,task_type,title,status,current_step,status_message,
-                branch_name,pr_url,verify_passed,guild_id,channel_id,trace_id,
-                discord_response_channel_id,discord_response_message_id,created_at,started_at,updated_at
-                ,count(*) OVER ()::int AS total_count
-         FROM agent_tasks WHERE status IN ('queued','running')
-           AND task_type <> 'post-deploy-canary'
-         ORDER BY updated_at DESC LIMIT 30`,
+        `WITH RECURSIVE task_roots AS (
+           SELECT task_id,task_id AS root_task_id
+           FROM agent_tasks WHERE retried_from_task_id IS NULL
+           UNION ALL
+           SELECT child.task_id,parent.root_task_id
+           FROM agent_tasks child
+           JOIN task_roots parent ON child.retried_from_task_id = parent.task_id
+         ), catalog AS (
+           SELECT task.*,
+                  coalesce(root.root_task_id,task.task_id) AS root_task_id,
+                  CASE
+                    WHEN task.task_type = 'improvement_report' THEN 'system:' || coalesce(root.root_task_id,task.task_id)
+                    WHEN task.improvement_case_id IS NOT NULL THEN 'case:' || task.improvement_case_id
+                    ELSE 'task:' || coalesce(root.root_task_id,task.task_id)
+                  END AS story_id
+           FROM agent_tasks task
+           LEFT JOIN task_roots root USING (task_id)
+           WHERE task.task_type <> 'post-deploy-canary'
+         ), active_groups AS (
+           SELECT story_id,count(*)::int AS active_count,max(updated_at) AS updated_at
+           FROM catalog WHERE status IN ('queued','running') GROUP BY story_id
+         ), anchor AS (
+           SELECT DISTINCT ON (catalog.story_id) catalog.*
+           FROM catalog JOIN active_groups USING (story_id)
+           WHERE catalog.status IN ('queued','running')
+           ORDER BY catalog.story_id,catalog.updated_at DESC,catalog.created_at DESC,catalog.task_id DESC
+         )
+         SELECT anchor.task_id,anchor.root_task_id,anchor.story_id,anchor.improvement_case_id,
+                anchor.task_type,coalesce(case_row.title,anchor.title) AS title,
+                anchor.status,anchor.current_step,anchor.status_message,
+                anchor.branch_name,anchor.pr_url,anchor.verify_passed,
+                anchor.guild_id,anchor.channel_id,anchor.trace_id,
+                anchor.discord_response_channel_id,anchor.discord_response_message_id,
+                anchor.created_at,anchor.started_at,anchor.updated_at,
+                stats.attempts,stats.failed_attempts,
+                count(*) OVER ()::int AS total_count
+         FROM anchor
+         LEFT JOIN improvement_cases case_row ON case_row.case_id = anchor.improvement_case_id
+         LEFT JOIN LATERAL (
+           SELECT count(*)::int AS attempts,
+                  count(*) FILTER (WHERE candidate.status = 'failed')::int AS failed_attempts
+           FROM catalog candidate WHERE candidate.story_id = anchor.story_id
+         ) stats ON true
+         ORDER BY anchor.updated_at DESC LIMIT 30`,
       ) : emptyRows(),
       !activityOnly || includeImprovements ? this.pool.query(
         `SELECT case_row.case_id,case_row.title,case_row.status,case_row.classification,
@@ -404,7 +441,8 @@ export class OperatorDashboardRepository {
            WHERE execution.task_id IS NULL
              AND execution.status NOT IN ('queued','running')
              AND coalesce(nullif(execution.metadata->>'qualityCohort',''),nullif(session.metadata->>'qualityCohort','')) IS DISTINCT FROM 'synthetic'
-              AND execution.updated_at >= $1::timestamptz - interval '7 days'
+             AND coalesce(nullif(execution.metadata->>'source',''),nullif(session.metadata->>'source','')) IS DISTINCT FROM 'cli.prompt'
+              AND execution.updated_at >= $1::timestamptz - make_interval(days => ${OPERATOR_ACTIVITY_WINDOW_DAYS})
               AND (
                 ($2::boolean AND NOT coalesce(session.harness = 'background_job' OR session.metadata->>'kind' = 'background_job',false))
                 OR ($3::boolean AND coalesce(session.harness = 'background_job' OR session.metadata->>'kind' = 'background_job',false))
@@ -457,7 +495,7 @@ export class OperatorDashboardRepository {
            SELECT event.case_id,max(event.created_at) AS story_updated_at
            FROM improvement_case_events event
            JOIN improvement_cases case_row USING (case_id)
-           WHERE event.created_at >= $1::timestamptz - interval '7 days'
+           WHERE event.created_at >= $1::timestamptz - make_interval(days => ${OPERATOR_ACTIVITY_WINDOW_DAYS})
              AND case_row.merged_into_case_id IS NULL
              AND event.event_name NOT IN ('signal.received','signal.withdrawn','signal.reactivated','case.coalesced','evidence.attached','reconciliation.health_changed')
            GROUP BY event.case_id
@@ -519,7 +557,7 @@ export class OperatorDashboardRepository {
       ) : emptyRows(),
       !activityOnly || includeRecentActivity && includeReleases ? this.pool.query(
         `SELECT revision,deployment_id,verified_at FROM deployment_verifications
-         WHERE verified_at >= $1::timestamptz - interval '7 days'
+         WHERE verified_at >= $1::timestamptz - make_interval(days => ${OPERATOR_ACTIVITY_WINDOW_DAYS})
          ORDER BY verified_at DESC`,
         [now],
       ) : emptyRows(),
@@ -610,9 +648,11 @@ export class OperatorDashboardRepository {
       })),
       tasks: tasks.rows.map((row) => ({
         taskId: String(row.task_id), improvementCaseId: nullable(row.improvement_case_id),
+        storyId: nullable(row.story_id), rootTaskId: nullable(row.root_task_id),
         taskType: String(row.task_type), title: String(row.title), status: String(row.status),
         currentStep: nullable(row.current_step), statusMessage: nullable(row.status_message),
         branchName: nullable(row.branch_name), pullRequestUrl: nullable(row.pr_url),
+        attempts: number(row.attempts), failedAttempts: number(row.failed_attempts),
         sourceUrl: discordUrl(row.guild_id, row.channel_id, row.trace_id),
         responseUrl: discordUrl(row.guild_id, row.discord_response_channel_id, row.discord_response_message_id),
         responseKind: row.discord_response_message_id == null ? null : "reply",
@@ -673,7 +713,6 @@ function executionIdFromActivityId(id: string): string | null {
   if (id.startsWith("execution-")) return id.slice("execution-".length) || null;
   return null;
 }
-
 function runtimeMessageText(value: unknown): string | null {
   if (!Array.isArray(value)) return null;
   const content = value.flatMap((part) => {
@@ -682,7 +721,6 @@ function runtimeMessageText(value: unknown): string | null {
   }).join("\n").trim();
   return content ? content.slice(0, 8000) : null;
 }
-
 function record(value: unknown): Record<string, unknown> {
   return value != null && typeof value === "object" && !Array.isArray(value)
     ? value as Record<string, unknown>
@@ -692,7 +730,6 @@ function safeDiscordUrl(value: unknown): string | null {
   const url = nullable(value);
   return url && /^https:\/\/discord\.com\/channels\//.test(url) ? url : null;
 }
-
 function dashboardAttachments(value: unknown): Array<{ filename: string | null; contentType: string | null; sizeBytes: number | null }> {
   if (!Array.isArray(value)) return [];
   return value.slice(0, 10).map((attachment) => {

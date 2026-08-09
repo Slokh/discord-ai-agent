@@ -204,7 +204,7 @@ async function projectConsoleProjection(input: {
 }
 
 function activityPageRequest(url: URL): ActivityPageRequest {
-  const limit = Math.max(1, Math.min(100, Number(url.searchParams.get("limit")) || 60));
+  const limit = Math.max(1, Math.min(2_000, Number(url.searchParams.get("limit")) || 60));
   const types = (url.searchParams.get("types") ?? "").split(",").filter(Boolean);
   return {
     cursor: url.searchParams.get("cursor"), limit,

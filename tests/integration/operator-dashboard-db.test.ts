@@ -36,13 +36,17 @@ describe.skipIf(!runDbTests)("operator dashboard database projection", () => {
       `INSERT INTO agent_runtime_sessions(session_id,thread_key,title,request,requested_by,status,metadata,started_at,completed_at,updated_at)
        VALUES
          ('agent-session-canary-active','canary-active-thread','Active post-deploy canary','Synthetic active prompt','canary','running','{"qualityCohort":"synthetic"}',now() - interval '10 seconds',NULL,now()),
-         ('agent-session-canary-complete','canary-complete-thread','Completed post-deploy canary','Synthetic completed prompt','canary','succeeded','{"qualityCohort":"synthetic"}',now() - interval '2 minutes',now(),now())`,
+         ('agent-session-canary-complete','canary-complete-thread','Completed post-deploy canary','Synthetic completed prompt','canary','succeeded','{"qualityCohort":"synthetic"}',now() - interval '2 minutes',now(),now()),
+         ('agent-session-legacy-cli-active','legacy-cli-active-thread','Legacy active CLI probe','Private CLI prompt','operator','running','{"source":"cli.prompt"}',now() - interval '10 seconds',NULL,now()),
+         ('agent-session-legacy-cli-complete','legacy-cli-complete-thread','Legacy completed CLI probe','Private CLI prompt','operator','failed','{"source":"cli.prompt"}',now() - interval '2 minutes',now(),now())`,
     );
     await pool.query(
       `INSERT INTO agent_runtime_executions(execution_id,session_id,status,model,started_at,completed_at,updated_at)
        VALUES
          ('agent-execution-canary-active','agent-session-canary-active','running','model-a',now() - interval '10 seconds',NULL,now()),
-         ('agent-execution-canary-complete','agent-session-canary-complete','succeeded','model-a',now() - interval '2 minutes',now(),now())`,
+         ('agent-execution-canary-complete','agent-session-canary-complete','succeeded','model-a',now() - interval '2 minutes',now(),now()),
+         ('agent-execution-legacy-cli-active','agent-session-legacy-cli-active','running','model-a',now() - interval '10 seconds',NULL,now()),
+         ('agent-execution-legacy-cli-complete','agent-session-legacy-cli-complete','failed','model-a',now() - interval '2 minutes',now(),now())`,
     );
     await pool.query(
       `INSERT INTO agent_runtime_events(session_id,execution_id,sequence,kind,level,event_name,summary)
@@ -335,15 +339,16 @@ describe.skipIf(!runDbTests)("operator dashboard database projection", () => {
     expect(snapshot.activity.map((story) => story.kind)).toEqual(expect.arrayContaining(["runtime", "improvement"]));
     expect(snapshot.activity.filter((story) => story.kind === "runtime")).toHaveLength(2);
     expect(snapshot.activity).toContainEqual(expect.objectContaining({
-      id: "task-task-current-orphan", kind: "code_change", status: "failed",
+      id: "code-change-task:task-current-orphan", kind: "code_change", status: "failed",
     }));
     expect(snapshot.activity).toContainEqual(expect.objectContaining({
-      id: "task-task-retry-leaf", kind: "code_change", status: "succeeded", attempts: 3,
+      id: "code-change-task:task-retry-root", kind: "code_change", status: "succeeded", attempts: 3,
     }));
-    expect(snapshot.activity).not.toContainEqual(expect.objectContaining({ id: "task-task-retry-root" }));
-    expect(snapshot.activity).not.toContainEqual(expect.objectContaining({ id: "task-task-retry-middle" }));
-    expect(snapshot.activity).not.toContainEqual(expect.objectContaining({ id: "task-task-legacy-orphan" }));
+    expect(snapshot.activity).not.toContainEqual(expect.objectContaining({ id: "code-change-task:task-retry-middle" }));
+    expect(snapshot.activity).not.toContainEqual(expect.objectContaining({ id: "code-change-task:task-retry-leaf" }));
+    expect(snapshot.activity).not.toContainEqual(expect.objectContaining({ id: "code-change-task:task-legacy-orphan" }));
     expect(JSON.stringify({ executions: snapshot.executions, tasks: snapshot.tasks, activity: snapshot.activity })).not.toContain("canary");
+    expect(JSON.stringify({ executions: snapshot.executions, activity: snapshot.activity })).not.toContain("legacy-cli");
     expect(snapshot.activity.find((story) => story.id === "runtime-agent-execution-attempt-2")).toMatchObject({
       title: "@AI role Current member prompt",
       authorLabel: "Member A",
@@ -417,9 +422,10 @@ describe.skipIf(!runDbTests)("operator dashboard database projection", () => {
     expect(JSON.stringify(conversation)).not.toContain("private secret");
 
     const codeChange = await new OperatorDashboardRepository(pool).activityDetail({
-      kind: "code_change", id: "task-task-current-orphan", revision: "revision-a",
+      kind: "code_change", id: "code-change-task:task-current-orphan", revision: "revision-a",
     });
     expect(codeChange).toMatchObject({
+      codeChange: expect.objectContaining({ attempts: 1, failedAttempts: 1 }),
       traceEvents: [expect.objectContaining({
         type: "task", code: "agent.task.command",
         summary: "Sandbox command recorded; command and output remain private.",
@@ -581,10 +587,10 @@ describe.skipIf(!runDbTests)("operator dashboard database projection", () => {
     const activity = deriveOperatorActivity(snapshot);
 
     expect(snapshot.activity.filter((story) => story.id.startsWith("runtime-bulk-prompt-execution-"))).toHaveLength(30);
-    expect(snapshot.activity.filter((story) => story.id.startsWith("task-bulk-code-task-"))).toHaveLength(45);
+    expect(snapshot.activity.filter((story) => story.id.startsWith("code-change-task:bulk-code-task-"))).toHaveLength(45);
     expect(snapshot.activity.filter((story) => story.id.startsWith("improvement-bulk-case-"))).toHaveLength(25);
     expect(activity.recent.filter((story) => story.id.startsWith("runtime-bulk-prompt-execution-"))).toHaveLength(30);
-    expect(activity.recent.filter((story) => story.id.startsWith("task-bulk-code-task-"))).toHaveLength(45);
+    expect(activity.recent.filter((story) => story.id.startsWith("code-change-task:bulk-code-task-"))).toHaveLength(45);
     expect(activity.recent.filter((story) => story.id.startsWith("improvement-bulk-case-"))).toHaveLength(25);
     expect(activity.recent).toEqual(expect.arrayContaining([
       expect.objectContaining({ id: "runtime-bulk-system-execution-14", tone: "danger" }),

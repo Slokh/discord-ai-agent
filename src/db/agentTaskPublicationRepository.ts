@@ -84,13 +84,14 @@ export async function recordAgentTaskPullRequestSnapshot(
   );
   if (input.pullRequest.mergeRevision) {
     const deployment = await pool.query(
-      `SELECT deployment_id FROM deployment_verifications
+      `SELECT deployment_id,verified_at FROM deployment_verifications
        WHERE revision = $1 ORDER BY verified_at DESC,deployment_id DESC LIMIT 1`,
       [input.pullRequest.mergeRevision],
     );
     if (deployment.rows[0]) await recordAgentTasksDeployed(pool, {
       revision: input.pullRequest.mergeRevision,
       deploymentId: String(deployment.rows[0].deployment_id),
+      deployedAt: date(deployment.rows[0].verified_at),
     });
   }
   return { changed: Boolean(result.rows[0]?.changed) };
@@ -99,16 +100,17 @@ export async function recordAgentTaskPullRequestSnapshot(
 /** Attaches an exact verified release to every task whose merge commit produced it. */
 export async function recordAgentTasksDeployed(
   pool: DbPool,
-  input: { revision: string; deploymentId: string },
+  input: { revision: string; deploymentId: string; deployedAt?: Date },
 ): Promise<number> {
   const result = await pool.query(
     `WITH deployed AS (
        UPDATE agent_tasks SET
          deployed_revision = $1,
          deployment_id = $2,
-         deployed_at = now()
+         deployed_at = coalesce($3::timestamptz,deployed_at,now())
        WHERE pull_request_merge_revision = $1
-         AND (deployed_revision IS DISTINCT FROM $1 OR deployment_id IS DISTINCT FROM $2)
+         AND (deployed_revision IS DISTINCT FROM $1 OR deployment_id IS DISTINCT FROM $2
+              OR ($3::timestamptz IS NOT NULL AND deployed_at IS DISTINCT FROM $3))
        RETURNING task_id
      ), updated_execution AS (
        UPDATE agent_runtime_executions execution SET
@@ -128,7 +130,11 @@ export async function recordAgentTasksDeployed(
        FROM updated_execution
      )
      SELECT count(*)::int AS count FROM deployed`,
-    [input.revision, input.deploymentId],
+    [input.revision, input.deploymentId, input.deployedAt ?? null],
   );
   return Number(result.rows[0]?.count) || 0;
+}
+
+function date(value: unknown): Date {
+  return value instanceof Date ? value : new Date(String(value));
 }

@@ -200,6 +200,11 @@ describe("operator console", () => {
     expect(clientScript).toContain('aria-current="true"');
     expect(clientScript).not.toContain("<h2>Context</h2>");
     expect(clientScript).toContain("const detailTrace=");
+    expect(clientScript).toContain("const conversationDetailTrace=");
+    expect(clientScript).toContain("Show raw events · ");
+    expect(clientScript).toContain("trace-phase-summary");
+    expect(clientScript).toContain("phaseTools");
+    expect(clientScript).toContain("phaseExceptions");
     expect(clientScript).toContain("const improvementTraceItems=");
     expect(clientScript).toContain('type:"trigger"');
     expect(clientScript).toContain('type:"evidence"');
@@ -276,6 +281,10 @@ describe("operator console", () => {
     expect(clientScript).not.toContain("detailEvents(story)");
     expect(clientScript).not.toContain("story.lifecycle).length");
     expect(stylesheetText).toContain(".trace-row{display:grid");
+    expect(stylesheetText).toContain(".trace-phase-summary{display:grid");
+    expect(stylesheetText).toContain(".trace-context summary{");
+    expect(stylesheetText).toContain(".trace-tools{display:flex");
+    expect(stylesheetText).toContain(".trace-exceptions{display:flex");
     expect(clientScript).toContain('return story.attempts+" attempts"');
     expect(clientScript).toContain("discord\\.com\\/channels");
     expect(clientScript).toContain('url.searchParams.set("types"');

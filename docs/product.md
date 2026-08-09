@@ -123,6 +123,8 @@ The Console transport uses three explicit read models rather than a monolithic s
 
 Deployment and scheduled health checks independently prove the hosted Console route, unauthenticated OAuth/API boundary, exact deployed revision, projection freshness, activity index, and a sampled lazy detail. Their content-free receipts appear with the other proof producers; sustained failure enters the unified improvement stream and a later successful receipt proves recovery.
 
+Prompt and reply details project the canonical ledger into one chronological Context, Prompt, Intake, Agent, Response, and Delivery trace. The phase summary uses the same prompt-to-terminal boundaries as the header and feed duration, exposes waiting, agent, and delivery time, and shows safe model, token, cost, and tool totals. Direct parent content stays collapsed to a bounded preview until requested; tool outcomes nest under Agent; failures, retries, guards, and slow exceptions remain visible in their owning phase. Exact typed ledger records remain available under a Raw events disclosure with source-event provenance, without exposing private reasoning, raw model input, tool arguments, or artifacts.
+
 ## Non-goals
 
 - Slash commands as the normal product interface.

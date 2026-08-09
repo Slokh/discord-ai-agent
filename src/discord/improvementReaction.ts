@@ -25,6 +25,7 @@ export async function handleDiscordImprovementReaction(
   const source = present && reaction.partial ? (await reaction.fetch()).message : reaction.message;
   const message = source.partial ? await source.fetch() : source;
   if (!message.inGuild() || !shouldProcessGuildEvent(input.config.discord.guildId, message.guildId)) return false;
+  if (!input.botUserId || message.author.id !== input.botUserId) return false;
   const sourceKey = `discord-reaction:${message.guildId}:${message.id}:${user.id}:bug`;
   if (!present) {
     await input.repo.withdrawImprovementSignal({ sourceKey, actorId: user.id });
@@ -34,10 +35,7 @@ export async function handleDiscordImprovementReaction(
 
   await persistDiscordMessage(input.repo, message as Message);
   const execution = await input.repo.findAgentRuntimeChatExecutionByTraceId(message.id);
-  const isAgentInteraction = Boolean(execution) || message.author.id === input.botUserId;
-  const summary = isAgentInteraction
-    ? "A member reported a Discord assistant interaction"
-    : "A member reported a Discord message or interaction";
+  const summary = "A member reported a Discord assistant interaction";
   const recorded = await input.repo.recordImprovementSignal({
     source: "member_report",
     sourceKey,
@@ -52,12 +50,12 @@ export async function handleDiscordImprovementReaction(
     privacy: "private",
     summary,
     classification: "unknown",
-    owningDomain: isAgentInteraction ? "agent-replies" : "discord",
+    owningDomain: "agent-replies",
     fingerprint: improvementFingerprint({
       guildId: message.guildId,
       scope: "guild",
       privacy: "private",
-      owningDomain: isAgentInteraction ? "agent-replies" : "discord",
+      owningDomain: "agent-replies",
       classification: "unknown",
       summary,
       stableCode: execution ? `discord-execution:${execution.executionId}` : `discord-message:${message.id}`,

@@ -19,7 +19,7 @@ export async function listMyImprovementSignals(ctx: ToolContext, input: { limit?
     argumentsSummary: summarizeForAudit({ limit, requesterScoped: true }),
     resultSummary: summarizeForAudit({ signalCount: rows.length }),
   });
-  if (rows.length === 0) return "You have no active improvement reports. React with 🐛 to report a message or reply.";
+  if (rows.length === 0) return "You have no active improvement reports. React with 🐛 to one of my replies to report it.";
   return [
     `Your active improvement reports (${rows.length}${rows.length === limit ? `, limited to ${limit}` : ""}):`,
     ...rows.map(({ signal, case: improvementCase }, index) =>

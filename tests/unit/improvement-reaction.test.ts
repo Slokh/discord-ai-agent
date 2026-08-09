@@ -6,7 +6,7 @@ vi.mock("../../src/discord/messagePersistence.js", () => ({
 }));
 
 describe("Discord improvement reactions", () => {
-  it("links prompt- and reply-side reports to one canonical interaction fingerprint", async () => {
+  it("records reports on assistant responses", async () => {
     const execution = {
       executionId: "execution-a",
       metadata: { appRevision: "revision-a" },
@@ -21,15 +21,15 @@ describe("Discord improvement reactions", () => {
       ensureImprovementReporterConversation: vi.fn(async () => undefined),
     };
     const message = {
-      id: "prompt-message-a",
+      id: "reply-message-a",
       guildId: "guild-a",
       channelId: "channel-a",
       partial: false,
-      author: { id: "member-author", bot: false },
+      author: { id: "bot-user", bot: true },
       inGuild: () => true,
     };
 
-    await handleDiscordImprovementReaction(
+    const handled = await handleDiscordImprovementReaction(
       {
         config: { discord: { guildId: "guild-a" }, appRevision: "current-revision" } as never,
         repo: repo as never,
@@ -40,32 +40,47 @@ describe("Discord improvement reactions", () => {
       true,
     );
 
-    expect(repo.findAgentRuntimeChatExecutionByTraceId).toHaveBeenCalledWith("prompt-message-a");
+    expect(handled).toBe(true);
+    expect(repo.findAgentRuntimeChatExecutionByTraceId).toHaveBeenCalledWith("reply-message-a");
     expect(repo.recordImprovementSignal).toHaveBeenCalledWith(expect.objectContaining({
-      messageId: "prompt-message-a",
+      messageId: "reply-message-a",
       executionId: "execution-a",
       appRevision: "revision-a",
       summary: "A member reported a Discord assistant interaction",
       owningDomain: "agent-replies",
     }));
+  });
 
-    await handleDiscordImprovementReaction(
+  it("ignores reports on user-authored messages before looking up an execution", async () => {
+    const repo = {
+      findAgentRuntimeChatExecutionByTraceId: vi.fn(),
+      recordImprovementSignal: vi.fn(),
+      withdrawImprovementSignal: vi.fn(),
+      ensureImprovementReporterConversation: vi.fn(),
+    };
+    const message = {
+      id: "prompt-message-a",
+      guildId: "guild-a",
+      channelId: "channel-a",
+      partial: false,
+      author: { id: "member-author", bot: false },
+      inGuild: () => true,
+    };
+
+    const handled = await handleDiscordImprovementReaction(
       {
         config: { discord: { guildId: "guild-a" }, appRevision: "current-revision" } as never,
         repo: repo as never,
         botUserId: "bot-user",
       },
-      {
-        emoji: { id: null, name: "🐛" },
-        partial: false,
-        message: { ...message, id: "reply-message-a", author: { id: "bot-user", bot: true } },
-      } as never,
-      { id: "reporter-b", bot: false } as never,
+      { emoji: { id: null, name: "🐛" }, partial: false, message } as never,
+      { id: "reporter-a", bot: false } as never,
       true,
     );
 
-    const promptSignal = repo.recordImprovementSignal.mock.calls[0]![0];
-    const replySignal = repo.recordImprovementSignal.mock.calls[1]![0];
-    expect(promptSignal.fingerprint).toBe(replySignal.fingerprint);
+    expect(handled).toBe(false);
+    expect(repo.findAgentRuntimeChatExecutionByTraceId).not.toHaveBeenCalled();
+    expect(repo.recordImprovementSignal).not.toHaveBeenCalled();
+    expect(repo.ensureImprovementReporterConversation).not.toHaveBeenCalled();
   });
 });

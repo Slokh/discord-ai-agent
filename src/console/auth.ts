@@ -4,7 +4,7 @@ import type { AppConfig } from "../config/env.js";
 
 const SESSION_COOKIE = "__Host-console_session";
 const STATE_COOKIE = "__Host-console_oauth";
-const SESSION_TTL_MS = 12 * 60 * 60 * 1_000;
+const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1_000;
 const STATE_TTL_MS = 10 * 60 * 1_000;
 const DISCORD_API = "https://discord.com/api/v10";
 const DISCORD_TOKEN_URL = "https://discord.com/api/oauth2/token";

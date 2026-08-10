@@ -39,6 +39,7 @@ describe("hosted operator Console authentication", () => {
     expect(callback.headers.get("location")).toBe("/activity/conversation/run-1?filter=all");
     const sessionCookie = cookiePair(callback.headers.get("set-cookie"), "__Host-console_session");
     expect(sessionCookie).toContain("__Host-console_session=");
+    expect(callback.headers.get("set-cookie")).toContain("Max-Age=2592000");
 
     const page = await fetch(`${baseUrl}/`, { headers: { cookie: sessionCookie } });
     expect(page.status).toBe(200);

@@ -4,7 +4,6 @@ import type { Logger } from "pino";
 import { cleanResponse, formatDiscordMarkdownTables } from "../tools/responseFormatting.js";
 import { splitForDiscord } from "../util/text.js";
 import type { AgentFile } from "../tools/types.js";
-import { CONSOLE_PUBLIC_URL } from "../console/constants.js";
 import { plainDiscordComponentsV2Payload, validateDiscordAttachmentNames, type PreparedDiscordPresentation } from "./components/renderer.js";
 import { discordEdit, discordReact, discordRemoveReaction, discordReply, discordSend } from "./api.js";
 
@@ -21,6 +20,9 @@ export type DiscordResponseResult = {
 export type DiscordResponseFooter = {
   /** End-to-end request duration, rendered independently of any operator UI or trace link. */
   durationMs?: number;
+  model?: string;
+  harness?: string;
+  reasoningEffort?: string;
   /** Extra subtext lines (e.g. RNG fairness proofs), each rendered as its own `-#` line. */
   extraLines?: string[];
 };
@@ -373,9 +375,19 @@ export function formatDiscordResponseFooter(footer?: DiscordResponseFooter | nul
     if (trimmed) lines.push(`-# ${trimmed}`);
   }
   if (typeof footer?.durationMs === "number" && Number.isFinite(footer.durationMs)) {
-    lines.push(`-# ${formatFooterDuration(footer.durationMs)} · [console](<${CONSOLE_PUBLIC_URL}>)`);
+    const metadata = [
+      footer.model?.toUpperCase(),
+      footer.harness,
+      titleCase(footer.reasoningEffort),
+      formatFooterDuration(footer.durationMs),
+    ].filter(Boolean);
+    lines.push(`-# ${metadata.join(" · ")}`);
   }
   return lines.length > 0 ? lines.join("\n") : null;
+}
+
+function titleCase(value?: string) {
+  return value ? `${value[0]?.toUpperCase()}${value.slice(1).toLowerCase()}` : undefined;
 }
 
 function formatFooterDuration(durationMs: number) {

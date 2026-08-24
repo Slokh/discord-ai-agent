@@ -54,8 +54,22 @@ const mutationDrift = definitions
   .map((tool) => tool.name);
 if (mutationDrift.length) throw new Error(`Tool mutation taxonomy drift: ${mutationDrift.join(", ")}.`);
 
+const DISABLED_PRODUCTION_TOOLS = new Set<ToolName>([
+  "setReminder", "listMyReminders", "composeDiscordResponse", "listMyImprovementSignals",
+  "getDeploymentStatus", "getSpendSummary", "reportStatus", "setAgentModel",
+  "reportImprovementSignal", "runCodingAgent", "getAgentTaskStatus", "listAgentTasks",
+  "retryAgentTask", "cancelAgentTask", "undoConversationTurns", "createDiscordEmoji",
+  "updateBotAvatar", "adminTransferWalletFunds", "adminSetWalletStarterAmount",
+  "reconcileWalletTransfers", "getSpotifyPlaylistTracks", "getSpotifyAlbumTracks",
+  "getSpotifyArtistDiscography", "getSpotifyPlaylistStats", "compareSpotifyPlaylists",
+  "searchSpotify", "getSpotifyItem",
+]);
+
 export const installedToolContracts: readonly ToolRegistryEntry[] = Object.freeze(
-  TOOL_NAMES.map((name) => requiredContract(name)),
+  TOOL_NAMES.map((name) => {
+    const contract = requiredContract(name);
+    return DISABLED_PRODUCTION_TOOLS.has(name) ? { ...contract, available: () => false } : contract;
+  }),
 );
 
 function requiredContract(name: ToolName): ToolRegistryEntry {

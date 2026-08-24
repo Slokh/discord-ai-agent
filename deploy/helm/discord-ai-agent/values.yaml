@@ -44,6 +44,7 @@ config:
   botChannelId: ""
 
 api:
+  enabled: false
   replicas: 1
   port: 8080
   service:
@@ -53,6 +54,7 @@ api:
     limits: { cpu: 500m, memory: 512Mi }
 
 console:
+  enabled: false
   replicas: 1
   port: 8081
   service:
@@ -82,6 +84,7 @@ worker:
 
 # The watchdog must run independently of the worker that owns reconciliation.
 improvementWatchdog:
+  enabled: false
   schedule: "*/15 * * * *"
   startingDeadlineSeconds: 600
   activeDeadlineSeconds: 300
@@ -93,7 +96,7 @@ migrations:
   enabled: true
 
 networkPolicy:
-  enabled: true
+  enabled: false
   allowSandboxInternetEgress: true
 
 ciliumFqdnPolicy:

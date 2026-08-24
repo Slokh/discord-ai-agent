@@ -6,10 +6,8 @@ describe("deployment health", () => {
     expect(evaluateDeploymentHealth(snapshot(), { release: "discord-ai-agent", expectedRevision: "revision-a" })).toMatchObject({
       healthy: true,
       components: [
-        { component: "api", restarts: 0 },
         { component: "bot", restarts: 0 },
         { component: "worker", restarts: 0 },
-        { component: "console", restarts: 0 },
       ],
       issues: [],
     });
@@ -71,7 +69,7 @@ describe("deployment health", () => {
       intervalMs: 5_000,
       readSnapshot: () => {
         const sample = snapshot();
-        if (reads++ > 0) sample.items.find((item: any) => item.kind === "Pod")!.status.containerStatuses[0].restartCount = 1;
+        if (reads++ > 0) sample.items.find((item: any) => item.kind === "Pod" && item.metadata.labels["app.kubernetes.io/component"] === "bot")!.status.containerStatuses[0].restartCount = 1;
         return sample;
       },
       sleep: async () => undefined,

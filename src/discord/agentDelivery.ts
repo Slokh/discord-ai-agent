@@ -3,6 +3,8 @@ import { isOpenRouterContentFilterError } from "../models/openrouter.js";
 import type { AgentRuntimeExecutionJob } from "../jobs/queue.js";
 import { isAgentRuntimeTimeoutError } from "../agent/runtimeTimeouts.js";
 import { NanoCodexAgentRuntimePromptExecutor } from "../agent/runtimeExecutor.js";
+import { PRIMARY_AGENT_REASONING } from "../agent/modelPolicy.js";
+import type { AppConfig } from "../config/env.js";
 import { continuationEvidenceFromResponse } from "../agent/continuationEvidence.js";
 import { isInternalControlText } from "../agent/internalControlText.js";
 import { agentRuntimeTurnInputText, assertAgentRuntimeTurnEnvelopeScope, loadAgentRuntimeTurnEnvelope } from "../agent/runtimeEnvelope.js";
@@ -175,7 +177,7 @@ export async function executeDiscordAgentRequest(
   });
   if (!agentRuntimeExecution) {
     const errorContent = "I hit an error: could not create the agent runtime ledger for this turn.";
-    const finalReply = (await responseSink.sendError(errorContent, elapsedResponseFooter(request.messageStartedAt))).message;
+    const finalReply = (await responseSink.sendError(errorContent, elapsedResponseFooter(request.messageStartedAt, input.config))).message;
     return { status: "failed", message: finalReply } satisfies DiscordAgentExecutionResult;
   }
   const preparedTurn = request.turnEnvelope
@@ -271,12 +273,9 @@ export async function executeDiscordAgentRequest(
       statusChannelId: responseSink.statusChannelId,
       statusMessageId: responseSink.statusMessageId,
       noteProgress: () => undefined,
-      updateStatus: async (content) => {
-        toolContext.noteProgress?.();
-        const statusMessage = await responseSink.updateStatus(content);
-        toolContext.statusChannelId = statusMessage.channelId;
-        toolContext.statusMessageId = statusMessage.id;
-      },
+      // Discord progress is reaction-only. Tool status text is intentionally
+      // not posted or edited into the channel before the final response.
+      updateStatus: async () => undefined,
       deleteDiscordMessageIds: async (messageIds) => {
         let deleted = 0;
         for (const messageId of messageIds) {
@@ -331,7 +330,7 @@ export async function executeDiscordAgentRequest(
       },
       "Agent response ready"
     );
-    const formattedFooter = elapsedResponseFooter(request.messageStartedAt, response.footerLines);
+    const formattedFooter = elapsedResponseFooter(request.messageStartedAt, input.config, response.footerLines);
     const storedResponseContent = response.storedContent ?? response.content;
     const responseRedacted = Boolean(response.storedContent);
     const deliveryFileReferences = input.agentRuntime
@@ -513,7 +512,7 @@ export async function executeDiscordAgentRequest(
         "The model/provider blocked that one, so I’m not going to keep it in channel memory. Try rephrasing it.",
         input.config.maxReplyChars
       );
-      const finalReply = (await responseSink.sendError(filteredContent, elapsedResponseFooter(request.messageStartedAt))).message;
+      const finalReply = (await responseSink.sendError(filteredContent, elapsedResponseFooter(request.messageStartedAt, input.config))).message;
       await markDiscordDeliveryDelivered(input, agentRuntimeExecution.executionId, finalReply, requestLogger);
       await attachPromptTasksToDiscordReply(input, request.requestId, finalReply, requestLogger);
       const deletedMemoryRows = await input.repo
@@ -560,7 +559,7 @@ export async function executeDiscordAgentRequest(
         .catch((auditError) => requestLogger.warn({ err: auditError }, "Failed to audit agent timeout"));
     }
     const errorContent = cleanResponse(`I hit an error: ${error instanceof Error ? error.message : String(error)}`, input.config.maxReplyChars);
-    const finalReply = (await responseSink.sendError(errorContent, elapsedResponseFooter(request.messageStartedAt))).message;
+    const finalReply = (await responseSink.sendError(errorContent, elapsedResponseFooter(request.messageStartedAt, input.config))).message;
     await markDiscordDeliveryDelivered(input, agentRuntimeExecution.executionId, finalReply, requestLogger);
     await attachPromptTasksToDiscordReply(input, request.requestId, finalReply, requestLogger);
     requestLogger.info({ replyMessageId: finalReply.id }, "Sent Discord error response");
@@ -636,9 +635,12 @@ export async function executeDiscordAgentRequest(
   }
 }
 
-function elapsedResponseFooter(startedAt: number, extraLines?: string[]) {
+function elapsedResponseFooter(startedAt: number, config: AppConfig, extraLines?: string[]) {
   return {
     durationMs: durationMs(startedAt),
+    model: config.openRouter.chatModel,
+    harness: "NanoCodex",
+    reasoningEffort: PRIMARY_AGENT_REASONING,
     ...(extraLines?.length ? { extraLines } : {}),
   };
 }

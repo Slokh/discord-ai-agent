@@ -74,7 +74,7 @@ describe("tool handler conformance", () => {
   });
 
   it("covers every contract with one focused handler", () => {
-    const handled = Object.values(handlerFamilies).flatMap((family) => Object.keys(family));
+    const handled = Object.keys(installedToolHandlers);
     expect(new Set(handled).size).toBe(handled.length);
     expect(new Set(handled)).toEqual(new Set(toolRegistry.map((tool) => tool.name)));
     expect(() => bindToolHandlers(toolRegistry, installedToolHandlers)).not.toThrow();

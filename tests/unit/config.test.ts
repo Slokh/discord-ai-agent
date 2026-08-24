@@ -25,16 +25,16 @@ describe("config", () => {
         sessionSecret: "",
       });
       expect(config.openRouter).toEqual(expect.objectContaining({
-        chatModel: "openai/gpt-5.6-luna",
+        chatModel: "openai/gpt-5.6-terra",
         codegenModel: "openai/gpt-5.6-terra",
-        utilityModel: "openai/gpt-5.6-luna"
+        utilityModel: "openai/gpt-5.6-terra"
       }));
       expect(config.execution).not.toHaveProperty("codegenBackend");
       expect(config.execution).not.toHaveProperty("codegenLease");
       expect(config.worker).toEqual(expect.objectContaining({
         crawlEnabled: true,
         embeddingEnabled: true,
-        taskEnabled: true,
+        taskEnabled: false,
         agentRuntimeEnabled: true
       }));
       expect(config.payments).toEqual({

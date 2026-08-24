@@ -1,0 +1,73 @@
+{{- if .Values.workload.enabled }}
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "discord-ai-agent-postgres.fullname" . }}
+  labels:
+    {{- include "discord-ai-agent-postgres.labels" . | nindent 4 }}
+    app.kubernetes.io/component: postgres
+spec:
+  serviceName: {{ include "discord-ai-agent-postgres.fullname" . }}
+  replicas: 1
+  persistentVolumeClaimRetentionPolicy:
+    whenDeleted: Retain
+    whenScaled: Retain
+  selector:
+    matchLabels:
+      {{- include "discord-ai-agent-postgres.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "discord-ai-agent-postgres.selectorLabels" . | nindent 8 }}
+    spec:
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: postgres
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args:
+            - -c
+            - shared_preload_libraries=pg_search,pg_cron
+            - -c
+            - max_connections=500
+            - -c
+            - idle_in_transaction_session_timeout=60000
+          env:
+            - name: POSTGRES_DB
+              value: {{ .Values.credentials.database | quote }}
+            - name: POSTGRES_USER
+              value: {{ .Values.credentials.username | quote }}
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.credentials.existingSecretName }}
+                  key: {{ .Values.credentials.passwordKey }}
+          ports:
+            - name: postgres
+              containerPort: 5432
+          readinessProbe:
+            tcpSocket:
+              port: postgres
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket:
+              port: postgres
+            periodSeconds: 10
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+              subPath: pgdata
+            - name: shared-memory
+              mountPath: /dev/shm
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: {{ required "workload.existingClaim is required" .Values.workload.existingClaim }}
+        - name: shared-memory
+          emptyDir:
+            medium: Memory
+            sizeLimit: {{ .Values.sharedMemorySize }}
+{{- end }}

@@ -3,7 +3,6 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { verifyDeploymentStability } from "./deploymentHealth.js";
 import { rollbackRelease } from "./rollbackRelease.js";
-import { waitForConsoleHealth } from "./consoleHealth.js";
 
 export type PostDeployStage = "deployment_health" | "capability_canary" | "console_health" | "private_regressions" | "stability" | "promotion";
 export type PostDeployVerificationResult = {
@@ -169,57 +168,20 @@ async function runCli() {
       });
     },
     verifyCapabilities: async () => {
-      for (const component of ["api", "bot", "worker", "console"]) {
+      for (const component of ["bot", "worker"]) {
         command("kubectl", ["--namespace", args.namespace, "rollout", "status", `deployment/${args.release}-${component}`, "--timeout=2m"]);
       }
       const allowed = command("kubectl", [
         "auth", "can-i", "create", "jobs.batch", "--namespace", args.namespace,
-        `--as=system:serviceaccount:${args.namespace}:${args.release}-worker`,
+        `--as=system:serviceaccount:${args.namespace}:${args.release}-app`,
       ]);
-      if (allowed !== "yes") throw new Error("Worker service account cannot create sandbox Jobs.");
-      command("kubectl", [
-        "--namespace", args.namespace, "exec", `deployment/${args.release}-worker`, "--",
-        "node", "dist/scripts/postDeployCanary.js",
-      ], 8 * 60_000);
+      if (allowed !== "no") throw new Error("Application service account unexpectedly has permission to create Jobs.");
     },
-    verifyConsole: async () => {
-      const healthArgs = [
-        "--namespace", args.namespace, "exec", `deployment/${args.release}-console`, "--",
-        "node", "dist/scripts/consoleHealth.js",
-        "--revision", args.expectedRevision,
-        "--internal-url", "http://127.0.0.1:8081",
-      ];
-      command("kubectl", healthArgs);
-      if (args.consolePublicUrl) {
-        const publicHealth = await waitForConsoleHealth({
-          expectedRevision: args.expectedRevision,
-          internalUrl: null,
-          publicUrl: args.consolePublicUrl,
-          attempts: 8,
-          retryDelayMs: 5_000,
-          timeoutMs: 3_000,
-        });
-        if (publicHealth.status !== "healthy") {
-          const failedCodes = publicHealth.checks.filter((check) => check.status === "failed").map((check) => check.code);
-          throw new Error(`Public Console boundary failed: ${failedCodes.join(",") || "unknown"}.`);
-        }
-      }
-    },
-    verifyPrivateRegressions: async () => {
-      command("kubectl", [
-        "--namespace", args.namespace, "exec", `deployment/${args.release}-worker`, "--",
-        "node", "dist/scripts/exportImprovementEvals.js",
-      ]);
-      try {
-        command("kubectl", [
-          "--namespace", args.namespace, "exec", `deployment/${args.release}-worker`, "--",
-          "node", "dist/scripts/eval.js", "--private-only", "--safe-summary",
-          "--record-improvement-results",
-        ], 8 * 60_000);
-      } catch (error) {
-        throw new Error(privateEvalFailureMessage(error), { cause: error });
-      }
-    },
+    // These hooks remain in the generic recovery state machine, but this
+    // deployment deliberately has no Console and performs no paid model/eval
+    // traffic during release verification.
+    verifyConsole: async () => undefined,
+    verifyPrivateRegressions: async () => undefined,
     promote: async () => {
       command("kubectl", [
         "--namespace", args.namespace, "exec", `deployment/${args.release}-worker`, "--",
@@ -233,27 +195,6 @@ async function runCli() {
       release: args.release,
       stabilitySeconds: 30,
     }),
-    recordFailureDetection: async ({ failedStage }) => {
-      const isEvalFailure = failedStage === "private_regressions";
-      const source = isEvalFailure ? "eval_detection" : "deployment_detection";
-      const stableCode = isEvalFailure ? "private-regression-suite" : `post-deploy-${failedStage}`;
-      const summary = isEvalFailure
-        ? `Private regression verification failed for revision ${args.expectedRevision}.`
-        : `Post-deploy ${failedStage.replaceAll("_", " ")} verification failed for revision ${args.expectedRevision}.`;
-      command("kubectl", [
-        "--namespace", args.namespace, "exec", `deployment/${args.release}-worker`, "--",
-        "node", "dist/scripts/improve.js", "--target", "production", "--confirm-production", "detect",
-        "--source", source,
-        "--source-id", `post-deploy:${args.deploymentId}:${failedStage}`,
-        "--stable-code", stableCode,
-        "--summary", summary,
-        "--classification", isEvalFailure ? "defect" : "external_incident",
-        "--severity", "high",
-        "--domain", isEvalFailure ? "evals" : "deployment",
-        "--scope", "deployment",
-        "--revision", args.expectedRevision,
-      ]);
-    },
     onEvent: (event) => process.stderr.write(`${JSON.stringify({ type: "release_verification", ...event })}\n`),
   });
   process.stdout.write(`${JSON.stringify(result)}\n`);

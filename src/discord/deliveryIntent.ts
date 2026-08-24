@@ -18,6 +18,9 @@ const commonFields = {
   responseRedacted: z.boolean(),
   footer: z.object({
     durationMs: z.number().finite().nonnegative().optional(),
+    model: z.string().max(200).optional(),
+    harness: z.string().max(100).optional(),
+    reasoningEffort: z.string().max(50).optional(),
     extraLines: z.array(z.string()).optional(),
   }).nullable(),
   presentation: discordPresentationSchema.nullable(),

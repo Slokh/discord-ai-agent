@@ -680,7 +680,7 @@ describe("prompt context cost controls", () => {
       "utf8",
     );
 
-    expect(tools.localTools.map((tool) => tool.name)).toContain("composeDiscordResponse");
+    expect(tools.localTools.map((tool) => tool.name)).not.toContain("composeDiscordResponse");
     expect(tools.localTools.map((tool) => tool.name)).not.toContain("requestAdditionalTools");
     expect(systemBytes).toBeLessThan(4_000);
     expect(String(chatMessages("hello there", "")[0]?.content)).not.toContain("searchDiscordHistory");

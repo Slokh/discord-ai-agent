@@ -78,21 +78,24 @@ describe("DiscordResponseSink", () => {
       content: "done",
       footer: {
         durationMs: 12_440,
+        model: "openai/gpt-5.6-terra",
+        harness: "NanoCodex",
+        reasoningEffort: "medium",
         extraLines: ["💸 [transfer](<https://explore.tempo.xyz/tx/abc>)"]
       }
     });
 
     expect(sourceMessage.reply).toHaveBeenCalledWith({
-      content: "done\n\n-# 💸 [transfer](<https://explore.tempo.xyz/tx/abc>)\n-# 12.4s · [console](<https://console.mindcool.dev>)",
+      content: "done\n\n-# 💸 [transfer](<https://explore.tempo.xyz/tx/abc>)\n-# OPENAI/GPT-5.6-TERRA · NanoCodex · Medium · 12.4s",
       allowedMentions: suppressedMentions
     });
   });
 
   it.each([
-    [0, "-# 0.0s · [console](<https://console.mindcool.dev>)"],
-    [12_440, "-# 12.4s · [console](<https://console.mindcool.dev>)"],
-    [59_950, "-# 1m0s · [console](<https://console.mindcool.dev>)"],
-    [91_600, "-# 1m32s · [console](<https://console.mindcool.dev>)"],
+    [0, "-# 0.0s"],
+    [12_440, "-# 12.4s"],
+    [59_950, "-# 1m0s"],
+    [91_600, "-# 1m32s"],
   ])("formats %dms as a compact elapsed-time footer", (durationMs, expected) => {
     expect(formatDiscordResponseFooter({ durationMs })).toBe(expected);
   });

@@ -44,6 +44,7 @@
     "verify": "npm run lint && npm run typecheck && npm test && npm audit --omit=dev --audit-level=critical && npm run docs:check && npm run config:check && npm run scan:release",
     "verify:db": "npm run migrate && npm run test:db",
     "migrate": "tsx src/db/migrate.ts",
+    "import:existing": "tsx scripts/importExistingDatabase.ts",
     "verify:rng": "tsx scripts/verify-rng.ts",
     "crawl": "tsx scripts/crawl.ts",
     "reindex": "tsx scripts/crawl.ts --reindex",
@@ -111,6 +112,8 @@
     "vitest": "^4.1.10"
   },
   "overrides": {
+    "js-yaml": "4.3.1",
+    "nanoid": "3.3.18",
     "undici": "8.9.0",
     "@base-ui/react": "~1.4.0",
     "fast-uri": "3.1.5",

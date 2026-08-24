@@ -1,7 +1,6 @@
 import type { AgentResponse, ToolContext } from "../tools/types.js";
 import type { AgentPromptContribution, PreparedAgentCapability } from "../agent/capabilityRuntime.js";
-import { installedToolContracts } from "./toolContracts.js";
-export { installedToolContracts } from "./toolContracts.js";
+import { installedToolContracts as availableToolContracts } from "./toolContracts.js";
 import { coreToolHandlers } from "../tools/handlers/core.js";
 import { userSettingsToolHandlers } from "../tools/handlers/user-settings.js";
 import { reminderToolHandlers } from "../tools/handlers/reminders.js";
@@ -21,12 +20,10 @@ import {
   type ToolRegistryEntry,
 } from "../tools/toolDefinition.js";
 import type { LocalToolHandler } from "../tools/handlers/types.js";
-import { prepareAgentModelCapability } from "./agentModel.js";
 import { prepareDiscordEmojiCapability } from "./discordEmoji.js";
 import { prepareUserTimezoneCapability } from "./userTimezone.js";
 import { imageContextPromptContribution } from "./imageContext.js";
 import { prepareRandomGameCapability } from "./randomGames.js";
-import { prepareScheduledRequestCapability } from "./scheduledRequests.js";
 import { ExternalResearchCapability } from "./externalResearch.js";
 
 export type CapabilityId = keyof typeof TOOL_NAMES_BY_CAPABILITY;
@@ -62,15 +59,11 @@ const declarations: readonly CapabilityDeclaration[] = ([
     },
   },
   {
-    id: "reminders",
-    summary: "Durable requester-owned one-shot and recurring reminder creation, management, and delivery.",
-    toolNames: TOOL_NAMES_BY_CAPABILITY.reminders,
-    prepareTurn: (ctx) => prepareScheduledRequestCapability(ctx),
-  },
-  {
     id: "discordContext",
-    summary: "Permission-scoped Discord retrieval, memory, presentation, and server culture.",
-    toolNames: TOOL_NAMES_BY_CAPABILITY.discordContext,
+    summary: "Permission-scoped Discord retrieval, memory, and server culture.",
+    toolNames: TOOL_NAMES_BY_CAPABILITY.discordContext.filter(
+      (name) => name !== "composeDiscordResponse" && name !== "listMyImprovementSignals",
+    ),
     prepareTurn: async (ctx, userText) => ({
       promptContributions: compactContributions(await prepareDiscordEmojiCapability(ctx, userText)),
     }),
@@ -89,31 +82,11 @@ const declarations: readonly CapabilityDeclaration[] = ([
     toolNames: TOOL_NAMES_BY_CAPABILITY.generatedData,
   },
   {
-    id: "operations",
-    summary: "Runtime diagnostics, deployment status, spend, and model administration.",
-    toolNames: TOOL_NAMES_BY_CAPABILITY.operations,
-    prepareTurn: async (ctx) => {
-      const capability = await prepareAgentModelCapability(ctx);
-      return {
-        model: capability.model,
-        promptContributions: compactContributions(capability.promptContribution),
-      };
-    },
-  },
-  {
-    id: "improvements",
-    summary: "Unified private improvement-signal intake and coalescing.",
-    toolNames: TOOL_NAMES_BY_CAPABILITY.improvements,
-  },
-  {
-    id: "codeUpdates",
-    summary: "Durable repository diagnosis and isolated code-update tasks.",
-    toolNames: TOOL_NAMES_BY_CAPABILITY.codeUpdates,
-  },
-  {
     id: "discordActions",
-    summary: "Requester-authorized reversible Discord and bot-profile mutations.",
-    toolNames: TOOL_NAMES_BY_CAPABILITY.discordActions,
+    summary: "Requester-authorized bounded Discord reactions and poll creation.",
+    toolNames: TOOL_NAMES_BY_CAPABILITY.discordActions.filter(
+      (name) => name === "addDiscordReaction" || name === "createDiscordPoll",
+    ),
   },
   {
     id: "randomGames",
@@ -132,12 +105,9 @@ const declarations: readonly CapabilityDeclaration[] = ([
   {
     id: "wallets",
     summary: "Live wallet reads, transfers, funding, fees, and reconciliation.",
-    toolNames: TOOL_NAMES_BY_CAPABILITY.wallets,
-  },
-  {
-    id: "spotify",
-    summary: "Current Spotify catalog and collection inspection.",
-    toolNames: TOOL_NAMES_BY_CAPABILITY.spotify,
+    toolNames: TOOL_NAMES_BY_CAPABILITY.wallets.filter(
+      (name) => !name.startsWith("admin") && name !== "reconcileWalletTransfers",
+    ),
   },
   {
     id: "externalResearch",
@@ -179,7 +149,7 @@ const unknownHandlers = handlerNames.filter((name) => !knownToolNames.has(name))
 if (unknownHandlers.length) throw new Error(`Unknown local tool handlers: ${unknownHandlers.join(", ")}.`);
 const handlerDefinitions: Readonly<Partial<Record<ToolName, LocalToolHandler>>> = Object.fromEntries(handlerEntries);
 
-const contractByName = new Map(installedToolContracts.map((tool) => [tool.name, tool]));
+const contractByName = new Map(availableToolContracts.map((tool) => [tool.name, tool]));
 
 export const installedCapabilities: readonly InstalledCapability[] = declarations.map((declaration) => {
   const tools = declaration.toolNames.map((name) => requiredContract(name));
@@ -195,8 +165,12 @@ export const installedCapabilities: readonly InstalledCapability[] = declaration
   });
 });
 
+export const installedToolContracts: readonly ToolRegistryEntry[] = Object.freeze(
+  installedCapabilities.flatMap((capability) => capability.tools),
+);
+
 export const installedToolHandlers: Readonly<Partial<Record<ToolName, LocalToolHandler>>> = Object.freeze(
-  Object.assign({}, ...installedCapabilities.map((capability) => capability.handlers)),
+  handlerDefinitions,
 );
 
 function requiredContract(name: ToolName): ToolRegistryEntry {

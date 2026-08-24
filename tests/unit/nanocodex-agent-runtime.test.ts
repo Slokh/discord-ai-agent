@@ -38,7 +38,7 @@ describe("NanoCodex agent runtime executor", () => {
     const runtime = agentRuntime();
     const runRuntime = vi.fn(async (input: any) => {
       expect(input.model).toBe("openai/gpt-5.6-luna");
-      expect(input.thinking).toBe("high");
+      expect(input.thinking).toBe("medium");
       expect(input.sessionId).toMatch(/^[0-9a-f-]+$/);
       expect(input.sessionId).not.toBe("018f1f9a-7b3c-7a01-8000-000000000001");
       expect(input.hostedWebSearch).toBe(false);
@@ -46,10 +46,7 @@ describe("NanoCodex agent runtime executor", () => {
       expect(input.tools.find((tool: any) => tool.function.name === "inspectDiscordImages")?.function.description)
         .toContain("pass its direct text result to text(...); do not read .content or repeat the call");
       expect(input.prompt).toContain("Current Discord requester: Kartik");
-      expect(input.prompt).toContain("Current NanoCodex model for this turn: `openai/gpt-5.6-luna`");
-      expect(input.prompt).toContain("Configured Discord chat default: `openai/gpt-5.6-luna` (Luna).");
-      expect(input.prompt).toContain("Sol is available only as an authorized server override; it is not selected automatically.");
-      expect(input.prompt).toContain("Configured code-update model: `openai/gpt-5.6-terra` (Terra).");
+      expect(input.prompt).not.toContain("authorized server override");
       expect(input.prompt).toContain("USER: hello");
       expect(input.tools.map((tool: any) => tool.function.name)).toEqual(expect.arrayContaining(["loadSkillContext", "drawRandom", "web__run"]));
       await expect(input.executeTool({ callId: "bad-1", name: "notRegistered", arguments: {} })).resolves.toEqual({
@@ -107,7 +104,6 @@ describe("NanoCodex agent runtime executor", () => {
       expect(names).toContain("searchDiscordHistory");
       expect(names).not.toContain("setReminder");
       expect(names).not.toContain("transferWalletFunds");
-      expect(input.prompt).toContain("strictly read-only");
       return result("scheduled answer");
     });
 

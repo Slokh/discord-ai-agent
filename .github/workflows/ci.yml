@@ -244,7 +244,6 @@ jobs:
           files: docker-bake.hcl
           set: |
             runtime.tags=${{ steps.ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}-candidate:${{ steps.identity.outputs.tree_tag }}
-            codegen.tags=${{ steps.ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}-sandbox-candidate:${{ steps.identity.outputs.tree_tag }}
             *.cache-from=type=gha,scope=runtime
 
   candidate-security:
@@ -273,13 +272,6 @@ jobs:
           format: cyclonedx-json
           output-file: sbom-runtime.cdx.json
           upload-artifact: false
-      - name: Generate codegen SBOM
-        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
-        with:
-          image: ${{ needs.candidate-images.outputs.registry }}/${{ env.ECR_REPOSITORY }}-sandbox-candidate:${{ needs.candidate-images.outputs.tree_tag }}
-          format: cyclonedx-json
-          output-file: sbom-codegen.cdx.json
-          upload-artifact: false
       - name: Scan runtime image
         uses: anchore/scan-action@e1165082ffb1fe366ebaf02d8526e7c4989ea9d2 # v7.4.0
         with:
@@ -289,15 +281,6 @@ jobs:
           severity-cutoff: critical
           only-fixed: true
           output-file: grype-runtime.sarif
-      - name: Scan codegen image
-        uses: anchore/scan-action@e1165082ffb1fe366ebaf02d8526e7c4989ea9d2 # v7.4.0
-        with:
-          image: ${{ needs.candidate-images.outputs.registry }}/${{ env.ECR_REPOSITORY }}-sandbox-candidate:${{ needs.candidate-images.outputs.tree_tag }}
-          config: .grype.yaml
-          fail-build: true
-          severity-cutoff: critical
-          only-fixed: true
-          output-file: grype-codegen.sarif
       - name: Upload candidate security evidence
         uses: actions/upload-artifact@v7
         if: always()
@@ -323,7 +306,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: docker/setup-buildx-action@v4
-      - name: Build runtime and codegen images
+      - name: Build runtime image
         uses: docker/bake-action@v7
         with:
           load: true
@@ -337,13 +320,6 @@ jobs:
           format: cyclonedx-json
           output-file: sbom-runtime.cdx.json
           upload-artifact: false
-      - name: Generate codegen SBOM
-        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
-        with:
-          image: discord-ai-agent:ci-codegen
-          format: cyclonedx-json
-          output-file: sbom-codegen.cdx.json
-          upload-artifact: false
       - name: Scan runtime image
         uses: anchore/scan-action@e1165082ffb1fe366ebaf02d8526e7c4989ea9d2 # v7.4.0
         with:
@@ -353,15 +329,6 @@ jobs:
           severity-cutoff: critical
           only-fixed: true
           output-file: grype-runtime.sarif
-      - name: Scan codegen image
-        uses: anchore/scan-action@e1165082ffb1fe366ebaf02d8526e7c4989ea9d2 # v7.4.0
-        with:
-          image: discord-ai-agent:ci-codegen
-          config: .grype.yaml
-          fail-build: true
-          severity-cutoff: critical
-          only-fixed: true
-          output-file: grype-codegen.sarif
       - uses: actions/upload-artifact@v7
         if: always()
         with:
@@ -419,7 +386,7 @@ jobs:
         run: echo "tree_tag=tree-$(git rev-parse 'HEAD^{tree}')" >>"$GITHUB_OUTPUT"
       - uses: aws-actions/configure-aws-credentials@v6
         with:
-          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          role-to-assume: ${{ secrets.AWS_CANDIDATE_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
       - id: ecr
         uses: aws-actions/amazon-ecr-login@v2
@@ -435,14 +402,8 @@ jobs:
           docker buildx imagetools create \
             --tag "$REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" \
             "$REGISTRY/$ECR_REPOSITORY-candidate:$TREE_TAG"
-          docker buildx imagetools create \
-            --tag "$REGISTRY/$ECR_REPOSITORY-sandbox:$IMAGE_TAG" \
-            "$REGISTRY/$ECR_REPOSITORY-sandbox-candidate:$TREE_TAG"
           aws ecr batch-delete-image \
             --repository-name "$ECR_REPOSITORY-candidate" \
-            --image-ids "imageTag=$TREE_TAG" >/dev/null || true
-          aws ecr batch-delete-image \
-            --repository-name "$ECR_REPOSITORY-sandbox-candidate" \
             --image-ids "imageTag=$TREE_TAG" >/dev/null || true
       - name: Require the exact verified candidate
         if: vars.CANDIDATE_IMAGE_PUBLISHING_ENABLED == 'true' && steps.promote.outcome != 'success'
@@ -458,10 +419,8 @@ jobs:
           files: docker-bake.hcl
           set: |
             runtime.tags=${{ steps.ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ env.IMAGE_TAG }}
-            codegen.tags=${{ steps.ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}-sandbox:${{ env.IMAGE_TAG }}
             *.cache-from=type=gha,scope=runtime
             runtime.cache-to=type=gha,mode=max,scope=runtime,ignore-error=true
-            codegen.cache-to=type=gha,mode=max,scope=codegen,ignore-error=true
 
   deploy-eks:
     needs: [changes, verify, publish-images]
@@ -474,7 +433,8 @@ jobs:
       needs.publish-images.result == 'success' &&
       vars.AWS_REGION != '' &&
       vars.EKS_CLUSTER_NAME != '' &&
-      vars.ECR_REPOSITORY != ''
+      vars.ECR_REPOSITORY != '' &&
+      vars.STANDALONE_DEPLOYMENT_ENABLED == 'true'
     permissions:
       contents: read
       id-token: write

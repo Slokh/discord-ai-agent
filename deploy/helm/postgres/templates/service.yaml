@@ -1,0 +1,19 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "discord-ai-agent-postgres.fullname" . }}
+  labels:
+    {{- include "discord-ai-agent-postgres.labels" . | nindent 4 }}
+    app.kubernetes.io/component: postgres
+spec:
+  type: ClusterIP
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: postgres
+  selector:
+    {{- if .Values.workload.enabled }}
+    {{- include "discord-ai-agent-postgres.selectorLabels" . | nindent 4 }}
+    {{- else }}
+    {{- toYaml .Values.bridgeSelector | nindent 4 }}
+    {{- end }}

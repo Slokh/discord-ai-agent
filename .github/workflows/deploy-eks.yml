@@ -4,9 +4,29 @@ on:
   workflow_call:
     inputs:
       image_tag:
-        description: Immutable application and sandbox image tag to deploy
+        description: Immutable runtime image tag to deploy
         required: true
         type: string
+      bot_replicas:
+        description: Discord Gateway replicas
+        required: false
+        default: 1
+        type: number
+  workflow_dispatch:
+    inputs:
+      confirmation:
+        description: Type prepare-cutover to deploy manually
+        required: true
+        type: string
+      image_tag:
+        description: Immutable runtime image tag to deploy
+        required: true
+        type: string
+      bot_replicas:
+        description: Use zero for readiness, then one only after the old Gateway is stopped
+        required: true
+        default: 0
+        type: number
 
 permissions:
   contents: read
@@ -18,6 +38,7 @@ concurrency:
 
 jobs:
   deploy-eks:
+    if: github.event_name != 'workflow_dispatch' || inputs.confirmation == 'prepare-cutover'
     runs-on: ubuntu-latest
     env:
       AWS_REGION: ${{ vars.AWS_REGION }}
@@ -26,10 +47,8 @@ jobs:
       HELM_RELEASE: ${{ vars.HELM_RELEASE || 'discord-ai-agent' }}
       K8S_NAMESPACE: ${{ vars.K8S_NAMESPACE || 'discord-ai-agent' }}
       DISCORD_BOT_CHANNEL_ID: ${{ vars.DISCORD_BOT_CHANNEL_ID }}
-      CONSOLE_TLS_CERTIFICATE_ARN: ${{ vars.CONSOLE_TLS_CERTIFICATE_ARN }}
-      CONSOLE_ROUTE53_HOSTED_ZONE_ID: ${{ vars.CONSOLE_ROUTE53_HOSTED_ZONE_ID }}
-      CONSOLE_PUBLIC_HOSTNAME: console.mindcool.dev
       IMAGE_TAG: ${{ inputs.image_tag }}
+      BOT_REPLICAS: ${{ inputs.bot_replicas }}
     steps:
       - uses: aws-actions/configure-aws-credentials@v6
         with:
@@ -46,7 +65,7 @@ jobs:
           cache: npm
       - run: npm ci --ignore-scripts
       - uses: azure/setup-helm@v5
-      - name: Deploy Helm chart
+      - name: Deploy bot and worker
         env:
           REGISTRY: ${{ steps.ecr.outputs.registry }}
         run: |
@@ -65,7 +84,7 @@ jobs:
             --create-namespace
             --set "image.repository=$REGISTRY/$ECR_REPOSITORY"
             --set "image.tag=$IMAGE_TAG"
-            --set "sandbox.image=$REGISTRY/$ECR_REPOSITORY-sandbox:$IMAGE_TAG"
+            --set "bot.replicas=$BOT_REPLICAS"
             --set-string "config.appRevision=$IMAGE_TAG"
             --set-string "config.releaseVerificationId=${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           )
@@ -75,101 +94,21 @@ jobs:
           if [ -n "${DISCORD_BOT_CHANNEL_ID:-}" ]; then
             helm_args+=(--set-string "config.botChannelId=$DISCORD_BOT_CHANNEL_ID")
           fi
-          if [ -n "${CONSOLE_TLS_CERTIFICATE_ARN:-}" ]; then
-            helm_args+=(
-              --set "console.publicService.enabled=true"
-              --set-string "console.publicService.annotations.service\\.beta\\.kubernetes\\.io/aws-load-balancer-type=nlb"
-              --set-string "console.publicService.annotations.service\\.beta\\.kubernetes\\.io/aws-load-balancer-scheme=internet-facing"
-              --set-string "console.publicService.annotations.service\\.beta\\.kubernetes\\.io/aws-load-balancer-ssl-cert=$CONSOLE_TLS_CERTIFICATE_ARN"
-              --set-string "console.publicService.annotations.service\\.beta\\.kubernetes\\.io/aws-load-balancer-ssl-ports=https"
-              --set-string "console.publicService.annotations.service\\.beta\\.kubernetes\\.io/aws-load-balancer-backend-protocol=http"
-            )
-          fi
           helm upgrade --install "$HELM_RELEASE" deploy/helm/discord-ai-agent \
             --rollback-on-failure \
-            --force-conflicts \
             --wait \
             --timeout 10m \
             "${helm_args[@]}"
-          if [ -n "${CONSOLE_TLS_CERTIFICATE_ARN:-}" ]; then
-            if [ -z "${CONSOLE_ROUTE53_HOSTED_ZONE_ID:-}" ]; then
-              echo "CONSOLE_ROUTE53_HOSTED_ZONE_ID is required when Console public TLS is enabled" >&2
-              exit 1
-            fi
-            load_balancer_hostname=""
-            for _ in $(seq 1 60); do
-              load_balancer_hostname="$(kubectl --namespace "$K8S_NAMESPACE" get service "$HELM_RELEASE-console-public" -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')"
-              if [ -n "$load_balancer_hostname" ]; then
-                break
-              fi
-              sleep 5
-            done
-            if [ -z "$load_balancer_hostname" ]; then
-              echo "Console load balancer did not publish a hostname" >&2
-              exit 1
-            fi
-            load_balancer_arn=""
-            load_balancer_zone_id=""
-            for _ in $(seq 1 30); do
-              load_balancer_json="$(aws elbv2 describe-load-balancers \
-                --query "LoadBalancers[?DNSName=='$load_balancer_hostname'] | [0].{arn:LoadBalancerArn,zoneId:CanonicalHostedZoneId}" \
-                --output json)"
-              load_balancer_arn="$(jq -r '.arn // empty' <<<"$load_balancer_json")"
-              load_balancer_zone_id="$(jq -r '.zoneId // empty' <<<"$load_balancer_json")"
-              if [ -n "$load_balancer_arn" ] && [ -n "$load_balancer_zone_id" ]; then
-                break
-              fi
-              sleep 5
-            done
-            if [ -z "$load_balancer_arn" ] || [ -z "$load_balancer_zone_id" ]; then
-              echo "Could not resolve the Console load balancer" >&2
-              exit 1
-            fi
-            aws elbv2 wait load-balancer-available --load-balancer-arns "$load_balancer_arn"
-            target_group_arn=""
-            for _ in $(seq 1 30); do
-              target_group_arn="$(aws elbv2 describe-target-groups \
-                --load-balancer-arn "$load_balancer_arn" \
-                --query 'TargetGroups[0].TargetGroupArn' \
-                --output text)"
-              if [ -n "$target_group_arn" ] && [ "$target_group_arn" != "None" ]; then
-                break
-              fi
-              sleep 5
-            done
-            if [ -z "$target_group_arn" ] || [ "$target_group_arn" = "None" ]; then
-              echo "Could not resolve the Console target group" >&2
-              exit 1
-            fi
-            healthy_targets=0
-            for _ in $(seq 1 60); do
-              healthy_targets="$(aws elbv2 describe-target-health \
-                --target-group-arn "$target_group_arn" \
-                --query 'length(TargetHealthDescriptions[?TargetHealth.State==`healthy`])' \
-                --output text)"
-              if [ "$healthy_targets" -gt 0 ]; then
-                break
-              fi
-              sleep 5
-            done
-            if [ "$healthy_targets" -eq 0 ]; then
-              echo "Console load balancer targets did not become healthy" >&2
-              exit 1
-            fi
-            change_batch="$(jq -nc \
-              --arg name "$CONSOLE_PUBLIC_HOSTNAME" \
-              --arg dnsName "$load_balancer_hostname" \
-              --arg hostedZoneId "$load_balancer_zone_id" \
-              '{Changes:[{Action:"UPSERT",ResourceRecordSet:{Name:$name,Type:"A",AliasTarget:{HostedZoneId:$hostedZoneId,DNSName:$dnsName,EvaluateTargetHealth:true}}}]}')"
-            change_id="$(aws route53 change-resource-record-sets \
-              --hosted-zone-id "$CONSOLE_ROUTE53_HOSTED_ZONE_ID" \
-              --change-batch "$change_batch" \
-              --query 'ChangeInfo.Id' \
-              --output text)"
-            aws route53 wait resource-record-sets-changed --id "$change_id"
-          fi
-      - name: Verify release and recover on failure
+      - name: Verify content-free readiness
         run: |
+          kubectl --namespace "$K8S_NAMESPACE" rollout status "deployment/$HELM_RELEASE-worker" --timeout=2m
+          if [ "$BOT_REPLICAS" = "0" ]; then
+            actual="$(kubectl --namespace "$K8S_NAMESPACE" get deployment "$HELM_RELEASE-bot" -o jsonpath='{.spec.replicas}')"
+            test "$actual" = "0"
+            permission="$(kubectl auth can-i create jobs.batch --namespace "$K8S_NAMESPACE" --as="system:serviceaccount:$K8S_NAMESPACE:$HELM_RELEASE-app")"
+            test "$permission" = "no"
+            exit 0
+          fi
           args=(
             --namespace "$K8S_NAMESPACE"
             --release "$HELM_RELEASE"
@@ -179,8 +118,5 @@ jobs:
           )
           if [ -n "${PREVIOUS_HELM_REVISION:-}" ]; then
             args+=(--previous-helm-revision "$PREVIOUS_HELM_REVISION")
-          fi
-          if [ -n "${CONSOLE_TLS_CERTIFICATE_ARN:-}" ]; then
-            args+=(--console-public-url "https://console.mindcool.dev")
           fi
           npx tsx scripts/postDeployVerification.ts "${args[@]}"

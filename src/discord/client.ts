@@ -1,4 +1,4 @@
-import { Client, Events, GatewayIntentBits, MessageFlags, Partials, type Message } from "discord.js";
+import { Client, Events, GatewayIntentBits, Partials, type Message } from "discord.js";
 import type { AppConfig } from "../config/env.js";
 import type { AgentRuntimeRepository } from "../db/agentRuntimeRepository.js";
 import type { BudgetRepository } from "../db/budgetRepository.js";
@@ -13,19 +13,12 @@ import type { DiscordCrawler } from "./crawler.js";
 import { persistDiscordMessage } from "./messagePersistence.js";
 import { sweepDiscordDeliveryObligations } from "./deliverySweep.js";
 import { handleMessageCreate, queueIncomingMessageEmbedding } from "./messageIngress.js";
-import { handleUndoCrossReaction, persistReactionMessage, persistReactionMessageUpdate } from "./reactions.js";
-import { handleDiscordRetryReaction, releaseDiscordRetryReaction } from "./retryReaction.js";
-import { clearDiscordImprovementSignalsForMessage, clearDiscordImprovementSignalsForReaction, handleDiscordImprovementReaction } from "./improvementReaction.js";
+import { persistReactionMessage, persistReactionMessageUpdate } from "./reactions.js";
 import { deletedMessageIdsForConfiguredGuild, isSelfMessage, isSelfUser, shouldProcessGuildEvent } from "./mentionParsing.js";
 import { discordMessageTraceContext } from "./requestContext.js";
 import { logger } from "../util/logger.js";
 import { runWithTrace } from "../util/trace.js";
-import { announceDeployment } from "./deploymentAnnouncements.js";
-import { handleDiscordRichInteraction } from "./components/interactionHandler.js";
-import { DiscordInteractionResponder } from "./components/interactionResponder.js";
 import { DiscordTaskSupervisor } from "./taskSupervisor.js";
-import { waitForDeploymentPromotion } from "./deploymentPromotion.js";
-import { handleImprovementClarificationReply } from "./improvementReporterConversations.js";
 
 export type DiscordAiAgentBotRuntime = {
   client: Client;
@@ -63,7 +56,6 @@ export function createDiscordAiAgentBot(input: {
       partials: [Partials.Message, Partials.Channel, Partials.Reaction]
     });
   const taskSupervisor = new DiscordTaskSupervisor(logger);
-  let componentActionCleanupTimer: NodeJS.Timeout | null = null;
 
   client.once(Events.ClientReady, (readyClient) => {
     logger.info(
@@ -87,37 +79,6 @@ export function createDiscordAiAgentBot(input: {
         premiumSkuIds: input.config.discord.premiumSkuIds
       }) });
     }
-    const expireComponentActions = () => void taskSupervisor.run({
-      kind: "maintenance",
-      label: "component_action_expiry",
-      task: async () => {
-        const expired = await input.repo.expireDiscordComponentActions({ limit: 2_000 });
-        if (expired > 0) logger.info({ expired }, "Expired stale Discord component actions");
-      },
-    });
-    expireComponentActions();
-    componentActionCleanupTimer = setInterval(expireComponentActions, 60 * 60_000);
-    componentActionCleanupTimer.unref?.();
-    void taskSupervisor.run({ kind: "maintenance", label: "deployment_startup", task: async () => {
-      const promoted = await waitForDeploymentPromotion({
-        repo: input.repo,
-        revision: input.config.appRevision,
-        deploymentId: input.config.releaseNotes.verificationId,
-      });
-      if (!promoted) {
-        logger.warn({ revision: input.config.appRevision }, "Skipping deployment announcements because release verification was not promoted");
-        return;
-      }
-      const announcementResult = await announceDeployment({
-        client: readyClient,
-        config: input.config,
-        repo: input.repo,
-        openRouter: input.openRouter,
-      });
-      if (announcementResult !== "disabled" && announcementResult !== "duplicate") {
-        logger.info({ result: announcementResult, revision: input.config.appRevision }, "Deployment announcement lifecycle completed");
-      }
-    } });
   });
 
   client.on(Events.ShardDisconnect, (event, shardId) => {
@@ -145,7 +106,6 @@ export function createDiscordAiAgentBot(input: {
     label: "message_create",
     logContext: { messageId: message.id, channelId: message.channelId },
     task: () => runWithTrace(discordMessageTraceContext(message), async () => {
-      if (await handleImprovementClarificationReply(input, message)) return;
       await handleMessageCreate(input, client, message);
     }),
   }));
@@ -180,47 +140,18 @@ export function createDiscordAiAgentBot(input: {
 
   client.on(Events.MessageReactionAdd, (reaction, user) => void taskSupervisor.run({ kind: "request", label: "reaction_add", task: () =>
     runWithTrace(discordMessageTraceContext(reaction.message), async () => {
-      if (user && !isSelfUser(user, client.user?.id)) {
-        const handled = await handleUndoCrossReaction(input, client, reaction, user).catch((error) => {
-          logger.warn({ err: error }, "Failed to handle ❌ undo reaction");
-          return false;
-        });
-        if (handled) return;
-        const retried = await handleDiscordRetryReaction(input, client, reaction, user).catch((error) => {
-          logger.warn({ err: error }, "Failed to handle Discord retry reaction");
-          return false;
-        });
-        if (retried) {
-          await persistReactionMessageUpdate(input, reaction).catch((error) => {
-            logger.warn({ err: error }, "Failed to persist retry reaction add");
-          });
-          return;
-        }
-      }
-      await Promise.all([
-        persistReactionMessageUpdate(input, reaction).catch((error) => {
-          logger.warn({ err: error }, "Failed to persist reaction add");
-        }),
-        handleDiscordImprovementReaction({ ...input, botUserId: client.user?.id }, reaction, user, true).catch((error) => {
-          logger.warn({ err: error }, "Failed to record Discord improvement signal");
-        })
-      ]);
+      if (user && isSelfUser(user, client.user?.id)) return;
+      await persistReactionMessageUpdate(input, reaction).catch((error) => {
+        logger.warn({ err: error }, "Failed to persist reaction add");
+      });
     }),
   }));
 
-  client.on(Events.MessageReactionRemove, (reaction, user) => void taskSupervisor.run({ kind: "maintenance", label: "reaction_remove", task: () =>
+  client.on(Events.MessageReactionRemove, (reaction) => void taskSupervisor.run({ kind: "maintenance", label: "reaction_remove", task: () =>
     runWithTrace(discordMessageTraceContext(reaction.message), async () => {
-      await Promise.all([
-        persistReactionMessageUpdate(input, reaction).catch((error) => {
-          logger.warn({ err: error }, "Failed to persist reaction remove");
-        }),
-        handleDiscordImprovementReaction({ ...input, botUserId: client.user?.id }, reaction, user, false).catch((error) => {
-          logger.warn({ err: error }, "Failed to withdraw Discord improvement signal");
-        }),
-        releaseDiscordRetryReaction(input, reaction, user).catch((error) => {
-          logger.warn({ err: error }, "Failed to release Discord retry reaction");
-        })
-      ]);
+      await persistReactionMessageUpdate(input, reaction).catch((error) => {
+        logger.warn({ err: error }, "Failed to persist reaction remove");
+      });
     }),
   }));
 
@@ -229,7 +160,6 @@ export function createDiscordAiAgentBot(input: {
       await persistReactionMessageUpdate(input, reaction).catch((error) => {
         logger.warn({ err: error }, "Failed to persist reaction emoji removal");
       });
-      await clearDiscordImprovementSignalsForReaction(input, reaction);
     }),
   }));
 
@@ -238,34 +168,7 @@ export function createDiscordAiAgentBot(input: {
       await persistReactionMessage(input, message).catch((error) => {
         logger.warn({ err: error }, "Failed to persist reaction clear");
       });
-      await clearDiscordImprovementSignalsForMessage(input, message);
     }),
-  }));
-
-  client.on(Events.InteractionCreate, (interaction) => void taskSupervisor.run({
-    kind: "request",
-    label: "interaction_create",
-    logContext: { interactionId: interaction.id },
-    onRejected: async () => {
-      if (interaction.isMessageComponent() || interaction.isModalSubmit()) {
-        await new DiscordInteractionResponder(interaction, logger).ephemeral("I’m restarting right now. Please try that control again in a moment.");
-      }
-    },
-    task: async () => {
-      if (await handleDiscordRichInteraction(input, client, interaction).catch((error) => {
-        logger.error({ err: error, interactionId: interaction.id }, "Discord rich interaction handler failed");
-        return false;
-      })) return;
-      if (!interaction.isChatInputCommand() || interaction.commandName !== "ai") return;
-      await interaction
-        .reply({
-          content: "Discord AI Agent slash commands are disabled. Mention me with `@ai status` or `@ai tools` instead.",
-          flags: MessageFlags.Ephemeral
-        })
-        .catch((error) => {
-          logger.warn({ err: error }, "Failed to reply to stale slash command interaction");
-        });
-    },
   }));
 
   return {
@@ -275,12 +178,10 @@ export function createDiscordAiAgentBot(input: {
       await client.login(input.config.discord.token);
     },
     drain: async (timeoutMs = 30_000) => {
-      if (componentActionCleanupTimer) clearInterval(componentActionCleanupTimer);
       await taskSupervisor.drain(timeoutMs);
     },
     destroy: () => {
       taskSupervisor.stopAccepting();
-      if (componentActionCleanupTimer) clearInterval(componentActionCleanupTimer);
       client.destroy();
     }
   };

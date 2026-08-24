@@ -7,15 +7,11 @@ import { startSandboxReconciler } from "./execution/reconciler.js";
 import { embedStoredMessage, embedStoredMessages } from "./memory/embedding.js";
 import { DiscordCrawler } from "./discord/crawler.js";
 import { createDiscordAiAgentBot } from "./discord/client.js";
-import { startAgentTaskNotifier } from "./discord/taskNotifications.js";
-import { startImprovementReporterNotifier } from "./discord/improvementReporterConversations.js";
 import { startJobs } from "./jobs/queue.js";
 import { logger } from "./util/logger.js";
 import { createAgentRuntimeRunner } from "./discord/agentRuntimeRunner.js";
 import { startPaymentReconciler } from "./payments/reconciler.js";
 import { createApplicationServices } from "./runtime/applicationServices.js";
-import { createReminderDeliveryRunner } from "./reminders/reminderDelivery.js";
-import { createScheduledAgentRequestRunner } from "./reminders/scheduledAgentExecution.js";
 import { startOperatorConsole } from "./console/server.js";
 import { startServiceHeartbeat } from "./runtime/serviceHeartbeat.js";
 import type { ServiceComponent } from "./db/serviceHeartbeatRepository.js";
@@ -30,12 +26,12 @@ async function main() {
   const startsEmbeddingWorker = startsWorker && config.worker.embeddingEnabled;
   const startsTaskWorker = startsWorker && config.worker.taskEnabled;
   const startsAgentRuntimeWorker = startsWorker && config.worker.agentRuntimeEnabled;
-  const startsImprovementWorker = startsWorker;
-  const startsReminderWorker = startsWorker;
-  const startsDiscordClient = startsBot || startsCrawlWorker || startsAgentRuntimeWorker || startsReminderWorker;
+  const startsImprovementWorker = false;
+  const startsReminderWorker = false;
+  const startsDiscordClient = startsBot || startsCrawlWorker || startsAgentRuntimeWorker;
   const startsPaymentRuntime = startsBot || startsAgentRuntimeWorker;
   const startsJobRuntime = startsApi || startsBot || startsWorker;
-  if (startsBot || startsCrawlWorker || startsAgentRuntimeWorker || startsReminderWorker) assertDiscordConfig(config);
+  if (startsBot || startsCrawlWorker || startsAgentRuntimeWorker) assertDiscordConfig(config);
   if (startsBot || startsEmbeddingWorker || startsTaskWorker || startsAgentRuntimeWorker) assertOpenRouterConfig(config);
   if (startsApi) assertTaskCallbackConfig(config);
   if (startsTaskWorker) assertExecutionConfig(config);
@@ -169,25 +165,7 @@ async function main() {
     agentRuntimeWorker: startsAgentRuntimeWorker,
     improvementWorker: startsImprovementWorker,
     reminderWorker: startsReminderWorker,
-    reminders: client && startsReminderWorker
-      ? createReminderDeliveryRunner({
-          client,
-          config,
-          repo,
-          agentRuntime: agentRuntimeRepo,
-          scheduledAgent: createScheduledAgentRequestRunner({
-            client,
-            config,
-            repo,
-            agentRuntime: agentRuntimeRepo,
-            deliveryObligations: deliveryObligationsRepo,
-            budgetRepo,
-            rngRepo,
-            walletService,
-            openRouter,
-          }),
-        })
-      : undefined,
+    reminders: undefined,
     repo,
     agentRuntimeRepo,
     deliveryObligations: deliveryObligationsRepo,
@@ -213,16 +191,12 @@ async function main() {
     startsBot && client && crawler instanceof DiscordCrawler && jobs
       ? createDiscordAiAgentBot({ config, repo, budgetRepo, rngRepo, walletService, agentRuntime: agentRuntimeRepo, deliveryObligations: deliveryObligationsRepo, openRouter, crawler, jobs, client })
       : null;
-  const taskNotifier = startsBot && client ? startAgentTaskNotifier({ client, repo, config }) : null;
-  const improvementReporterNotifier = startsBot && client ? startImprovementReporterNotifier({ client, repo, config }) : null;
 
   let shuttingDown = false;
   const shutdown = async () => {
     if (shuttingDown) return;
     shuttingDown = true;
     logger.info("Shutting down Discord AI Agent");
-    taskNotifier?.stop();
-    improvementReporterNotifier?.stop();
     await runtime?.drain(30_000).catch((error) => logger.warn({ err: error }, "Timed out draining Discord bot handlers"));
     sandboxReconciler?.stop();
     paymentReconciler?.stop();

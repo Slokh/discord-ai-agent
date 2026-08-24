@@ -160,6 +160,9 @@ export async function handleMessageCreate(
     return;
   }
   await responseSink.acknowledge();
+  if ("sendTyping" in message.channel && typeof message.channel.sendTyping === "function") {
+    await message.channel.sendTyping().catch((error) => requestLogger.debug({ err: error }, "Could not send Discord typing state"));
+  }
   await input.deliveryObligations?.upsertPending({
     executionId: agentRuntimeExecution.executionId,
     threadKey: agentRuntimeExecution.session.threadKey,

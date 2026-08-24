@@ -1,9 +1,6 @@
 name: Production Observation
 
 on:
-  schedule:
-    - cron: "*/15 * * * *"
-    - cron: "17 */6 * * *"
   workflow_dispatch:
 
 permissions:

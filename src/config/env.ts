@@ -23,9 +23,9 @@ export const productConfig = {
     baseUrl: "https://openrouter.ai/api/v1",
     appTitle: "Discord AI Agent",
     httpReferer: PUBLIC_REPOSITORY_URL,
-    chat: "openai/gpt-5.6-luna",
+    chat: "openai/gpt-5.6-terra",
     codegen: "openai/gpt-5.6-terra",
-    utility: "openai/gpt-5.6-luna",
+    utility: "openai/gpt-5.6-terra",
     embedding: "qwen/qwen3-embedding-8b",
     image: "google/gemini-3.1-flash-image",
     transcription: "openai/whisper-large-v3-turbo",
@@ -208,7 +208,9 @@ export function loadConfig(argv = process.argv) {
     worker: {
       crawlEnabled: true,
       embeddingEnabled: true,
-      taskEnabled: true,
+      // Repository mutation is intentionally not part of the lightweight
+      // friend-server deployment. Keep the execution subsystem dormant.
+      taskEnabled: false,
       agentRuntimeEnabled: true,
       retention: productConfig.retention,
       memoryCompaction: {

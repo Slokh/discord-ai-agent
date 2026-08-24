@@ -7,19 +7,18 @@ describe("deployment toolset", () => {
     const tools = deploymentToolset(loadConfig());
     const names = tools.localTools.map((tool) => tool.name);
     expect(names).toContain("loadSkillContext");
-    expect(names).toContain("composeDiscordResponse");
+    expect(names).not.toContain("composeDiscordResponse");
     expect(names).toContain("drawRandom");
     expect(names).toContain("web__run");
     expect(names).not.toContain("requestAdditionalTools");
   });
 
-  it("still applies deployment-specific presentation schemas", () => {
+  it("keeps retired presentation controls absent even when premium SKUs exist", () => {
     const previous = process.env.DISCORD_PREMIUM_SKU_IDS;
     process.env.DISCORD_PREMIUM_SKU_IDS = "123456789012345678";
     try {
       const tools = deploymentToolset(loadConfig());
-      expect(JSON.stringify(tools.localTools.find((tool) => tool.name === "composeDiscordResponse")?.parameters))
-        .toContain('"premium"');
+      expect(tools.localTools.find((tool) => tool.name === "composeDiscordResponse")).toBeUndefined();
     } finally {
       if (previous === undefined) delete process.env.DISCORD_PREMIUM_SKU_IDS;
       else process.env.DISCORD_PREMIUM_SKU_IDS = previous;

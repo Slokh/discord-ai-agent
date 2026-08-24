@@ -54,23 +54,12 @@ describe("architecture guardrails", () => {
     expect(deployment).toMatch(/startupProbe:[\s\S]*periodSeconds: 5[\s\S]*failureThreshold: 24[\s\S]*readinessProbe:/);
   });
 
-  it("keeps hosted Console ingress dedicated, TLS-terminated, and explicitly gated", async () => {
+  it("keeps the optional Console out of the lightweight production deployment", async () => {
     const consoleDeployment = await fs.readFile(path.join(process.cwd(), "deploy/helm/discord-ai-agent/templates/console.yaml"), "utf8");
     const deploymentWorkflow = await fs.readFile(path.join(process.cwd(), ".github/workflows/deploy-eks.yml"), "utf8");
-    expect(consoleDeployment).toContain('include "discord-ai-agent.consoleAuthEnv"');
-    expect(consoleDeployment).toContain("console.publicService.enabled");
-    expect(consoleDeployment).toContain("kind: Service");
-    expect(consoleDeployment).not.toContain("kind: Ingress");
-    expect(deploymentWorkflow).toContain("CONSOLE_TLS_CERTIFICATE_ARN");
-    expect(deploymentWorkflow).toContain("CONSOLE_ROUTE53_HOSTED_ZONE_ID");
-    expect(deploymentWorkflow).toContain("aws-load-balancer-ssl-cert");
-    expect(deploymentWorkflow).toContain("aws-load-balancer-type=nlb");
-    expect(deploymentWorkflow).toContain("aws route53 change-resource-record-sets");
-    expect(deploymentWorkflow).toContain("aws route53 wait resource-record-sets-changed");
-    expect(deploymentWorkflow).toContain("aws elbv2 describe-load-balancers");
-    expect(deploymentWorkflow).toContain("aws elbv2 wait load-balancer-available");
-    expect(deploymentWorkflow).toContain("aws elbv2 describe-target-health");
-    expect(deploymentWorkflow).not.toContain("CONSOLE_TUNNEL_ENABLED");
+    expect(consoleDeployment).toContain("if .Values.console.enabled");
+    expect(deploymentWorkflow).not.toContain("CONSOLE_TLS_CERTIFICATE_ARN");
+    expect(deploymentWorkflow).not.toContain("console-public");
   });
 
   it("keeps broad sandbox HTTPS egress away from private and metadata networks", async () => {
@@ -80,11 +69,7 @@ describe("architecture guardrails", () => {
     }
   });
 
-  it("keeps private production regression output out of GitHub artifacts and detailed logs", async () => {
-    const scheduled = await fs.readFile(
-      path.join(process.cwd(), ".github/workflows/private-regressions.yml"),
-      "utf8",
-    );
+  it("keeps deployment verification content-free and free of paid canaries", async () => {
     const deployment = await fs.readFile(
       path.join(process.cwd(), ".github/workflows/deploy-eks.yml"),
       "utf8",
@@ -93,41 +78,13 @@ describe("architecture guardrails", () => {
       path.join(process.cwd(), "scripts/postDeployVerification.ts"),
       "utf8",
     );
-    const observation = await fs.readFile(
-      path.join(process.cwd(), ".github/workflows/production-observation.yml"),
-      "utf8",
-    );
-    expect(scheduled).toContain("--safe-summary");
-    expect(scheduled).toContain("--private-only");
-    expect(scheduled).toContain("--record-improvement-results");
-    expect(scheduled).toContain("dist/scripts/exportImprovementEvals.js");
-    expect(scheduled).toContain("dist/scripts/improve.js");
-    expect(scheduled).toContain("eval_detection");
-    expect(scheduled).toContain("private-regression-suite");
-    expect(scheduled).not.toContain("exportRunFeedbackEvals");
     expect(deployment).toContain("scripts/postDeployVerification.ts");
-    expect(verification).toContain("--safe-summary");
-    expect(verification).toContain("--private-only");
-    expect(verification).toContain("--record-improvement-results");
-    expect(verification).toContain("dist/scripts/exportImprovementEvals.js");
-    expect(verification).not.toContain("exportRunFeedbackEvals");
+    expect(verification).not.toContain("postDeployCanary");
+    expect(verification).not.toContain("--private-only");
+    expect(verification).not.toContain("--record-improvement-results");
     expect(verification).toContain("verifyDeploymentStability");
     expect(verification).toContain("stabilitySeconds: 30");
-    expect(verification).toContain("recordFailureDetection");
-    expect(verification).toContain("deployment_detection");
-    expect(verification).toContain("eval_detection");
-    expect(observation).toContain("--record-detection");
-    expect(observation).toContain('cron: "*/15 * * * *"');
-    expect(observation).toContain("dist/scripts/improvementWatchdog.js");
-    expect(observation).toContain("group: improvement-watchdog");
-    expect(observation).toContain("group: production-revision-quality");
-    expect(observation).toContain("cancel-in-progress: false");
-    expect(observation).not.toMatch(/^concurrency:\n {2}group: production-observation/m);
-    expect(observation).toContain("improvements, detection");
-    expect(observation).toContain("verification");
-    expect(observation).not.toContain("feedback");
-    expect(deployment).toContain("--force-conflicts");
-    expect(scheduled).not.toContain("upload-artifact");
+    expect(deployment).toContain("kubectl auth can-i create jobs.batch");
     expect(deployment).not.toContain("upload-artifact");
   });
 

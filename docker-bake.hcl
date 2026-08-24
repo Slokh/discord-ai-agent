@@ -1,5 +1,5 @@
 group "default" {
-  targets = ["runtime", "codegen"]
+  targets = ["runtime"]
 }
 
 target "runtime" {

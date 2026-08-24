@@ -1,0 +1,6 @@
+apiVersion: v2
+name: discord-ai-agent-postgres
+description: Retained-volume Postgres workload for the standalone Discord agent.
+type: application
+version: 0.1.0
+appVersion: "16"

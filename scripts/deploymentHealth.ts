@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-const REQUIRED_COMPONENTS = ["api", "bot", "worker", "console"] as const;
+const REQUIRED_COMPONENTS = ["bot", "worker"] as const;
 
 type Component = typeof REQUIRED_COMPONENTS[number];
 type KubernetesList = { items?: unknown[] };

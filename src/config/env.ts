@@ -207,7 +207,10 @@ export function loadConfig(argv = process.argv) {
     },
     worker: {
       crawlEnabled: true,
-      embeddingEnabled: true,
+      // Structured and keyword retrieval are the production default. Keep the
+      // optional paid embedding consumer dormant unless it is redesigned as an
+      // explicit, bounded backfill.
+      embeddingEnabled: false,
       // Repository mutation is intentionally not part of the lightweight
       // friend-server deployment. Keep the execution subsystem dormant.
       taskEnabled: false,

@@ -33,7 +33,7 @@ describe("config", () => {
       expect(config.execution).not.toHaveProperty("codegenLease");
       expect(config.worker).toEqual(expect.objectContaining({
         crawlEnabled: true,
-        embeddingEnabled: true,
+        embeddingEnabled: false,
         taskEnabled: false,
         agentRuntimeEnabled: true
       }));

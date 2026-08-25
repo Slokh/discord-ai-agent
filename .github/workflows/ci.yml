@@ -243,7 +243,7 @@ jobs:
           provenance: false
           files: docker-bake.hcl
           set: |
-            runtime.tags=${{ steps.ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}-candidate:${{ steps.identity.outputs.tree_tag }}
+            runtime.tags=${{ steps.ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ steps.identity.outputs.tree_tag }}
             *.cache-from=type=gha,scope=runtime
 
   candidate-security:
@@ -268,14 +268,14 @@ jobs:
       - name: Generate runtime SBOM
         uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
         with:
-          image: ${{ needs.candidate-images.outputs.registry }}/${{ env.ECR_REPOSITORY }}-candidate:${{ needs.candidate-images.outputs.tree_tag }}
+          image: ${{ needs.candidate-images.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ needs.candidate-images.outputs.tree_tag }}
           format: cyclonedx-json
           output-file: sbom-runtime.cdx.json
           upload-artifact: false
       - name: Scan runtime image
         uses: anchore/scan-action@e1165082ffb1fe366ebaf02d8526e7c4989ea9d2 # v7.4.0
         with:
-          image: ${{ needs.candidate-images.outputs.registry }}/${{ env.ECR_REPOSITORY }}-candidate:${{ needs.candidate-images.outputs.tree_tag }}
+          image: ${{ needs.candidate-images.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ needs.candidate-images.outputs.tree_tag }}
           config: .grype.yaml
           fail-build: true
           severity-cutoff: critical
@@ -401,9 +401,9 @@ jobs:
         run: |
           docker buildx imagetools create \
             --tag "$REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" \
-            "$REGISTRY/$ECR_REPOSITORY-candidate:$TREE_TAG"
+            "$REGISTRY/$ECR_REPOSITORY:$TREE_TAG"
           aws ecr batch-delete-image \
-            --repository-name "$ECR_REPOSITORY-candidate" \
+            --repository-name "$ECR_REPOSITORY" \
             --image-ids "imageTag=$TREE_TAG" >/dev/null || true
       - name: Require the exact verified candidate
         if: vars.CANDIDATE_IMAGE_PUBLISHING_ENABLED == 'true' && steps.promote.outcome != 'success'

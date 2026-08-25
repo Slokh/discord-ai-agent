@@ -19,6 +19,20 @@ const requiredArchitectureGuides = [
 ];
 
 describe("architecture guardrails", () => {
+  it("does not override Discord.js onto an incompatible HTTP runtime", async () => {
+    const manifest = JSON.parse(
+      await fs.readFile(path.join(process.cwd(), "package.json"), "utf8"),
+    ) as { dependencies?: Record<string, string>; overrides?: Record<string, string> };
+    const lock = JSON.parse(
+      await fs.readFile(path.join(process.cwd(), "package-lock.json"), "utf8"),
+    ) as { packages: Record<string, { version?: string; dependencies?: Record<string, string> }> };
+
+    expect(manifest.overrides).not.toHaveProperty("undici");
+    expect(manifest.dependencies?.undici).toMatch(/^\^6\./);
+    expect(lock.packages["node_modules/discord.js"]?.dependencies?.undici).toMatch(/^\^6\./);
+    expect(lock.packages["node_modules/undici"]?.version).toMatch(/^6\./);
+  });
+
   it("keeps production deployment in the main CI check graph", async () => {
     const ci = await fs.readFile(path.join(process.cwd(), ".github/workflows/ci.yml"), "utf8");
     const deployment = await fs.readFile(
@@ -34,6 +48,8 @@ describe("architecture guardrails", () => {
     expect(deployment).toContain("workflow_call:");
     expect(deployment).toContain("IMAGE_TAG: ${{ inputs.image_tag }}");
     expect(deployment).not.toContain("workflow_run:");
+    expect(ci).toContain("$ECR_REPOSITORY:$TREE_TAG");
+    expect(ci).not.toContain("$ECR_REPOSITORY-candidate");
   });
 
   it("does not mount Kubernetes API credentials into app or sandbox service accounts", async () => {
@@ -85,6 +101,7 @@ describe("architecture guardrails", () => {
     expect(verification).toContain("verifyDeploymentStability");
     expect(verification).toContain("stabilitySeconds: 30");
     expect(deployment).toContain("kubectl auth can-i create jobs.batch");
+    expect(deployment).toMatch(/permission="\$\(kubectl auth can-i create jobs\.batch[^\n]+\|\| true\)"/);
     expect(deployment).not.toContain("upload-artifact");
   });
 

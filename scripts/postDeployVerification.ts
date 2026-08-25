@@ -153,6 +153,20 @@ function command(command: string, args: string[], timeout = 120_000) {
   return execFileSync(command, args, { encoding: "utf8", timeout, stdio: ["ignore", "pipe", "inherit"] }).trim();
 }
 
+function commandAllowingDenied(commandName: string, args: string[], timeout = 120_000) {
+  try {
+    return command(commandName, args, timeout);
+  } catch (error) {
+    if (!error || typeof error !== "object" || !("status" in error) || error.status !== 1 || !("stdout" in error)) throw error;
+    const stdout = typeof error.stdout === "string"
+      ? error.stdout
+      : Buffer.isBuffer(error.stdout)
+        ? error.stdout.toString("utf8")
+        : "";
+    return stdout.trim();
+  }
+}
+
 async function runCli() {
   const args = parseArgs(process.argv.slice(2));
   const result = await verifyReleaseWithRecovery({
@@ -171,7 +185,7 @@ async function runCli() {
       for (const component of ["bot", "worker"]) {
         command("kubectl", ["--namespace", args.namespace, "rollout", "status", `deployment/${args.release}-${component}`, "--timeout=2m"]);
       }
-      const allowed = command("kubectl", [
+      const allowed = commandAllowingDenied("kubectl", [
         "auth", "can-i", "create", "jobs.batch", "--namespace", args.namespace,
         `--as=system:serviceaccount:${args.namespace}:${args.release}-app`,
       ]);

@@ -105,7 +105,7 @@ jobs:
           if [ "$BOT_REPLICAS" = "0" ]; then
             actual="$(kubectl --namespace "$K8S_NAMESPACE" get deployment "$HELM_RELEASE-bot" -o jsonpath='{.spec.replicas}')"
             test "$actual" = "0"
-            permission="$(kubectl auth can-i create jobs.batch --namespace "$K8S_NAMESPACE" --as="system:serviceaccount:$K8S_NAMESPACE:$HELM_RELEASE-app")"
+            permission="$(kubectl auth can-i create jobs.batch --namespace "$K8S_NAMESPACE" --as="system:serviceaccount:$K8S_NAMESPACE:$HELM_RELEASE-app" || true)"
             test "$permission" = "no"
             exit 0
           fi

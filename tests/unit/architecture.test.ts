@@ -102,6 +102,7 @@ describe("architecture guardrails", () => {
     expect(verification).toContain("stabilitySeconds: 30");
     expect(deployment).toContain("kubectl auth can-i create jobs.batch");
     expect(deployment).toMatch(/permission="\$\(kubectl auth can-i create jobs\.batch[^\n]+\|\| true\)"/);
+    expect(verification).toContain("commandAllowingDenied(\"kubectl\"");
     expect(deployment).not.toContain("upload-artifact");
   });
 

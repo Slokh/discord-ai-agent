@@ -48,6 +48,8 @@ describe("architecture guardrails", () => {
     expect(deployment).toContain("workflow_call:");
     expect(deployment).toContain("IMAGE_TAG: ${{ inputs.image_tag }}");
     expect(deployment).not.toContain("workflow_run:");
+    expect(ci).toContain("$ECR_REPOSITORY:$TREE_TAG");
+    expect(ci).not.toContain("$ECR_REPOSITORY-candidate");
   });
 
   it("does not mount Kubernetes API credentials into app or sandbox service accounts", async () => {

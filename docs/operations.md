@@ -245,6 +245,9 @@ Steady state is one `m6a.large` node (with room for a second
 only during managed updates), one 30 GiB disposable node disk, and the retained
 20 GiB encrypted Postgres volume. AWS Backup selects only that Postgres volume,
 and paid EKS control-plane logs and EC2 detailed monitoring are disabled.
+Because EBS volumes are zonal, the managed node group is pinned to the retained
+Postgres volume's availability zone; a one-node group spanning zones can strand
+the database after scale-in.
 
 ### Hosted Console
 

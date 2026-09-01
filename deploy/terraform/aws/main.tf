@@ -109,7 +109,9 @@ module "eks" {
         enabled = true
       }
 
-      subnet_ids        = module.vpc.public_subnets
+      # EBS volumes are zonal. Keep the sole steady-state node in the same
+      # availability zone as the retained production Postgres volume.
+      subnet_ids        = [module.vpc.public_subnets[1]]
       instance_types    = ["m6a.large"]
       capacity_type     = "ON_DEMAND"
       enable_monitoring = false

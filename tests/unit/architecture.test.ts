@@ -63,6 +63,7 @@ describe("architecture guardrails", () => {
     expect(terraform).toContain("min_size     = 1");
     expect(terraform).toContain("max_size     = 2");
     expect(terraform).toContain("desired_size = 1");
+    expect(terraform).toContain("subnet_ids        = [module.vpc.public_subnets[1]]");
     expect(terraform).toContain("volume_size           = 30");
     expect(terraform).toContain("enable_monitoring = false");
     expect(terraform).toContain("delete_after = 14");

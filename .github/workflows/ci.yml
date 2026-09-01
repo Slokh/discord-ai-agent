@@ -192,6 +192,8 @@ jobs:
       - uses: azure/setup-helm@v5
       - run: helm lint deploy/helm/discord-ai-agent
       - run: helm template discord-ai-agent deploy/helm/discord-ai-agent >/tmp/discord-ai-agent.yaml
+      - run: helm lint deploy/helm/postgres
+      - run: helm template discord-ai-agent-database deploy/helm/postgres >/tmp/discord-ai-agent-postgres.yaml
       - uses: hashicorp/setup-terraform@v4
         id: setup_terraform
         continue-on-error: true

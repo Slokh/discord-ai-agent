@@ -1,11 +1,8 @@
 resource "aws_iam_openid_connect_provider" "github" {
   url = "https://token.actions.githubusercontent.com"
 
-  client_id_list = ["sts.amazonaws.com"]
-
-  thumbprint_list = [
-    "6938fd4d98bab03faadb97b34396831e3780aea1"
-  ]
+  client_id_list  = ["sts.amazonaws.com"]
+  thumbprint_list = ["6938fd4d98bab03faadb97b34396831e3780aea1"]
 }
 
 data "aws_iam_policy_document" "github_actions_assume_role" {
@@ -26,17 +23,22 @@ data "aws_iam_policy_document" "github_actions_assume_role" {
     condition {
       test     = "StringLike"
       variable = "token.actions.githubusercontent.com:sub"
-      values   = ["repo:${var.github_repository}:ref:refs/heads/main"]
+      values   = var.github_repository_subjects
     }
   }
 }
 
 resource "aws_iam_role" "github_actions_deploy" {
-  name               = "${var.name}-github-actions-deploy"
+  name               = "${var.aws_resource_prefix}-github-actions-deploy"
   assume_role_policy = data.aws_iam_policy_document.github_actions_assume_role.json
 }
 
-data "aws_iam_policy_document" "github_actions_deploy" {
+resource "aws_iam_role" "github_actions_build" {
+  name               = "${var.aws_resource_prefix}-github-actions-build"
+  assume_role_policy = data.aws_iam_policy_document.github_actions_assume_role.json
+}
+
+data "aws_iam_policy_document" "github_actions_build" {
   statement {
     actions = [
       "ecr:BatchCheckLayerAvailability",
@@ -44,98 +46,45 @@ data "aws_iam_policy_document" "github_actions_deploy" {
       "ecr:CompleteLayerUpload",
       "ecr:DescribeImages",
       "ecr:DescribeRepositories",
-      "ecr:GetAuthorizationToken",
       "ecr:GetDownloadUrlForLayer",
       "ecr:InitiateLayerUpload",
       "ecr:PutImage",
-      "ecr:UploadLayerPart"
+      "ecr:UploadLayerPart",
     ]
+    resources = [aws_ecr_repository.app.arn]
+  }
+
+  statement {
+    actions   = ["ecr:GetAuthorizationToken"]
     resources = ["*"]
   }
+}
 
+resource "aws_iam_role_policy" "github_actions_build" {
+  name   = "${var.aws_resource_prefix}-github-actions-build"
+  role   = aws_iam_role.github_actions_build.id
+  policy = data.aws_iam_policy_document.github_actions_build.json
+}
+
+data "aws_iam_policy_document" "github_actions_deploy" {
   statement {
-    actions = [
-      "eks:DescribeCluster"
-    ]
-    resources = [module.eks.cluster_arn]
+    actions   = ["ecr:DescribeImages"]
+    resources = [aws_ecr_repository.app.arn]
   }
-}
 
-resource "aws_iam_role_policy" "github_actions_deploy" {
-  name   = "${var.name}-github-actions-deploy"
-  role   = aws_iam_role.github_actions_deploy.id
-  policy = data.aws_iam_policy_document.github_actions_deploy.json
-}
-
-data "aws_iam_policy_document" "github_actions_candidate_assume_role" {
-  statement {
-    actions = ["sts:AssumeRoleWithWebIdentity"]
-
-    principals {
-      type        = "Federated"
-      identifiers = [aws_iam_openid_connect_provider.github.arn]
-    }
-
-    condition {
-      test     = "StringEquals"
-      variable = "token.actions.githubusercontent.com:aud"
-      values   = ["sts.amazonaws.com"]
-    }
-
-    condition {
-      test     = "StringEquals"
-      variable = "token.actions.githubusercontent.com:sub"
-      values   = ["repo:${var.github_repository}:pull_request"]
-    }
-  }
-}
-
-resource "aws_iam_role" "github_actions_candidate" {
-  name               = "${var.name}-github-actions-candidate"
-  assume_role_policy = data.aws_iam_policy_document.github_actions_candidate_assume_role.json
-}
-
-data "aws_iam_policy_document" "github_actions_candidate" {
   statement {
     actions   = ["ecr:GetAuthorizationToken"]
     resources = ["*"]
   }
 
   statement {
-    actions = [
-      "ecr:BatchCheckLayerAvailability",
-      "ecr:BatchGetImage",
-      "ecr:CompleteLayerUpload",
-      "ecr:GetDownloadUrlForLayer",
-      "ecr:InitiateLayerUpload",
-      "ecr:PutImage",
-      "ecr:UploadLayerPart"
-    ]
-    resources = [
-      aws_ecr_repository.candidate_app.arn,
-      aws_ecr_repository.candidate_sandbox.arn
-    ]
+    actions   = ["eks:DescribeCluster"]
+    resources = [module.eks.cluster_arn]
   }
 }
 
-data "aws_iam_policy_document" "github_actions_candidate_cleanup" {
-  statement {
-    actions = ["ecr:BatchDeleteImage"]
-    resources = [
-      aws_ecr_repository.candidate_app.arn,
-      aws_ecr_repository.candidate_sandbox.arn
-    ]
-  }
-}
-
-resource "aws_iam_role_policy" "github_actions_candidate_cleanup" {
-  name   = "${var.name}-github-actions-candidate-cleanup"
+resource "aws_iam_role_policy" "github_actions_deploy" {
+  name   = "${var.aws_resource_prefix}-github-actions-deploy"
   role   = aws_iam_role.github_actions_deploy.id
-  policy = data.aws_iam_policy_document.github_actions_candidate_cleanup.json
-}
-
-resource "aws_iam_role_policy" "github_actions_candidate" {
-  name   = "${var.name}-github-actions-candidate"
-  role   = aws_iam_role.github_actions_candidate.id
-  policy = data.aws_iam_policy_document.github_actions_candidate.json
+  policy = data.aws_iam_policy_document.github_actions_deploy.json
 }

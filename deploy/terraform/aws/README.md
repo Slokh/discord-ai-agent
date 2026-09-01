@@ -1,36 +1,37 @@
-# AWS Terraform Baseline
+# Production AWS platform
 
-This directory provisions the production reference infrastructure:
+This directory is the sole infrastructure definition for the production
+Discord AI Agent. It adopts the existing encrypted remote state and physical
+resource names without recreating the database, VPC, EKS cluster, ECR
+repository, or IAM roles.
 
-- VPC with public/private subnets
-- EKS cluster and managed node group
-- ECR repositories for production and short-lived candidate images
-- RDS Postgres for Discord history, sessions, traces, and embeddings
-- Separate GitHub Actions OIDC roles for candidate publication and production deployment
+The production workload is deliberately small:
 
-Apply from a secure operator machine:
+- one `m6a.large` worker node, with a second slot available only during managed
+  updates;
+- one 30 GiB disposable node root volume;
+- the retained 20 GiB encrypted Postgres volume;
+- daily backups of only Postgres, retained for 14 days;
+- no paid EKS control-plane logs or EC2 detailed monitoring;
+- one immutable ECR repository retaining ten release revisions; and
+- GitHub OIDC trust for only `Slokh/discord-ai-agent`.
+
+The physical state bucket, EKS cluster, namespace, ECR repository, IAM role,
+backup vault, KMS alias, and Postgres PVC names retain their existing private
+identifiers. Renaming them would recreate or move live state and provides no
+security or operational benefit. Those names do not imply a second application.
+
+Apply only from a clean `main` revision after reviewing an exact saved plan:
 
 ```bash
-terraform init
-terraform plan \
-  -var='github_repository=owner/repo' \
-  -var='database_password=...'
-terraform apply
+eval "$(aws configure export-credentials --profile <operator-profile> --format env)"
+terraform init -backend-config=/secure/path/production.backend.hcl
+terraform plan -var-file=/secure/path/production.tfvars -out=production.tfplan
+terraform show production.tfplan
+terraform apply production.tfplan
 ```
 
-After apply:
-
-1. Store `github_actions_deploy_role_arn` as GitHub secret `AWS_DEPLOY_ROLE_ARN`.
-2. Store `github_actions_candidate_role_arn` as GitHub secret `AWS_CANDIDATE_ROLE_ARN`.
-   Its role can publish only to tree-addressed candidate repositories and has no EKS or production-repository access.
-3. Store these GitHub repository variables:
-   - `AWS_REGION`: use the `aws_region` output.
-   - `EKS_CLUSTER_NAME`: use the `cluster_name` output.
-   - `ECR_REPOSITORY`: use the repository name, for example `discord-ai-agent`, not the full ECR URL.
-   - `CANDIDATE_IMAGE_PUBLISHING_ENABLED`: set to `true` after the candidate role and repositories exist.
-   - optional `K8S_NAMESPACE`
-   - optional `HELM_RELEASE`
-4. Create the Kubernetes app Secret described in [`../../../docs/operations.md`](../../../docs/operations.md#kubernetes-production).
-5. Merge to `main`; CI promotes the exact PR-tested images when available, otherwise builds them before deployment.
-
-The Terraform deliberately does not store Discord/OpenRouter/GitHub App secrets. Deliver those through your normal secret manager into the Kubernetes Secret.
+The state bucket is a bootstrap resource and is intentionally not owned by the
+stack whose state it contains. Discord, OpenRouter, GitHub App, Privy, and
+database credentials remain outside Terraform in the production Kubernetes
+Secret.

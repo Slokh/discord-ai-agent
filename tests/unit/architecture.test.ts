@@ -52,6 +52,26 @@ describe("architecture guardrails", () => {
     expect(ci).not.toContain("$ECR_REPOSITORY-candidate");
   });
 
+  it("keeps the adopted AWS stack bounded to the standalone runtime", async () => {
+    const terraform = await Promise.all(
+      ["main.tf", "backups.tf", "github-oidc.tf"].map((file) =>
+        fs.readFile(path.join(process.cwd(), "deploy/terraform/aws", file), "utf8"),
+      ),
+    ).then((files) => files.join("\n"));
+
+    expect(terraform).toContain("cluster_enabled_log_types              = []");
+    expect(terraform).toContain("min_size     = 1");
+    expect(terraform).toContain("max_size     = 2");
+    expect(terraform).toContain("desired_size = 1");
+    expect(terraform).toContain("volume_size           = 30");
+    expect(terraform).toContain("enable_monitoring = false");
+    expect(terraform).toContain("delete_after = 14");
+    expect(terraform).toContain("volume/${var.postgres_volume_id}");
+    expect(terraform).not.toContain("aws_db_instance");
+    expect(terraform).not.toContain("candidate_sandbox");
+    expect(terraform).not.toContain("candidate_repository_subjects");
+  });
+
   it("does not mount Kubernetes API credentials into app or sandbox service accounts", async () => {
     const serviceAccounts = await fs.readFile(path.join(process.cwd(), "deploy/helm/discord-ai-agent/templates/serviceaccounts.yaml"), "utf8");
     expect(serviceAccounts.match(/automountServiceAccountToken: false/g)).toHaveLength(2);

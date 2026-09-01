@@ -6,15 +6,8 @@ image:
   pullPolicy: IfNotPresent
 
 workload:
-  # Bridge mode creates stable DNS for the existing database without mounting
-  # its volume. Enable only after the previous StatefulSet has stopped.
-  enabled: false
+  # Production supplies its existing bound claim during the Helm upgrade.
   existingClaim: existing-postgres-pvc
-
-bridgeSelector:
-  app.kubernetes.io/name: centaur
-  app.kubernetes.io/instance: previous-runtime
-  app.kubernetes.io/component: postgres
 
 credentials:
   existingSecretName: discord-ai-agent-postgres

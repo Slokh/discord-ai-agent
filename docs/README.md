@@ -32,6 +32,7 @@ Then open only the guide that owns the change:
 - [Code updates](code-updates.md) explains how a conversational request becomes a sandboxed, verified pull request.
 - [Improvement cases](improvements.md) explains unified intake, coalescing, evidence, contracts, work linkage, verification, and resolution.
 - [Operations](operations.md) explains configuration, process roles, local and Kubernetes operation, observability, and incident investigation.
+- [Single-node K3s production](architecture/single-node-k3s.md) records the production infrastructure decision, security boundary, recovery path, alternatives, and kill criteria.
 - [Configuration](configuration.md) is generated from the runtime manifest and lists every accepted deployment variable.
 - [Development](development.md) explains how agents should navigate, change, test, evaluate, and document the repository.
 

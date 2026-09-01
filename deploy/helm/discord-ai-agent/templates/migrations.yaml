@@ -25,6 +25,10 @@ spec:
       # Pre-install hooks run before normal chart resources, including the app
       # service account. Migrations need database access only, not Kubernetes API access.
       automountServiceAccountToken: false
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       containers:
         - name: migrate
           securityContext:

@@ -12,11 +12,10 @@ jobs:
     concurrency:
       group: production-console-health
       cancel-in-progress: false
-    if: vars.AWS_REGION != '' && vars.EKS_CLUSTER_NAME != ''
+    if: vars.AWS_REGION != '' && vars.CONSOLE_TLS_CERTIFICATE_ARN != ''
     runs-on: ubuntu-latest
     env:
       AWS_REGION: ${{ vars.AWS_REGION }}
-      EKS_CLUSTER_NAME: ${{ vars.EKS_CLUSTER_NAME }}
       HELM_RELEASE: ${{ vars.HELM_RELEASE || 'discord-ai-agent' }}
       K8S_NAMESPACE: ${{ vars.K8S_NAMESPACE || 'discord-ai-agent' }}
       CONSOLE_TLS_CERTIFICATE_ARN: ${{ vars.CONSOLE_TLS_CERTIFICATE_ARN }}
@@ -25,37 +24,15 @@ jobs:
         with:
           role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
+      - uses: actions/checkout@v7
       - name: Verify Console boundary and production projection
         run: |
-          aws eks update-kubeconfig --region "$AWS_REGION" --name "$EKS_CLUSTER_NAME"
-          revision="$(kubectl --namespace "$K8S_NAMESPACE" get deployment "$HELM_RELEASE-console" -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name=="APP_REVISION")].value}')"
           run_key="github-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-          kubectl --namespace "$K8S_NAMESPACE" exec "deployment/$HELM_RELEASE-worker" -- \
-            node dist/scripts/recordConsoleHealth.js --revision "$revision" --run-key "$run_key" --status started
-          args=(--revision "$revision" --internal-url http://127.0.0.1:8081)
-          if [ -n "${CONSOLE_TLS_CERTIFICATE_ARN:-}" ]; then
-            args+=(--public-url https://console.mindcool.dev)
-          fi
-          set +e
-          kubectl --namespace "$K8S_NAMESPACE" exec "deployment/$HELM_RELEASE-console" -- \
-            node dist/scripts/consoleHealth.js "${args[@]}" > console-health.json
-          health_status="$?"
-          set -e
-          if [ "$health_status" -eq 0 ]; then
-            producer_status=succeeded
-            outcome_code=healthy
-          else
-            producer_status=failed
-            outcome_code=check_failed
-            if [ ! -s console-health.json ]; then
-              jq -n --arg revision "$revision" '{status:"unhealthy",revision:$revision,checks:[],activity:{sampled:false,detailSampled:false}}' > console-health.json
-            fi
-          fi
-          kubectl --namespace "$K8S_NAMESPACE" exec "deployment/$HELM_RELEASE-worker" -- \
-            node dist/scripts/recordConsoleHealth.js --revision "$revision" --run-key "$run_key" \
-            --status "$producer_status" --outcome-code "$outcome_code"
+          command="revision=\$(k3s kubectl --namespace '$K8S_NAMESPACE' get deployment '$HELM_RELEASE-console' -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name==\"APP_REVISION\")].value}')"
+          command+="; k3s kubectl --namespace '$K8S_NAMESPACE' exec 'deployment/$HELM_RELEASE-worker' -- node dist/scripts/recordConsoleHealth.js --revision \"\$revision\" --run-key '$run_key' --status started"
+          command+="; k3s kubectl --namespace '$K8S_NAMESPACE' exec 'deployment/$HELM_RELEASE-console' -- node dist/scripts/consoleHealth.js --revision \"\$revision\" --internal-url http://127.0.0.1:8081 --public-url https://console.mindcool.dev"
+          scripts/runProductionCommand.sh "$command" > console-health.json
           jq '{status, checkedAt, revision, checks, activity}' console-health.json >> "$GITHUB_STEP_SUMMARY"
-          exit "$health_status"
       - uses: actions/upload-artifact@v7
         if: always()
         with:
@@ -70,11 +47,10 @@ jobs:
     concurrency:
       group: improvement-watchdog
       cancel-in-progress: false
-    if: vars.AWS_REGION != '' && vars.EKS_CLUSTER_NAME != ''
+    if: vars.AWS_REGION != ''
     runs-on: ubuntu-latest
     env:
       AWS_REGION: ${{ vars.AWS_REGION }}
-      EKS_CLUSTER_NAME: ${{ vars.EKS_CLUSTER_NAME }}
       HELM_RELEASE: ${{ vars.HELM_RELEASE || 'discord-ai-agent' }}
       K8S_NAMESPACE: ${{ vars.K8S_NAMESPACE || 'discord-ai-agent' }}
     steps:
@@ -82,23 +58,13 @@ jobs:
         with:
           role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
+      - uses: actions/checkout@v7
       - name: Check improvement reconciler liveness
         run: |
-          aws eks update-kubeconfig --region "$AWS_REGION" --name "$EKS_CLUSTER_NAME"
-          revision="$(kubectl --namespace "$K8S_NAMESPACE" get deployment "$HELM_RELEASE-worker" -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name=="APP_REVISION")].value}')"
-          if ! kubectl --namespace "$K8S_NAMESPACE" exec "deployment/$HELM_RELEASE-worker" -- test -f dist/scripts/improvementWatchdog.js; then
-            jq -n --arg revision "$revision" '{revision: $revision, status: "not_deployed", producers: [], detections: []}' > improvement-watchdog.json
-            jq '{revision, status, producers, detections}' improvement-watchdog.json >> "$GITHUB_STEP_SUMMARY"
-            exit 0
-          fi
-          set +e
-          kubectl --namespace "$K8S_NAMESPACE" exec "deployment/$HELM_RELEASE-worker" -- \
-            env GITHUB_RUN_ID="$GITHUB_RUN_ID" GITHUB_RUN_ATTEMPT="$GITHUB_RUN_ATTEMPT" \
-            node dist/scripts/improvementWatchdog.js --revision "$revision" --record-detection --enforce > improvement-watchdog.json
-          watchdog_status="$?"
-          set -e
+          command="revision=\$(k3s kubectl --namespace '$K8S_NAMESPACE' get deployment '$HELM_RELEASE-worker' -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name==\"APP_REVISION\")].value}')"
+          command+="; k3s kubectl --namespace '$K8S_NAMESPACE' exec 'deployment/$HELM_RELEASE-worker' -- env GITHUB_RUN_ID='$GITHUB_RUN_ID' GITHUB_RUN_ATTEMPT='$GITHUB_RUN_ATTEMPT' node dist/scripts/improvementWatchdog.js --revision \"\$revision\" --record-detection --enforce"
+          scripts/runProductionCommand.sh "$command" > improvement-watchdog.json
           jq '{revision, generatedAt, producers, detections}' improvement-watchdog.json >> "$GITHUB_STEP_SUMMARY"
-          exit "$watchdog_status"
       - uses: actions/upload-artifact@v7
         if: always()
         with:
@@ -112,12 +78,11 @@ jobs:
       group: production-revision-quality
       cancel-in-progress: false
     if: >-
-      vars.AWS_REGION != '' && vars.EKS_CLUSTER_NAME != '' &&
+      vars.AWS_REGION != '' &&
       (github.event_name == 'workflow_dispatch' || github.event.schedule == '17 */6 * * *')
     runs-on: ubuntu-latest
     env:
       AWS_REGION: ${{ vars.AWS_REGION }}
-      EKS_CLUSTER_NAME: ${{ vars.EKS_CLUSTER_NAME }}
       HELM_RELEASE: ${{ vars.HELM_RELEASE || 'discord-ai-agent' }}
       K8S_NAMESPACE: ${{ vars.K8S_NAMESPACE || 'discord-ai-agent' }}
     steps:
@@ -125,22 +90,18 @@ jobs:
         with:
           role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
+      - uses: actions/checkout@v7
       - name: Collect safe revision aggregates
         run: |
-          aws eks update-kubeconfig --region "$AWS_REGION" --name "$EKS_CLUSTER_NAME"
-          revision="$(kubectl --namespace "$K8S_NAMESPACE" get deployment "$HELM_RELEASE-bot" -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name=="APP_REVISION")].value}')"
-          set +e
-          kubectl --namespace "$K8S_NAMESPACE" exec "deployment/$HELM_RELEASE-worker" -- \
-            node dist/scripts/revisionQuality.js --revision "$revision" --hours 48 --compare --enforce --record-detection > revision-quality.json
-          quality_status="$?"
-          set -e
+          command="revision=\$(k3s kubectl --namespace '$K8S_NAMESPACE' get deployment '$HELM_RELEASE-bot' -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name==\"APP_REVISION\")].value}')"
+          command+="; k3s kubectl --namespace '$K8S_NAMESPACE' exec 'deployment/$HELM_RELEASE-worker' -- node dist/scripts/revisionQuality.js --revision \"\$revision\" --hours 48 --compare --enforce --record-detection"
+          scripts/runProductionCommand.sh "$command" > revision-quality.json
           jq '{revision, windowHours, generatedAt, assessment, scheduleHealth, baseline: (.baseline | if . then {revision, assessment} else null end), answers, tools, signals, deliveries, improvements, detection, verification, failureClusters}' revision-quality.json >> "$GITHUB_STEP_SUMMARY"
-          exit "$quality_status"
       - name: Collect safe improvement effectiveness
         if: always()
         run: |
-          kubectl --namespace "$K8S_NAMESPACE" exec "deployment/$HELM_RELEASE-worker" -- \
-            node dist/scripts/improve.js --target production --confirm-production health --hours 720 > improvement-effectiveness.json
+          command="k3s kubectl --namespace '$K8S_NAMESPACE' exec 'deployment/$HELM_RELEASE-worker' -- node dist/scripts/improve.js --target production --confirm-production health --hours 720"
+          scripts/runProductionCommand.sh "$command" > improvement-effectiveness.json
           jq '{generatedAt, window, current, flow, automation, recurrence, economics, attention}' improvement-effectiveness.json >> "$GITHUB_STEP_SUMMARY"
           if [ "$(jq -r '.attention.status' improvement-effectiveness.json)" = "needs_attention" ]; then
             echo "::warning::Improvement effectiveness crossed an attention threshold; inspect the aggregate blocker, stalled, retry-exhaustion, and recurrence counts."

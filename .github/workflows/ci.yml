@@ -68,7 +68,7 @@ jobs:
                 ;;
             esac
             case "$path" in
-              .github/workflows/ci.yml|.github/workflows/deploy-eks.yml|Dockerfile|.dockerignore|docker-bake.hcl|package.json|package-lock.json|tsconfig.json|vite.console.config.ts|src/*|scripts/*|migrations/*|skills/*|native/*|deploy/helm/*)
+              .github/workflows/ci.yml|.github/workflows/deploy-k3s.yml|Dockerfile|.dockerignore|docker-bake.hcl|package.json|package-lock.json|tsconfig.json|vite.console.config.ts|src/*|scripts/*|migrations/*|skills/*|native/*|deploy/helm/*)
                 deployable=true
                 ;;
             esac
@@ -424,7 +424,7 @@ jobs:
             *.cache-from=type=gha,scope=runtime
             runtime.cache-to=type=gha,mode=max,scope=runtime,ignore-error=true
 
-  deploy-eks:
+  deploy-k3s:
     needs: [changes, verify, publish-images]
     if: >-
       always() &&
@@ -434,13 +434,12 @@ jobs:
       needs.verify.result == 'success' &&
       needs.publish-images.result == 'success' &&
       vars.AWS_REGION != '' &&
-      vars.EKS_CLUSTER_NAME != '' &&
       vars.ECR_REPOSITORY != '' &&
       vars.STANDALONE_DEPLOYMENT_ENABLED == 'true'
     permissions:
       contents: read
       id-token: write
-    uses: ./.github/workflows/deploy-eks.yml
+    uses: ./.github/workflows/deploy-k3s.yml
     with:
       image_tag: ${{ github.sha }}
     secrets: inherit

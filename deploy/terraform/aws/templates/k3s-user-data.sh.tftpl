@@ -1,0 +1,212 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+dnf install -y gzip jq tar util-linux xfsprogs
+
+install -d -m 0755 /usr/local/bin /usr/local/sbin /etc/discord-ai-agent /var/lib/discord-ai-agent/postgres-volume
+
+curl -fsSL "https://github.com/k3s-io/k3s/releases/download/${k3s_version}/k3s" -o /tmp/k3s
+printf '%s  %s\n' '${k3s_binary_sha256}' /tmp/k3s | sha256sum --check --status
+install -m 0755 /tmp/k3s /usr/local/bin/k3s
+rm -f /tmp/k3s
+ln -sf /usr/local/bin/k3s /usr/local/bin/kubectl
+ln -sf /usr/local/bin/k3s /usr/local/bin/crictl
+
+curl -fsSL "https://get.helm.sh/helm-${helm_version}-linux-amd64.tar.gz" -o /tmp/helm.tar.gz
+printf '%s  %s\n' '${helm_archive_sha256}' /tmp/helm.tar.gz | sha256sum --check --status
+tar -xzf /tmp/helm.tar.gz -C /tmp
+install -m 0755 /tmp/linux-amd64/helm /usr/local/bin/helm
+rm -rf /tmp/helm.tar.gz /tmp/linux-amd64
+
+cat >/etc/discord-ai-agent/runtime.env <<'EOF'
+AWS_REGION=${aws_region}
+KUBERNETES_NAMESPACE=${kubernetes_namespace}
+ECR_REGISTRY=${ecr_registry}
+K3S_STATE_VOLUME_ID=${k3s_state_volume_id}
+POSTGRES_VOLUME_ID=${postgres_volume_id}
+APPLICATION_SECRET_ARN=${application_secret_arn}
+POSTGRES_SECRET_ARN=${postgres_secret_arn}
+EOF
+chmod 0600 /etc/discord-ai-agent/runtime.env
+
+cat >/usr/local/sbin/discord-ai-agent-mount-volume <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+volume_id="$1"
+mount_point="$2"
+allow_format="$3"
+attachment_device="$4"
+source /etc/discord-ai-agent/runtime.env
+
+token="$(curl -fsS -X PUT -H 'X-aws-ec2-metadata-token-ttl-seconds: 21600' http://169.254.169.254/latest/api/token)"
+instance_id="$(curl -fsS -H "X-aws-ec2-metadata-token: $token" http://169.254.169.254/latest/meta-data/instance-id)"
+
+while true; do
+  attachment="$(aws ec2 describe-volumes --region "$AWS_REGION" --volume-ids "$volume_id" --query 'Volumes[0].Attachments[0].InstanceId' --output text)"
+  state="$(aws ec2 describe-volumes --region "$AWS_REGION" --volume-ids "$volume_id" --query 'Volumes[0].State' --output text)"
+  if [ "$attachment" = "$instance_id" ]; then
+    break
+  fi
+  if [ "$state" = "available" ] || [ "$attachment" = "None" ]; then
+    aws ec2 attach-volume --region "$AWS_REGION" --volume-id "$volume_id" --instance-id "$instance_id" --device "$attachment_device" >/dev/null || true
+  fi
+  sleep 10
+done
+
+serial="$${volume_id//-/}"
+device=""
+for _ in $(seq 1 60); do
+  device="$(lsblk -ndo NAME,SERIAL | awk -v serial="$serial" '$2 == serial { print "/dev/" $1; exit }')"
+  [ -n "$device" ] && break
+  sleep 2
+done
+[ -n "$device" ]
+
+if ! blkid "$device" >/dev/null 2>&1; then
+  if [ "$allow_format" != "yes" ]; then
+    echo "Refusing to format durable volume $volume_id." >&2
+    exit 1
+  fi
+  mkfs.ext4 -F "$device" >/dev/null
+fi
+
+install -d -m 0755 "$mount_point"
+mountpoint -q "$mount_point" || mount "$device" "$mount_point"
+EOF
+chmod 0755 /usr/local/sbin/discord-ai-agent-mount-volume
+
+cat >/usr/local/sbin/discord-ai-agent-bootstrap-secrets <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+source /etc/discord-ai-agent/runtime.env
+for _ in $(seq 1 60); do
+  /usr/local/bin/k3s kubectl get --raw=/readyz >/dev/null 2>&1 && break
+  sleep 2
+done
+/usr/local/bin/k3s kubectl get --raw=/readyz >/dev/null
+/usr/local/bin/k3s kubectl create namespace "$KUBERNETES_NAMESPACE" --dry-run=client -o yaml | /usr/local/bin/k3s kubectl apply -f - >/dev/null
+
+temporary="$(mktemp -d)"
+trap 'rm -rf "$temporary"' EXIT
+chmod 0700 "$temporary"
+aws secretsmanager get-secret-value --region "$AWS_REGION" --secret-id "$APPLICATION_SECRET_ARN" --query SecretString --output text >"$temporary/application.json"
+aws secretsmanager get-secret-value --region "$AWS_REGION" --secret-id "$POSTGRES_SECRET_ARN" --query SecretString --output text >"$temporary/postgres.json"
+chmod 0600 "$temporary"/*.json
+/usr/local/bin/k3s kubectl apply -f "$temporary/application.json" >/dev/null
+/usr/local/bin/k3s kubectl apply -f "$temporary/postgres.json" >/dev/null
+EOF
+chmod 0755 /usr/local/sbin/discord-ai-agent-bootstrap-secrets
+
+cat >/usr/local/sbin/discord-ai-agent-refresh-ecr <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+source /etc/discord-ai-agent/runtime.env
+temporary="$(mktemp -d)"
+trap 'rm -rf "$temporary"' EXIT
+chmod 0700 "$temporary"
+password="$(aws ecr get-login-password --region "$AWS_REGION")"
+auth="$(printf 'AWS:%s' "$password" | base64 -w 0)"
+jq -n --arg registry "$ECR_REGISTRY" --arg auth "$auth" '{auths:{($registry):{auth:$auth}}}' >"$temporary/config.json"
+unset password auth
+chmod 0600 "$temporary/config.json"
+/usr/local/bin/k3s kubectl --namespace "$KUBERNETES_NAMESPACE" create secret generic discord-ai-agent-ecr \
+  --type=kubernetes.io/dockerconfigjson \
+  --from-file=.dockerconfigjson="$temporary/config.json" \
+  --dry-run=client -o yaml | /usr/local/bin/k3s kubectl apply -f - >/dev/null
+EOF
+chmod 0755 /usr/local/sbin/discord-ai-agent-refresh-ecr
+
+cat >/etc/systemd/system/discord-ai-agent-storage.service <<'EOF'
+[Unit]
+Description=Attach and mount Discord AI Agent production state
+Wants=network-online.target
+After=network-online.target
+Before=k3s.service
+
+[Service]
+Type=oneshot
+EnvironmentFile=/etc/discord-ai-agent/runtime.env
+ExecStart=/usr/local/sbin/discord-ai-agent-mount-volume $K3S_STATE_VOLUME_ID /var/lib/rancher/k3s yes /dev/sdf
+ExecStart=/usr/local/sbin/discord-ai-agent-mount-volume $POSTGRES_VOLUME_ID /var/lib/discord-ai-agent/postgres-volume no /dev/sdg
+RemainAfterExit=yes
+TimeoutStartSec=infinity
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+cat >/etc/systemd/system/k3s.service <<'EOF'
+[Unit]
+Description=Lightweight Kubernetes
+Requires=discord-ai-agent-storage.service
+After=discord-ai-agent-storage.service network-online.target
+
+[Service]
+Type=notify
+KillMode=process
+Delegate=yes
+LimitNOFILE=1048576
+LimitNPROC=infinity
+LimitCORE=infinity
+TasksMax=infinity
+TimeoutStartSec=0
+Restart=always
+RestartSec=5s
+ExecStart=/usr/local/bin/k3s server \
+  --node-name=discord-ai-agent-production \
+  --node-label=discord-ai-agent.dev/storage=local \
+  --disable=traefik \
+  --disable=servicelb \
+  --disable=local-storage \
+  --disable=metrics-server \
+  --secrets-encryption \
+  --write-kubeconfig-mode=0600
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+cat >/etc/systemd/system/discord-ai-agent-bootstrap.service <<'EOF'
+[Unit]
+Description=Restore Discord AI Agent Kubernetes secrets
+Requires=k3s.service
+After=k3s.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/discord-ai-agent-bootstrap-secrets
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+cat >/etc/systemd/system/discord-ai-agent-ecr-refresh.service <<'EOF'
+[Unit]
+Description=Refresh the short-lived ECR image-pull credential
+Requires=discord-ai-agent-bootstrap.service
+After=discord-ai-agent-bootstrap.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/discord-ai-agent-refresh-ecr
+EOF
+
+cat >/etc/systemd/system/discord-ai-agent-ecr-refresh.timer <<'EOF'
+[Unit]
+Description=Refresh ECR image-pull credentials every six hours
+
+[Timer]
+OnBootSec=30s
+OnUnitActiveSec=6h
+Persistent=true
+Unit=discord-ai-agent-ecr-refresh.service
+
+[Install]
+WantedBy=timers.target
+EOF
+
+systemctl daemon-reload
+systemctl enable discord-ai-agent-storage.service k3s.service discord-ai-agent-bootstrap.service discord-ai-agent-ecr-refresh.timer
+systemctl start --no-block k3s.service
+systemctl start discord-ai-agent-ecr-refresh.timer

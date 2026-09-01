@@ -15,7 +15,7 @@ If a token, database URL, or private export is accidentally committed or posted 
 
 1. Revoke or rotate the secret at the provider.
 2. Remove the public artifact.
-3. Audit Kubernetes/EKS, GitHub, OpenRouter, Discord, and database logs for suspicious access.
+3. Audit Kubernetes/AWS, GitHub, OpenRouter, Discord, and database logs for suspicious access.
 4. Treat Discord message dumps, embeddings, trace logs, and private prompt overlays as sensitive even when no API token is present.
 
 ## Data Handling

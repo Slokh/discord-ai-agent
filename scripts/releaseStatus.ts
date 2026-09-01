@@ -79,7 +79,7 @@ export function collectReleaseStatus(input: {
 
   const deploymentRun = deployedRevision
     ? latestDeployRun(jsonArrayResult(runner("gh", [
-        "run", "list", "--workflow", "Deploy EKS", "--commit", deployedRevision,
+        "run", "list", "--workflow", "Deploy K3s", "--commit", deployedRevision,
         "--limit", "5", "--json", "databaseId,status,conclusion,url,headSha,createdAt",
       ]), warnings, "deployment workflow"))
     : null;

@@ -14,11 +14,6 @@ variable "github_repository_subjects" {
   type        = set(string)
 }
 
-variable "operator_role_arn" {
-  description = "AWS IAM Identity Center role granted namespace-scoped production access."
-  type        = string
-}
-
 variable "kubernetes_namespace" {
   description = "Existing namespace containing the Discord AI Agent production workloads."
   type        = string
@@ -40,13 +35,49 @@ variable "application_tag" {
 }
 
 variable "private_subnet_cidrs" {
-  description = "Existing private subnet CIDRs used by the EKS control plane."
+  description = "Existing private subnet CIDRs retained with the production VPC."
   type        = list(string)
   default     = ["10.0.1.0/24", "10.0.2.0/24"]
 }
 
 variable "public_subnet_cidrs" {
-  description = "Existing public subnet CIDRs used by the single worker node."
+  description = "Existing public subnet CIDRs; the K3s host uses the subnet in the database availability zone."
   type        = list(string)
   default     = ["10.0.101.0/24", "10.0.102.0/24"]
+}
+
+variable "k3s_instance_type" {
+  description = "Single production host size for K3s, the application, and Postgres."
+  type        = string
+  default     = "m6a.large"
+}
+
+variable "k3s_state_volume_size" {
+  description = "Encrypted gp3 capacity for recoverable K3s state and Helm release history."
+  type        = number
+  default     = 8
+}
+
+variable "k3s_version" {
+  description = "Pinned K3s release installed on the production host."
+  type        = string
+  default     = "v1.34.11+k3s1"
+}
+
+variable "k3s_binary_sha256" {
+  description = "SHA-256 of the pinned linux-amd64 K3s binary."
+  type        = string
+  default     = "c1991a83985375d318560ac10f2def2fa117995d94d0319d801f283ca074d1b0"
+}
+
+variable "helm_version" {
+  description = "Pinned Helm release installed on the production host."
+  type        = string
+  default     = "v4.2.4"
+}
+
+variable "helm_archive_sha256" {
+  description = "SHA-256 of the pinned linux-amd64 Helm archive."
+  type        = string
+  default     = "c306b46f719b0a4da32d0f78ee21bf90ce8d602f15b22ab753f0674d1670a7f3"
 }

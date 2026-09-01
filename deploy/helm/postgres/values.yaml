@@ -9,6 +9,15 @@ workload:
   # Production supplies its existing bound claim during the Helm upgrade.
   existingClaim: existing-postgres-pvc
 
+storage:
+  createLocalPersistentVolume: false
+  volumeName: discord-ai-agent-postgres
+  capacity: 20Gi
+  hostPath: /var/lib/discord-ai-agent/postgres-volume
+  nodeSelector:
+    key: discord-ai-agent.dev/storage
+    value: local
+
 credentials:
   existingSecretName: discord-ai-agent-postgres
   passwordKey: POSTGRES_PASSWORD

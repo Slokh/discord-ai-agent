@@ -78,8 +78,52 @@ data "aws_iam_policy_document" "github_actions_deploy" {
   }
 
   statement {
-    actions   = ["eks:DescribeCluster"]
-    resources = [module.eks.cluster_arn]
+    sid = "DiscoverProductionHost"
+    actions = [
+      "ec2:DescribeInstances",
+    ]
+    resources = ["*"]
+  }
+
+  statement {
+    sid = "UseRunShellScriptDocument"
+    actions = [
+      "ssm:SendCommand",
+    ]
+    resources = [
+      "arn:aws:ssm:${var.aws_region}::document/AWS-RunShellScript",
+    ]
+  }
+
+  statement {
+    sid = "RunContentFreeDeploymentOnProductionHost"
+    actions = [
+      "ssm:SendCommand",
+    ]
+    resources = [
+      "arn:aws:ec2:${var.aws_region}:${data.aws_caller_identity.current.account_id}:instance/*",
+    ]
+
+    condition {
+      test     = "StringEquals"
+      variable = "ssm:resourceTag/Role"
+      values   = ["k3s"]
+    }
+
+    condition {
+      test     = "StringEquals"
+      variable = "ssm:resourceTag/Environment"
+      values   = ["production"]
+    }
+  }
+
+  statement {
+    sid = "ReadDeploymentCommand"
+    actions = [
+      "ssm:GetCommandInvocation",
+      "ssm:ListCommandInvocations",
+    ]
+    resources = ["*"]
   }
 }
 

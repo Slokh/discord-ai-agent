@@ -3,6 +3,9 @@ image:
   tag: latest
   pullPolicy: IfNotPresent
 
+imagePullSecrets:
+  - name: discord-ai-agent-ecr
+
 podSecurityContext:
   runAsNonRoot: true
   runAsUser: 1000

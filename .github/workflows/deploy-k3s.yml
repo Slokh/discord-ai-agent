@@ -1,0 +1,108 @@
+name: Deploy K3s
+
+on:
+  workflow_call:
+    inputs:
+      image_tag:
+        description: Immutable runtime image tag to deploy
+        required: true
+        type: string
+      bot_replicas:
+        description: Discord Gateway replicas
+        required: false
+        default: 1
+        type: number
+  workflow_dispatch:
+    inputs:
+      confirmation:
+        description: Type deploy-production to deploy manually
+        required: true
+        type: string
+      image_tag:
+        description: Immutable runtime image tag to deploy
+        required: true
+        type: string
+      bot_replicas:
+        description: Use zero for a transport-safe staged deployment
+        required: true
+        default: 1
+        type: number
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: deploy-k3s-production
+  cancel-in-progress: false
+
+jobs:
+  deploy-k3s:
+    if: github.event_name != 'workflow_dispatch' || inputs.confirmation == 'deploy-production'
+    runs-on: ubuntu-latest
+    env:
+      AWS_REGION: ${{ vars.AWS_REGION }}
+      ECR_REPOSITORY: ${{ vars.ECR_REPOSITORY }}
+      HELM_RELEASE: ${{ vars.HELM_RELEASE || 'discord-ai-agent' }}
+      K8S_NAMESPACE: ${{ vars.K8S_NAMESPACE || 'discord-ai-agent' }}
+      DISCORD_BOT_CHANNEL_ID: ${{ vars.DISCORD_BOT_CHANNEL_ID }}
+      IMAGE_TAG: ${{ inputs.image_tag }}
+      BOT_REPLICAS: ${{ inputs.bot_replicas }}
+    steps:
+      - uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.image_tag }}
+      - id: target
+        name: Resolve the single production host
+        run: |
+          read -r -a instances <<<"$(aws ec2 describe-instances \
+            --filters \
+              'Name=tag:Role,Values=k3s' \
+              'Name=tag:Environment,Values=production' \
+              'Name=instance-state-name,Values=running' \
+            --query 'Reservations[].Instances[].InstanceId' \
+            --output text)"
+          if [ "${#instances[@]}" -ne 1 ]; then
+            echo "Expected exactly one running production K3s host; found ${#instances[@]}." >&2
+            exit 1
+          fi
+          echo "instance_id=${instances[0]}" >>"$GITHUB_OUTPUT"
+      - id: deploy
+        name: Deploy and verify through Systems Manager
+        env:
+          INSTANCE_ID: ${{ steps.target.outputs.instance_id }}
+        run: |
+          script_sha="$(sha256sum scripts/deployK3s.sh | awk '{print $1}')"
+          registry="$(aws sts get-caller-identity --query Account --output text).dkr.ecr.$AWS_REGION.amazonaws.com"
+          remote_script="/tmp/deploy-k3s-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT.sh"
+          command="curl -fsSL https://raw.githubusercontent.com/Slokh/discord-ai-agent/$IMAGE_TAG/scripts/deployK3s.sh -o $remote_script"
+          command+=" && printf '$script_sha  $remote_script\\n' | sha256sum --check --status"
+          command+=" && chmod 0700 $remote_script"
+          command+=" && DISCORD_BOT_CHANNEL_ID='$DISCORD_BOT_CHANNEL_ID' $remote_script '$IMAGE_TAG' '$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT' '$BOT_REPLICAS' '$K8S_NAMESPACE' '$HELM_RELEASE' '$registry' '$ECR_REPOSITORY'"
+          command+="; status=\$?; rm -f $remote_script; exit \$status"
+          parameters="$(jq -cn --arg command "$command" '{commands:[$command]}')"
+          command_id="$(aws ssm send-command \
+            --instance-ids "$INSTANCE_ID" \
+            --document-name AWS-RunShellScript \
+            --comment "Deploy immutable revision $IMAGE_TAG" \
+            --parameters "$parameters" \
+            --query 'Command.CommandId' \
+            --output text)"
+          echo "command_id=$command_id" >>"$GITHUB_OUTPUT"
+          for _ in $(seq 1 120); do
+            status="$(aws ssm get-command-invocation --command-id "$command_id" --instance-id "$INSTANCE_ID" --query Status --output text)"
+            case "$status" in
+              Success) break ;;
+              Failed|Cancelled|TimedOut|Cancelling)
+                aws ssm get-command-invocation --command-id "$command_id" --instance-id "$INSTANCE_ID" --query StandardErrorContent --output text >&2 || true
+                exit 1
+                ;;
+            esac
+            sleep 10
+          done
+          test "$status" = Success
+          aws ssm get-command-invocation --command-id "$command_id" --instance-id "$INSTANCE_ID" --query StandardOutputContent --output text

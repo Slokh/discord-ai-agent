@@ -13,11 +13,10 @@ concurrency:
 
 jobs:
   evaluate:
-    if: vars.AWS_REGION != '' && vars.EKS_CLUSTER_NAME != ''
+    if: vars.AWS_REGION != ''
     runs-on: ubuntu-latest
     env:
       AWS_REGION: ${{ vars.AWS_REGION }}
-      EKS_CLUSTER_NAME: ${{ vars.EKS_CLUSTER_NAME }}
       K8S_NAMESPACE: ${{ vars.K8S_NAMESPACE || 'discord-ai-agent' }}
       HELM_RELEASE: ${{ vars.HELM_RELEASE || 'discord-ai-agent' }}
     steps:
@@ -25,34 +24,12 @@ jobs:
         with:
           role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
-      - name: Connect to production
-        run: aws eks update-kubeconfig --region "$AWS_REGION" --name "$EKS_CLUSTER_NAME"
+      - uses: actions/checkout@v7
       - name: Export and run private regressions
         run: |
-          revision="$(kubectl --namespace "$K8S_NAMESPACE" get deployment "$HELM_RELEASE-bot" -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name=="APP_REVISION")].value}')"
-          set +e
-          kubectl --namespace "$K8S_NAMESPACE" exec "deployment/$HELM_RELEASE-worker" -- \
-            node dist/scripts/exportImprovementEvals.js
-          regression_status="$?"
-          if [ "$regression_status" -eq 0 ]; then
-            kubectl --namespace "$K8S_NAMESPACE" exec "deployment/$HELM_RELEASE-worker" -- \
-              node dist/scripts/eval.js --private-only --safe-summary --record-improvement-results
-            regression_status="$?"
-          fi
-          set -e
-          if [ "$regression_status" -ne 0 ]; then
-            if ! kubectl --namespace "$K8S_NAMESPACE" exec "deployment/$HELM_RELEASE-worker" -- \
-              node dist/scripts/improve.js --target production --confirm-production detect \
-              --source eval_detection \
-              --source-id "private-regressions:$GITHUB_RUN_ID" \
-              --stable-code private-regression-suite \
-              --summary "Private regression workflow failed for deployed revision $revision." \
-              --classification defect \
-              --severity high \
-              --domain evals \
-              --scope deployment \
-              --revision "$revision"; then
-              echo "Failed to record the private regression improvement detection." >&2
-            fi
-            exit "$regression_status"
-          fi
+          command="revision=\$(k3s kubectl --namespace '$K8S_NAMESPACE' get deployment '$HELM_RELEASE-bot' -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name==\"APP_REVISION\")].value}')"
+          command+="; set +e; k3s kubectl --namespace '$K8S_NAMESPACE' exec 'deployment/$HELM_RELEASE-worker' -- node dist/scripts/exportImprovementEvals.js; status=\$?"
+          command+="; if [ \$status -eq 0 ]; then k3s kubectl --namespace '$K8S_NAMESPACE' exec 'deployment/$HELM_RELEASE-worker' -- node dist/scripts/eval.js --private-only --safe-summary --record-improvement-results; status=\$?; fi"
+          command+="; if [ \$status -ne 0 ]; then k3s kubectl --namespace '$K8S_NAMESPACE' exec 'deployment/$HELM_RELEASE-worker' -- node dist/scripts/improve.js --target production --confirm-production detect --source eval_detection --source-id 'private-regressions:$GITHUB_RUN_ID' --stable-code private-regression-suite --summary \"Private regression workflow failed for deployed revision \$revision.\" --classification defect --severity high --domain evals --scope deployment --revision \"\$revision\" || true; fi"
+          command+="; exit \$status"
+          scripts/runProductionCommand.sh "$command"

@@ -214,17 +214,15 @@ npm run verify:db
 npm run eval -- --dry-run
 ```
 
-CI classifies the changed paths and starts lint, tests, production build, repository-policy checks, and relevant DB or infrastructure verification in parallel. Documentation-only and callback-receiver-only changes do not start the DB service; application and high-consequence lifecycle changes still do. The production build performs the TypeScript compilation, so CI does not repeat a separate no-emit compilation. CodeQL remains an independent PR and scheduled analysis. On a deployable `main` push, the same CI run publishes images and invokes the reusable EKS deployment workflow after `verify` succeeds. This keeps rollout and post-deploy verification on the source commit's check graph, so a failed canary or rollback is visible as a failed main-commit check instead of a detached workflow result. Pull requests skip the deployment job. Active main runs are not cancelled by newer pushes, and the production deployment workflow remains serialized under its own non-cancelling concurrency group.
+CI classifies the changed paths and starts lint, tests, production build, repository-policy checks, and relevant DB or infrastructure verification in parallel. Documentation-only and callback-receiver-only changes do not start the DB service; application and high-consequence lifecycle changes still do. The production build performs the TypeScript compilation, so CI does not repeat a separate no-emit compilation. CodeQL remains an independent PR and scheduled analysis. On a deployable `main` push, the same CI run publishes images and invokes the reusable K3s deployment workflow after `verify` succeeds. GitHub Actions reaches the outbound-only production host through Systems Manager rather than exposing the Kubernetes API. This keeps rollout and post-deploy verification on the source commit's check graph. Pull requests skip the deployment job. Active main runs are not cancelled by newer pushes, and the production deployment workflow remains serialized under its own non-cancelling concurrency group.
 
 For same-repository PRs, the optional candidate-image path waits for the cheaper verification jobs to pass, then publishes runtime and codegen images to separate ECR repositories under the checked-out Git tree hash. Its OIDC role has no production-repository or Kubernetes access. Dependency, Docker, or native-manifest changes scan those exact remote images on one shared runner. After merge, CI calculates the merged tree hash, promotes only the matching candidates to commit-tagged production references, and deletes the temporary tags; a one-day lifecycle is the cleanup fallback. Candidate repositories disable redundant ECR scanning because CI scans affected candidates and the production repositories scan the promoted release. Exact-tree promotion lets main omit repeated tests and rebuilding. Once candidate publication is enabled, a missing candidate fails closed rather than rebuilding an unverified release. Before enablement, main retains the existing full verification and builds and pushes both images through one Docker Bake graph. PR builds restore trusted default-branch BuildKit caches but do not fill one-use PR cache scopes. Nested Rust targets, Terraform providers, coverage, and other local build state are excluded from the Docker context.
 
-After Helm completes, deployment verifies each role's image and `APP_REVISION`, confirms the worker may create sandbox Jobs, and runs private canaries through the compiled prompt path. Independent GitHub, sandbox-callback, stats, bounded-randomness, and hosted-web probes run concurrently in isolated identities; exact two-turn conversation continuity remains sequential by design. The web canary supplies its typed operation as an object, matching the application-tool boundary rather than asking the model to reinterpret serialized JSON. The canary also performs non-mutating Discord bot-identity and channel-access probes. It never posts a canary message, because deleting one still leaves member clients with stale unread-channel markers. The callback canary never clones, edits, pushes, or opens a PR.
-
-Each post-deploy stage—immediate health, capability canary, Console health, private regressions, the 30-second stability window, and durable promotion—gets one bounded retry with a short delay. The workflow records typed stage/attempt outcomes; a failed private-regression command also retains its aggregate-only safe summary, never prompt or reply content. A terminal stage failure best-effort records a private `deployment_detection`, or an `eval_detection` for private regressions, before rollback. If intake is unavailable, it retries once after rollback without changing the release outcome. The workflow rolls back to the exact Helm revision captured before the upgrade and verifies that prior revision with the same restart-free health gate. A failed rollback remains a distinct terminal outcome and never hides the original failed stage. First-time installs have no rollback target and fail explicitly. Migrations remain forward-only and must preserve the preceding application revision long enough for this recovery path.
+After Helm completes, deployment verifies the Postgres StatefulSet, bot and worker readiness, exact immutable image and `APP_REVISION`, the existing public-table baseline, the application's lack of sandbox-launch authority in the lightweight profile, Discord gateway readiness, and a 30-second restart-free window. These checks make no model call, create no Discord message, and spend no funds. Failure restores the exact prior Helm revision when one exists; a failed first install leaves the bot at zero replicas. Migrations remain forward-only and must preserve the preceding application revision long enough for this recovery path.
 
 The bot does not resolve improvement cases or publish a deployment announcement merely because a new pod became ready. Release pods wait for the workflow to write the verified revision and unique rollout ID to Postgres after every gate passes. The private eval runner retains aggregate-only per-contract outcomes, promotion applies complete receipts, and production observation later supplies traffic-sampled quality proof. Runtime/delivery contracts remain `verifying` until a revision-matched terminal execution is supplied. The system never replays a member's old request as authority. Local, non-SHA revisions bypass this production-only promotion gate.
 
-Each capability attempt uses a fresh session, and one isolated retry absorbs ordinary model-call variance without retrying a tool inside an attempt. Retrieval passes only with exactly one successful stats result; randomness passes only with exactly one successful `drawRandom` completion and no runtime error event; web passes only with exactly one successful non-empty result plus provider-recorded hosted execution. Completion markers alone are insufficient evidence. A persistently failed boundary fails the rollout instead of treating configured tool metadata as readiness. After all capability, Console, and private-regression checks, the typed deployment-health gate requires API, bot, worker, and Console to remain aligned, fully ready, generation-current, and restart-free for 30 seconds. Build, migration, rollout, readiness, capability verification, Console verification, and Discord delivery remain distinct stages. Durable delivery behavior is exercised by the reliability and database suites, while production observation reports failures and pending delivery obligations from real traffic without generating synthetic member-visible messages.
+Model- and provider-backed regressions are not part of deployment readiness. They run only when explicitly requested for debugging. Durable delivery behavior is exercised by the reliability and database suites, while production observation derives quality from real member traffic without generating synthetic member-visible messages.
 
 The production-observation workflow samples the deployed revision every six hours and retains a 48-hour aggregate containing answer status/latency by model, terminal per-run capability outcomes, raw tool attempts, recovered validation retries, per-capability p50/p95/max latency, latency budgets and slow-success counts, warning/error counts, and delivery states. Statistical answer, tool, report-rate, and latency evidence is grouped by a content-addressed behavior cohort: prompt version, tool-contract version, model/runtime configuration version, and an explicit quality-runtime version. Compatible code-only revisions therefore contribute to one useful sample instead of restarting observation. Changes to execution or delivery semantics that alter quality comparability must bump `QUALITY_RUNTIME_VERSION`; prompt, tool, and relevant configuration changes split cohorts automatically. Only explicitly member-originated Discord executions enter this quality cohort; scheduled read-only occurrences use their own `scheduled` identity, while CLI prompts, evals, and deployment canaries remain `synthetic`. Scheduled health is reported alongside member quality without entering its gate: exact-revision counts cover succeeded, partial, and failed runs, while overdue rows, expired delivery leases, repeated partial outcomes, and recent automatic pauses create content-free improvement detections. A failure already represented by an automatic pause is not duplicated as a separate run incident. Pending member delivery obligations become incidents after five minutes, avoiding false alerts for replies actively being delivered, while abandoned obligations fail immediately. The workflow reads the canonical runtime ledger and schedule control projection inside the cluster and publishes only safe counts—never prompts, replies, schedule IDs, member identities, or private Discord content. Output includes the cohort fingerprint and contributing exact revisions. Use `npm run quality:revision -- --revision <sha> --hours 48` for the same safe operator view inside a configured runtime.
 
@@ -238,63 +236,20 @@ Run the deterministic failure suite with `npm run test:reliability`. It covers s
 
 ## Kubernetes production
 
-The production deployment is the Helm chart in `deploy/helm/discord-ai-agent/`;
-`deploy/terraform/aws/` is its authoritative AWS stack. The stack adopts the
-existing physical names without retaining a second application or runtime.
-Steady state is one `m6a.large` node (with room for a second
-only during managed updates), one 30 GiB disposable node disk, and the retained
-20 GiB encrypted Postgres volume. AWS Backup selects only that Postgres volume,
-and paid EKS control-plane logs and EC2 detailed monitoring are disabled.
-Because EBS volumes are zonal, the managed node group is pinned to the retained
-Postgres volume's availability zone; a one-node group spanning zones can strand
-the database after scale-in.
+The production deployment is the Helm chart in `deploy/helm/discord-ai-agent/`; `deploy/terraform/aws/` is its authoritative AWS stack. One `m6a.large` EC2 host runs K3s, Postgres, the bot, and the worker. The host has no inbound security-group rule and accepts deployment and operator commands only through Systems Manager.
 
-### Hosted Console
+The 30 GiB root disk is disposable. The retained 20 GiB encrypted Postgres disk and separate 8 GiB encrypted K3s-state disk are pinned to the same availability zone and backed up daily for 14 days. The Auto Scaling group replaces a failed host; bootstrap attaches both exact volumes before starting K3s. Secrets Manager retains the two Kubernetes Secret manifests without putting their values in Terraform state. See [Single-node K3s production](architecture/single-node-k3s.md) for the complete decision and recovery contract.
 
-The production Console is published at `https://console.mindcool.dev` through a dedicated internet-facing AWS Network Load Balancer. TLS terminates with an ACM certificate and the backend forwards plain HTTP only inside the cluster to the Console service. Route 53 owns the hostname. The callback API and other application roles remain internal-only.
+GitHub Actions deploys the exact CI-published image by sending `scripts/deployK3s.sh` to the host through Systems Manager. The script verifies its own SHA, downloads the chart from the exact commit, refreshes the namespace-local ECR credential, upgrades Postgres and the application with Helm, and promotes the release only after content-free checks pass. The chart runs migrations as a hook; application pods never run migrations on startup.
 
-Provisioning has three explicit prerequisites before setting the GitHub Actions variables `CONSOLE_TLS_CERTIFICATE_ARN` and `CONSOLE_ROUTE53_HOSTED_ZONE_ID`:
-
-1. Add the Discord OAuth redirect `https://console.mindcool.dev/auth/callback` to the configured Discord application.
-2. Add `DISCORD_CLIENT_SECRET` and a randomly generated `CONSOLE_SESSION_SECRET` to the existing `discord-ai-agent-env` Kubernetes Secret.
-3. Issue or select an ACM certificate covering the Console hostname, store its ARN as `CONSOLE_TLS_CERTIFICATE_ARN`, and store the public domain's hosted-zone ID as `CONSOLE_ROUTE53_HOSTED_ZONE_ID`.
-
-The deployment workflow enables the public service only when `CONSOLE_TLS_CERTIFICATE_ARN` is non-empty. It waits for the load balancer and at least one healthy target, resolves its canonical zone, and atomically upserts the `console.mindcool.dev` Route 53 alias before running external route and authentication-boundary checks. Scheduled Console health observation uses the same public-TLS condition. Removing the certificate variable removes the Helm-managed public service on the next deployment without changing the internal Console endpoint; remove the DNS alias separately when intentionally decommissioning the hostname.
-
-Production Console startup fails closed when its Discord client ID, client secret, guild ID, or session secret is missing. Discord OAuth requests only `identify guilds`, checks the exact configured guild, discards the access token after the callback, and issues a signed 30-day `Secure`, `HttpOnly`, `SameSite=Lax` session cookie. Logging out clears it immediately; rotating `CONSOLE_SESSION_SECRET` invalidates every active Console session. `/healthz` stays public for cluster probes; all non-loopback Console pages, assets, and APIs require the session. The socket-level loopback exception preserves `npm run console`, `npm run console:dev`, and the existing read-only Kubernetes port-forward workflow without creating a header-based bypass.
-
-Create one namespace-scoped application Secret through your secret manager with the required app variables. Prefer GitHub App credentials in production. Add Privy credentials only when payments are enabled. Pods read secret values at startup, so restart deployments after secret changes.
-
-Install or upgrade:
+For an operator inspection, run a bounded command through the same private path:
 
 ```bash
-helm upgrade --install discord-ai-agent deploy/helm/discord-ai-agent \
-  --namespace discord-ai-agent \
-  --create-namespace \
-  --set image.repository="$REGISTRY/discord-ai-agent" \
-  --set image.tag="$GIT_SHA" \
-  --set sandbox.image="$REGISTRY/discord-ai-agent-sandbox:$GIT_SHA"
+AWS_PROFILE=production-operator scripts/runProductionCommand.sh \
+  'k3s kubectl -n discord-ai-agent get pods,statefulsets,deployments -o wide'
 ```
 
-Inspect rollout by role:
-
-```bash
-kubectl -n discord-ai-agent get pods
-kubectl -n discord-ai-agent logs deploy/discord-ai-agent-api
-kubectl -n discord-ai-agent logs deploy/discord-ai-agent-bot
-kubectl -n discord-ai-agent logs deploy/discord-ai-agent-worker
-kubectl -n discord-ai-agent logs deploy/discord-ai-agent-console
-```
-
-The chart runs migrations as a hook; production application pods never run migrations on startup. Commit-tagged application and sandbox images are built once and promoted; the deployment workflow must not rebuild a different artifact.
-
-Use Helm—not `kubectl rollout undo`—for production recovery so one field manager continues to own application revisions. Inspect `helm history`, choose the known-good Helm revision, and run:
-
-```bash
-npm run release:rollback -- --to <helm-revision>
-```
-
-The recovery command reads the target revision's immutable application SHA, performs a waiting Helm rollback with job cleanup and conflict reclamation, then applies the same 30-second restart-free deployment-health gate used by CI. It requires an explicitly selected Helm revision and never guesses a rollback target.
+Use Helm—not `kubectl rollout undo`—for recovery so one field manager continues to own application revisions. Run Helm and Kubernetes commands through `scripts/runProductionCommand.sh`; select an explicit known-good revision and never guess a rollback target.
 
 ## Sandbox and network posture
 

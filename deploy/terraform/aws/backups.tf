@@ -46,7 +46,7 @@ resource "aws_backup_plan" "production" {
   name = "${var.aws_resource_prefix}-production"
 
   rule {
-    rule_name         = "daily-postgres-ebs"
+    rule_name         = "daily-durable-ebs"
     target_vault_name = aws_backup_vault.production.name
     schedule          = "cron(0 7 ? * * *)"
     start_window      = 60
@@ -59,13 +59,14 @@ resource "aws_backup_plan" "production" {
 }
 
 resource "aws_backup_selection" "production_ebs" {
-  name         = "discord-ai-agent-postgres-ebs"
+  name         = "discord-ai-agent-durable-ebs"
   plan_id      = aws_backup_plan.production.id
   iam_role_arn = aws_iam_role.backup.arn
 
-  # Node root volumes are disposable and recreated by the managed node group.
-  # Only the durable Postgres volume needs daily recovery points.
+  # The host root remains disposable. Postgres data and the small K3s state
+  # volume contain the only state required to reconstruct the single node.
   resources = [
     "arn:aws:ec2:${var.aws_region}:${data.aws_caller_identity.current.account_id}:volume/${var.postgres_volume_id}",
+    aws_ebs_volume.k3s_state.arn,
   ]
 }

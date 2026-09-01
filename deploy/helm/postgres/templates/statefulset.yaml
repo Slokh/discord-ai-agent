@@ -21,6 +21,10 @@ spec:
     spec:
       automountServiceAccountToken: false
       terminationGracePeriodSeconds: 30
+      {{- if .Values.storage.createLocalPersistentVolume }}
+      nodeSelector:
+        {{ .Values.storage.nodeSelector.key }}: {{ .Values.storage.nodeSelector.value | quote }}
+      {{- end }}
       containers:
         - name: postgres
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"

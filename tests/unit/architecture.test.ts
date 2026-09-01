@@ -36,17 +36,19 @@ describe("architecture guardrails", () => {
   it("keeps production deployment in the main CI check graph", async () => {
     const ci = await fs.readFile(path.join(process.cwd(), ".github/workflows/ci.yml"), "utf8");
     const deployment = await fs.readFile(
-      path.join(process.cwd(), ".github/workflows/deploy-eks.yml"),
+      path.join(process.cwd(), ".github/workflows/deploy-k3s.yml"),
       "utf8",
     );
 
     expect(ci).toContain("cancel-in-progress: ${{ github.event_name != 'push' }}");
-    expect(ci).toMatch(/deploy-eks:\n\s+needs: \[changes, verify, publish-images\]/);
-    expect(ci).toContain("uses: ./.github/workflows/deploy-eks.yml");
+    expect(ci).toMatch(/deploy-k3s:\n\s+needs: \[changes, verify, publish-images\]/);
+    expect(ci).toContain("uses: ./.github/workflows/deploy-k3s.yml");
     expect(ci).toContain("image_tag: ${{ github.sha }}");
-    expect(ci).toContain(".github/workflows/ci.yml|.github/workflows/deploy-eks.yml|Dockerfile");
+    expect(ci).toContain(".github/workflows/ci.yml|.github/workflows/deploy-k3s.yml|Dockerfile");
     expect(deployment).toContain("workflow_call:");
     expect(deployment).toContain("IMAGE_TAG: ${{ inputs.image_tag }}");
+    expect(deployment).toContain("aws ssm send-command");
+    expect(deployment).not.toContain("aws eks");
     expect(deployment).not.toContain("workflow_run:");
     expect(ci).toContain("$ECR_REPOSITORY:$TREE_TAG");
     expect(ci).not.toContain("$ECR_REPOSITORY-candidate");
@@ -54,20 +56,23 @@ describe("architecture guardrails", () => {
 
   it("keeps the adopted AWS stack bounded to the standalone runtime", async () => {
     const terraform = await Promise.all(
-      ["main.tf", "backups.tf", "github-oidc.tf"].map((file) =>
+      ["main.tf", "k3s.tf", "backups.tf", "github-oidc.tf"].map((file) =>
         fs.readFile(path.join(process.cwd(), "deploy/terraform/aws", file), "utf8"),
       ),
     ).then((files) => files.join("\n"));
 
-    expect(terraform).toContain("cluster_enabled_log_types              = []");
-    expect(terraform).toContain("min_size     = 1");
-    expect(terraform).toContain("max_size     = 2");
-    expect(terraform).toContain("desired_size = 1");
-    expect(terraform).toContain("subnet_ids        = [module.vpc.public_subnets[1]]");
+    expect(terraform).toContain('resource "aws_autoscaling_group" "k3s"');
+    expect(terraform).toContain("min_size            = 1");
+    expect(terraform).toContain("max_size            = 1");
+    expect(terraform).toContain("desired_capacity    = 1");
+    expect(terraform).toContain("vpc_zone_identifier = [data.aws_subnet.k3s.id]");
     expect(terraform).toContain("volume_size           = 30");
-    expect(terraform).toContain("enable_monitoring = false");
+    expect(terraform).toContain("enabled = false");
     expect(terraform).toContain("delete_after = 14");
     expect(terraform).toContain("volume/${var.postgres_volume_id}");
+    expect(terraform).toContain("aws_ebs_volume.k3s_state.arn");
+    expect(terraform).not.toContain('module "eks"');
+    expect(terraform).not.toContain("aws_eks_");
     expect(terraform).not.toContain("aws_db_instance");
     expect(terraform).not.toContain("candidate_sandbox");
     expect(terraform).not.toContain("candidate_repository_subjects");
@@ -93,7 +98,7 @@ describe("architecture guardrails", () => {
 
   it("keeps the optional Console out of the lightweight production deployment", async () => {
     const consoleDeployment = await fs.readFile(path.join(process.cwd(), "deploy/helm/discord-ai-agent/templates/console.yaml"), "utf8");
-    const deploymentWorkflow = await fs.readFile(path.join(process.cwd(), ".github/workflows/deploy-eks.yml"), "utf8");
+    const deploymentWorkflow = await fs.readFile(path.join(process.cwd(), ".github/workflows/deploy-k3s.yml"), "utf8");
     expect(consoleDeployment).toContain("if .Values.console.enabled");
     expect(deploymentWorkflow).not.toContain("CONSOLE_TLS_CERTIFICATE_ARN");
     expect(deploymentWorkflow).not.toContain("console-public");
@@ -108,22 +113,21 @@ describe("architecture guardrails", () => {
 
   it("keeps deployment verification content-free and free of paid canaries", async () => {
     const deployment = await fs.readFile(
-      path.join(process.cwd(), ".github/workflows/deploy-eks.yml"),
+      path.join(process.cwd(), ".github/workflows/deploy-k3s.yml"),
       "utf8",
     );
     const verification = await fs.readFile(
-      path.join(process.cwd(), "scripts/postDeployVerification.ts"),
+      path.join(process.cwd(), "scripts/deployK3s.sh"),
       "utf8",
     );
-    expect(deployment).toContain("scripts/postDeployVerification.ts");
+    expect(deployment).toContain("scripts/deployK3s.sh");
     expect(verification).not.toContain("postDeployCanary");
     expect(verification).not.toContain("--private-only");
     expect(verification).not.toContain("--record-improvement-results");
-    expect(verification).toContain("verifyDeploymentStability");
-    expect(verification).toContain("stabilitySeconds: 30");
-    expect(deployment).toContain("kubectl auth can-i create jobs.batch");
-    expect(deployment).toMatch(/permission="\$\(kubectl auth can-i create jobs\.batch[^\n]+\|\| true\)"/);
-    expect(verification).toContain("commandAllowingDenied(\"kubectl\"");
+    expect(verification).toContain("sleep 30");
+    expect(verification).toContain("kubectl auth can-i create jobs.batch");
+    expect(verification).toMatch(/permission="\$\(kubectl auth can-i create jobs\.batch[^\n]+\|\| true\)"/);
+    expect(verification).toContain("markReleaseVerified.js");
     expect(deployment).not.toContain("upload-artifact");
   });
 

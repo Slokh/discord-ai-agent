@@ -1,0 +1,40 @@
+{{- if .Values.storage.createLocalPersistentVolume }}
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: {{ .Values.storage.volumeName }}
+  labels:
+    {{- include "discord-ai-agent-postgres.labels" . | nindent 4 }}
+spec:
+  capacity:
+    storage: {{ .Values.storage.capacity }}
+  accessModes:
+    - ReadWriteOnce
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: ""
+  local:
+    path: {{ .Values.storage.hostPath }}
+  nodeAffinity:
+    required:
+      nodeSelectorTerms:
+        - matchExpressions:
+            - key: {{ .Values.storage.nodeSelector.key }}
+              operator: In
+              values:
+                - {{ .Values.storage.nodeSelector.value | quote }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ .Values.workload.existingClaim }}
+  labels:
+    {{- include "discord-ai-agent-postgres.labels" . | nindent 4 }}
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: {{ .Values.storage.capacity }}
+  storageClassName: ""
+  volumeName: {{ .Values.storage.volumeName }}
+{{- end }}

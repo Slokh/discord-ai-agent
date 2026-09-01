@@ -238,7 +238,13 @@ Run the deterministic failure suite with `npm run test:reliability`. It covers s
 
 ## Kubernetes production
 
-The reference deployment is the Helm chart in `deploy/helm/discord-ai-agent/`; `deploy/terraform/aws/` provides an AWS baseline for VPC, EKS, ECR, RDS, and GitHub OIDC.
+The production deployment is the Helm chart in `deploy/helm/discord-ai-agent/`;
+`deploy/terraform/aws/` is its authoritative AWS stack. The stack adopts the
+existing physical names without retaining a second application or runtime.
+Steady state is one `m6a.large` node (with room for a second
+only during managed updates), one 30 GiB disposable node disk, and the retained
+20 GiB encrypted Postgres volume. AWS Backup selects only that Postgres volume,
+and paid EKS control-plane logs and EC2 detailed monitoring are disabled.
 
 ### Hosted Console
 

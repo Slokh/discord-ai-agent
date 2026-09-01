@@ -4,9 +4,11 @@ data "aws_availability_zones" "available" {
 
 module "vpc" {
   source  = "terraform-aws-modules/vpc/aws"
-  version = "~> 5.0"
+  version = "5.21.0"
 
-  name = var.name
+  # Physical names are supplied privately so adopting production state does not
+  # recreate the VPC, cluster, repository, or IAM roles.
+  name = var.aws_resource_prefix
   cidr = "10.0.0.0/16"
 
   azs             = slice(data.aws_availability_zones.available.names, 0, 2)
@@ -29,90 +31,99 @@ module "vpc" {
 }
 
 resource "aws_ecr_repository" "app" {
-  name                 = var.name
-  image_tag_mutability = "MUTABLE"
+  name                 = var.aws_resource_prefix
+  image_tag_mutability = "IMMUTABLE"
 
   image_scanning_configuration {
     scan_on_push = true
-  }
-}
-
-resource "aws_ecr_repository" "sandbox" {
-  name                 = "${var.name}-sandbox"
-  image_tag_mutability = "MUTABLE"
-
-  image_scanning_configuration {
-    scan_on_push = true
-  }
-}
-
-resource "aws_ecr_repository" "candidate_app" {
-  name                 = "${var.name}-candidate"
-  image_tag_mutability = "MUTABLE"
-
-  image_scanning_configuration {
-    scan_on_push = false
-  }
-}
-
-resource "aws_ecr_repository" "candidate_sandbox" {
-  name                 = "${var.name}-sandbox-candidate"
-  image_tag_mutability = "MUTABLE"
-
-  image_scanning_configuration {
-    scan_on_push = false
   }
 }
 
 locals {
-  candidate_image_lifecycle_policy = jsonencode({
-    rules = [{
-      rulePriority = 1
-      description  = "Remove disposable candidate images after one day"
-      selection = {
-        tagStatus     = "tagged"
-        tagPrefixList = ["tree-"]
-        countType     = "sinceImagePushed"
-        countUnit     = "days"
-        countNumber   = 1
+  ecr_lifecycle_policy = jsonencode({
+    rules = [
+      {
+        rulePriority = 1
+        description  = "Remove untagged images after one day"
+        selection = {
+          tagStatus   = "untagged"
+          countType   = "sinceImagePushed"
+          countUnit   = "days"
+          countNumber = 1
+        }
+        action = { type = "expire" }
+      },
+      {
+        rulePriority = 2
+        description  = "Retain the newest ten immutable revisions"
+        selection = {
+          tagStatus      = "tagged"
+          tagPatternList = ["*"]
+          countType      = "imageCountMoreThan"
+          countNumber    = 10
+        }
+        action = { type = "expire" }
       }
-      action = { type = "expire" }
-    }]
+    ]
   })
 }
 
-resource "aws_ecr_lifecycle_policy" "candidate_app" {
-  repository = aws_ecr_repository.candidate_app.name
-  policy     = local.candidate_image_lifecycle_policy
-}
-
-resource "aws_ecr_lifecycle_policy" "candidate_sandbox" {
-  repository = aws_ecr_repository.candidate_sandbox.name
-  policy     = local.candidate_image_lifecycle_policy
+resource "aws_ecr_lifecycle_policy" "app" {
+  repository = aws_ecr_repository.app.name
+  policy     = local.ecr_lifecycle_policy
 }
 
 module "eks" {
   source  = "terraform-aws-modules/eks/aws"
-  version = "~> 20.0"
+  version = "20.37.2"
 
-  cluster_name    = var.name
+  cluster_name    = var.aws_resource_prefix
   cluster_version = "1.34"
 
   vpc_id     = module.vpc.vpc_id
   subnet_ids = module.vpc.private_subnets
 
-  enable_cluster_creator_admin_permissions = true
+  authentication_mode                      = "API_AND_CONFIG_MAP"
+  enable_cluster_creator_admin_permissions = false
   cluster_endpoint_public_access           = true
+  cluster_endpoint_private_access          = true
+
+  kms_key_administrators = ["arn:aws:iam::224638724342:root"]
+
+  # Application events and the durable Postgres ledger own production
+  # observability. Paid control-plane logs added roughly 1.2 GB every day while
+  # providing no readiness signal used by this small deployment.
+  cluster_enabled_log_types              = []
+  cloudwatch_log_group_retention_in_days = 7
 
   eks_managed_node_groups = {
     default = {
+      # Bot, worker, and Postgres request 600m CPU and 1.75 GiB in total. One
+      # non-burstable 8 GiB node leaves ample room for Kubernetes system pods;
+      # max_size=2 preserves a rolling-update slot without idle steady capacity.
       min_size     = 1
       max_size     = 2
       desired_size = 1
 
-      subnet_ids     = module.vpc.public_subnets
-      instance_types = ["t3.medium"]
-      capacity_type  = "ON_DEMAND"
+      node_repair_config = {
+        enabled = true
+      }
+
+      subnet_ids        = module.vpc.public_subnets
+      instance_types    = ["m6a.large"]
+      capacity_type     = "ON_DEMAND"
+      enable_monitoring = false
+      block_device_mappings = {
+        root = {
+          device_name = "/dev/xvda"
+          ebs = {
+            volume_size           = 30
+            volume_type           = "gp3"
+            encrypted             = true
+            delete_on_termination = true
+          }
+        }
+      }
     }
   }
 
@@ -132,50 +143,62 @@ module "eks" {
   }
 }
 
-resource "aws_db_subnet_group" "main" {
-  name       = var.name
-  subnet_ids = module.vpc.private_subnets
+resource "aws_eks_access_entry" "operator" {
+  cluster_name  = module.eks.cluster_name
+  principal_arn = var.operator_role_arn
 }
 
-resource "aws_security_group" "rds" {
-  name        = "${var.name}-rds"
-  description = "Postgres access from EKS nodes"
-  vpc_id      = module.vpc.vpc_id
+resource "aws_eks_access_policy_association" "operator" {
+  cluster_name  = module.eks.cluster_name
+  principal_arn = aws_eks_access_entry.operator.principal_arn
+  policy_arn    = "arn:aws:eks::aws:cluster-access-policy/AmazonEKSAdminPolicy"
+
+  access_scope {
+    type       = "namespace"
+    namespaces = [var.kubernetes_namespace]
+  }
 }
 
-resource "aws_security_group_rule" "rds_from_nodes" {
-  type                     = "ingress"
-  from_port                = 5432
-  to_port                  = 5432
-  protocol                 = "tcp"
-  security_group_id        = aws_security_group.rds.id
-  source_security_group_id = module.eks.node_security_group_id
+data "aws_iam_policy_document" "ebs_csi_assume_role" {
+  statement {
+    actions = ["sts:AssumeRole", "sts:TagSession"]
+
+    principals {
+      type        = "Service"
+      identifiers = ["pods.eks.amazonaws.com"]
+    }
+  }
 }
 
-resource "aws_security_group_rule" "rds_egress" {
-  type              = "egress"
-  from_port         = 0
-  to_port           = 0
-  protocol          = "-1"
-  cidr_blocks       = ["0.0.0.0/0"]
-  security_group_id = aws_security_group.rds.id
+resource "aws_iam_role" "ebs_csi" {
+  name               = "${var.aws_resource_prefix}-ebs-csi-driver"
+  assume_role_policy = data.aws_iam_policy_document.ebs_csi_assume_role.json
 }
 
-resource "aws_db_instance" "postgres" {
-  identifier              = var.name
-  engine                  = "postgres"
-  engine_version          = "16"
-  instance_class          = var.database_instance_class
-  allocated_storage       = var.database_allocated_storage_gb
-  max_allocated_storage   = var.database_allocated_storage_gb * 2
-  db_name                 = "discord_ai_agent"
-  username                = var.database_username
-  password                = var.database_password
-  db_subnet_group_name    = aws_db_subnet_group.main.name
-  vpc_security_group_ids  = [aws_security_group.rds.id]
-  backup_retention_period = 7
-  storage_encrypted       = true
-  apply_immediately       = true
-  skip_final_snapshot     = false
-  deletion_protection     = true
+resource "aws_iam_role_policy_attachment" "ebs_csi" {
+  role       = aws_iam_role.ebs_csi.name
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonEBSCSIDriverPolicy"
+}
+
+# EBS CSI uses EKS Pod Identity; both add-ons are generic storage plumbing for
+# the standalone Postgres volume and are unrelated to the retired agent stack.
+resource "aws_eks_addon" "pod_identity_agent" {
+  cluster_name                = module.eks.cluster_name
+  addon_name                  = "eks-pod-identity-agent"
+  addon_version               = "v1.3.10-eksbuild.3"
+  resolve_conflicts_on_update = "PRESERVE"
+}
+
+resource "aws_eks_addon" "ebs_csi" {
+  cluster_name                = module.eks.cluster_name
+  addon_name                  = "aws-ebs-csi-driver"
+  addon_version               = "v1.63.1-eksbuild.1"
+  resolve_conflicts_on_update = "PRESERVE"
+
+  pod_identity_association {
+    role_arn        = aws_iam_role.ebs_csi.arn
+    service_account = "ebs-csi-controller-sa"
+  }
+
+  depends_on = [aws_eks_addon.pod_identity_agent]
 }

@@ -12,8 +12,4 @@ spec:
       port: 5432
       targetPort: postgres
   selector:
-    {{- if .Values.workload.enabled }}
     {{- include "discord-ai-agent-postgres.selectorLabels" . | nindent 4 }}
-    {{- else }}
-    {{- toYaml .Values.bridgeSelector | nindent 4 }}
-    {{- end }}

@@ -1,0 +1,102 @@
+annotations:
+  auto.sh/onboarding-install-run-id: onbrun_581542c1-eb1a-4812-bbf4-c9d4146d8856
+  auto.sh/front-of-house: "true"
+  auto.sh/onboarding-kickoff-run-id: onbrun_581542c1-eb1a-4812-bbf4-c9d4146d8856
+  auto.sh/onboarding-kickoff-correlation-key: 8e6a2814-8229-407f-8020-9a0e854d0cbb
+imports:
+  - "@auto/agents@1.8.0/chief-of-staff.yaml"
+  - "@auto/fragments@1.7.0/onboarding/accelerator.yaml"
+  - ../fragments/environments/agent-runtime.yaml
+triggers:
+  - name: onboarding-kickoff
+    event: auto.onboarding.session_requested
+    where: {}
+    route:
+      to: new
+    message: >-
+      [auto.onboarding.activate:v1]
+
+
+      Installed roster:
+
+      - Chief of Staff (chief-of-staff) — Front of house. Turns a task list into
+      owned, review-ready pull requests.
+
+      - Staff Engineer (staff-engineer) — Owns each task end to end through CI
+      and review.
+
+      - Junior Engineer (junior-engineer) — Takes mechanical and batch coding
+      work.
+
+      - PR Review (pr-review) — Reviews every pull request against the current
+      head.
+
+      - Self Improvement (self-improvement) — Examines recent sessions and
+      feedback from you and suggests changes to improve the fleet.
+
+
+      Safety and authority:
+
+      - Chief of Staff: Can merge only after a user delegates the merge and the
+      readiness bar passes.
+
+
+      Default starting schedules (cron expressions exactly as installed):
+
+      - Chief of Staff: Background check-ins via fleet-heartbeat at `0 * * * *`.
+
+      - Self Improvement: Scheduled improvement sweep via sweep-heartbeat at `0
+      6 * * *` (America/Los_Angeles).
+
+
+      Baseline event-driven work:
+
+      - Chief of Staff: Team dispatch — Give it a task list and it assigns
+      scoped work to staff engineers, then shepherds their progress.
+
+      - Chief of Staff: Delegated PR follow-through — After an implementation
+      agent reports readiness, it follows checks and close outcomes while that
+      agent owns its changes.
+
+      - Staff Engineer: Orchestrator dispatch — Chief of Staff or another
+      orchestrator can assign it one scoped task and track its milestones.
+
+      - Staff Engineer: PR ownership — It stays with its PR through CI, review
+      feedback, comments, and conflicts; a human decides whether to merge.
+
+      - Junior Engineer: Orchestrator dispatch — Chief of Staff or another
+      orchestrator can assign it a mechanical scoped task and track its
+      milestones.
+
+      - Junior Engineer: PR ownership — It handles CI, reviews, comments, and
+      conflicts for its PR; a human decides whether to merge.
+
+      - PR Review: Pull request review — Reviews every PR when it opens,
+      reopens, or receives a new push, then follows the review conversation.
+
+
+      The onboarding run is server-written setup state.
+    attachedUserPrompt: I just installed The Accelerator. Help me get started.
+  - name: resource-apply-completed
+    event: auto.project_resource_apply.completed
+    where:
+      $.apply.auditAction: github_sync.apply
+      $.apply.onboardingKickoff:
+        exists: false
+    message: >-
+      GitHub Sync applied project resources (operation {{apply.operationId}};
+
+      created {{apply.plan.counts.create}}, updated
+      {{apply.plan.counts.update}}).
+
+
+      Reconcile the deployed resources and current team state. Treat this as
+
+      a deployment FYI unless the apply makes existing work ready to continue.
+    route:
+      to: slot
+      onUnmatched: spawn
+variables:
+  repoFullName: Slokh/discord-ai-agent
+  githubConnection: github-Slokh
+  onboardingRunId: onbrun_581542c1-eb1a-4812-bbf4-c9d4146d8856

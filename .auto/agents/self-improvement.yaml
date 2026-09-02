@@ -1,0 +1,8 @@
+annotations:
+  auto.sh/onboarding-install-run-id: onbrun_581542c1-eb1a-4812-bbf4-c9d4146d8856
+imports:
+  - "@auto/agents@latest/self-improvement.yaml"
+  - ../fragments/environments/agent-runtime.yaml
+variables:
+  repoFullName: Slokh/discord-ai-agent
+  githubConnection: github-Slokh

@@ -1,0 +1,6 @@
+# This shared runtime starts blank. Add repository-specific steps or setup when needed.
+environment:
+  name: agent-runtime
+  image:
+    kind: preset
+    name: node24

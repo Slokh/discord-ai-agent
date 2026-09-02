@@ -14,7 +14,7 @@ This removes the fixed EKS cluster charge without replacing Kubernetes Jobs with
 - Keeps the retained Postgres volume and its existing daily recovery points.
 - Uses one repository and one Terraform stack for runtime, deployment, recovery, and cost ownership.
 
-The expected steady-state infrastructure is one `m6a.large`, one public IPv4 address, a 30 GiB disposable root disk, the retained 20 GiB Postgres disk, an 8 GiB K3s-state disk, incremental backups, ECR, and two small Secrets Manager records. The target is approximately $75 per month at current on-demand rates.
+The expected steady-state infrastructure is one `t3a.medium`, one public IPv4 address, a 30 GiB disposable root disk, the retained 20 GiB Postgres disk, an 8 GiB K3s-state disk, incremental backups, ECR, and two small Secrets Manager records. The target is approximately $40 per month at current on-demand rates. The burstable host preserves two x86 vCPUs while matching the observed low sustained CPU load; its 4 GiB memory is intentionally oversubscribed by container limits, so memory pressure and sandbox failures must remain part of production observation.
 
 ## Costs and operational responsibility
 

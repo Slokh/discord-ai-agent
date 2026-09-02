@@ -7,7 +7,7 @@ OIDC roles.
 
 The production workload is deliberately small:
 
-- one `m6a.large` K3s host in a one-instance Auto Scaling group;
+- one `t3a.medium` K3s host in a one-instance Auto Scaling group;
 - one 30 GiB disposable node root volume;
 - the retained 20 GiB encrypted Postgres volume;
 - one 8 GiB encrypted K3s-state volume;

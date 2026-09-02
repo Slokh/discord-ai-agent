@@ -236,7 +236,7 @@ Run the deterministic failure suite with `npm run test:reliability`. It covers s
 
 ## Kubernetes production
 
-The production deployment is the Helm chart in `deploy/helm/discord-ai-agent/`; `deploy/terraform/aws/` is its authoritative AWS stack. One `m6a.large` EC2 host runs K3s, Postgres, the bot, and the worker. The host has no inbound security-group rule and accepts deployment and operator commands only through Systems Manager.
+The production deployment is the Helm chart in `deploy/helm/discord-ai-agent/`; `deploy/terraform/aws/` is its authoritative AWS stack. One `t3a.medium` EC2 host runs K3s, Postgres, the bot, and the worker. The host has no inbound security-group rule and accepts deployment and operator commands only through Systems Manager.
 
 The 30 GiB root disk is disposable. The retained 20 GiB encrypted Postgres disk and separate 8 GiB encrypted K3s-state disk are pinned to the same availability zone and backed up daily for 14 days. The Auto Scaling group replaces a failed host; bootstrap attaches both exact volumes before starting K3s. Secrets Manager retains the two Kubernetes Secret manifests without putting their values in Terraform state. See [Single-node K3s production](architecture/single-node-k3s.md) for the complete decision and recovery contract.
 

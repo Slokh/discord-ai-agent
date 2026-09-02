@@ -43,7 +43,7 @@ variable "public_subnet_cidrs" {
 variable "k3s_instance_type" {
   description = "Single production host size for K3s, the application, and Postgres."
   type        = string
-  default     = "m6a.large"
+  default     = "t3a.medium"
 }
 
 variable "k3s_state_volume_size" {

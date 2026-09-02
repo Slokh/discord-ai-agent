@@ -12,7 +12,7 @@ module "vpc" {
   cidr = "10.0.0.0/16"
 
   azs             = slice(data.aws_availability_zones.available.names, 0, 2)
-  private_subnets = var.private_subnet_cidrs
+  private_subnets = []
   public_subnets  = var.public_subnet_cidrs
 
   enable_nat_gateway      = false
@@ -21,13 +21,6 @@ module "vpc" {
   enable_dns_support      = true
   map_public_ip_on_launch = true
 
-  private_subnet_tags = {
-    "kubernetes.io/role/internal-elb" = "1"
-  }
-
-  public_subnet_tags = {
-    "kubernetes.io/role/elb" = "1"
-  }
 }
 
 resource "aws_ecr_repository" "app" {
@@ -55,12 +48,12 @@ locals {
       },
       {
         rulePriority = 2
-        description  = "Retain the newest ten immutable revisions"
+        description  = "Retain the newest three immutable revisions"
         selection = {
           tagStatus      = "tagged"
           tagPatternList = ["*"]
           countType      = "imageCountMoreThan"
-          countNumber    = 10
+          countNumber    = 3
         }
         action = { type = "expire" }
       }

@@ -13,7 +13,7 @@ The production workload is deliberately small:
 - one 8 GiB encrypted K3s-state volume;
 - daily backups of Postgres and K3s state, retained for 14 days;
 - no managed Kubernetes control plane or EC2 detailed monitoring;
-- one immutable ECR repository retaining three release revisions; and
+- one immutable ECR repository retaining the current release and one rollback release; and
 - GitHub OIDC trust for only `Slokh/discord-ai-agent`.
 
 The physical state bucket, namespace, ECR repository, IAM role, backup vault,

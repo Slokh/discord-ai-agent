@@ -48,12 +48,12 @@ locals {
       },
       {
         rulePriority = 2
-        description  = "Retain the newest three immutable revisions"
+        description  = "Retain the current and previous release manifest pairs"
         selection = {
           tagStatus      = "tagged"
           tagPatternList = ["*"]
           countType      = "imageCountMoreThan"
-          countNumber    = 3
+          countNumber    = 4
         }
         action = { type = "expire" }
       }

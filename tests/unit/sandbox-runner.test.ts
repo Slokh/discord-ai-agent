@@ -73,9 +73,8 @@ describe("sandboxRunner", () => {
   });
 
   it("runs only NanoCodex-supported models through the native runtime", () => {
-    expect(nanoCodexModel("openai/gpt-5.6-sol")).toBe("gpt-5.6-sol");
-    expect(nanoCodexModel("openai/gpt-5.6-terra")).toBe("gpt-5.6-terra");
-    expect(nanoCodexModel("openai/gpt-5.6-luna")).toBe("gpt-5.6-luna");
+    expect(nanoCodexModel("openai/gpt-6-luna")).toBe("gpt-6-luna");
+    expect(nanoCodexModel("openai/gpt-6-sol")).toBe("gpt-6-sol");
     expect(() => nanoCodexModel("openrouter/openai/gpt-5.6-luna")).toThrow(/supports OpenRouter model/);
     expect(() => nanoCodexModel("z-ai/glm-5.2")).toThrow(/supports OpenRouter model/);
     const env = nanoCodexProcessEnv(
@@ -160,7 +159,7 @@ describe("sandboxRunner", () => {
     expect(dockerfile).toContain("apt-get install -y --no-install-recommends gh");
     expect(dockerfile).toContain("npm install --global npm@11.19.0");
     expect(dockerfile).not.toContain("nanocodex-bin");
-    expect(cargoManifest).toContain("09682059a17306e472c00c579baa6a2f15fa13f0");
+    expect(cargoManifest).toContain("4744bd069a6d4f44c0254428042ae45acc4ff535");
     expect(dockerfile).toContain("/usr/local/bin/discord-agent-nanocodex-runtime");
     expect(dockerfile).not.toContain("/usr/local/bin/nanocodex");
   });

@@ -11,21 +11,21 @@ import type { ToolContext } from "../../src/tools/types.js";
 describe("agent model settings", () => {
   it("provides the default, authorized override, and code model as verified routing context", async () => {
     const ctx = context("member", {
-      getGuildAgentSettings: vi.fn(async () => ({ chatModel: "openai/gpt-5.6-sol" })),
+      getGuildAgentSettings: vi.fn(async () => ({ chatModel: "openai/gpt-6-sol" })),
     });
     ctx.config = {
       openRouter: {
-        chatModel: "openai/gpt-5.6-luna",
-        codegenModel: "openai/gpt-5.6-terra",
+        chatModel: "openai/gpt-6-luna",
+        codegenModel: "openai/gpt-6-luna",
       },
     } as ToolContext["config"];
 
     const prepared = await prepareAgentModelCapability(ctx);
 
-    expect(prepared.model).toBe("openai/gpt-5.6-sol");
-    expect(prepared.promptContribution?.content).toContain("Configured Discord chat default: `openai/gpt-5.6-luna` (Luna).");
-    expect(prepared.promptContribution?.content).toContain("authorized chat-model override: `openai/gpt-5.6-sol`");
-    expect(prepared.promptContribution?.content).toContain("Configured code-update model: `openai/gpt-5.6-terra` (Terra).");
+    expect(prepared.model).toBe("openai/gpt-6-sol");
+    expect(prepared.promptContribution?.content).toContain("Configured Discord chat default: `openai/gpt-6-luna` (Luna).");
+    expect(prepared.promptContribution?.content).toContain("authorized chat-model override: `openai/gpt-6-sol`");
+    expect(prepared.promptContribution?.content).toContain("Configured code-update model: `openai/gpt-6-luna` (Luna).");
   });
 
   it("validates OpenRouter model IDs locally", () => {
@@ -36,14 +36,25 @@ describe("agent model settings", () => {
   });
 
   it("loads the durable NanoCodex override once", async () => {
-    const getGuildAgentSettings = vi.fn(async () => ({ chatModel: "openai/gpt-5.6-luna" }));
+    const getGuildAgentSettings = vi.fn(async () => ({ chatModel: "openai/gpt-6-luna" }));
     const ctx = context("owner", { getGuildAgentSettings });
 
     await loadAgentModelOverride(ctx);
     await loadAgentModelOverride(ctx);
 
     expect(getGuildAgentSettings).toHaveBeenCalledTimes(1);
-    expect(effectiveAgentChatModel(ctx)).toBe("openai/gpt-5.6-luna");
+    expect(effectiveAgentChatModel(ctx)).toBe("openai/gpt-6-luna");
+  });
+
+  it("uses the default when a stored override is no longer supported", async () => {
+    const ctx = context("owner", {
+      getGuildAgentSettings: vi.fn(async () => ({ chatModel: "openai/gpt-5.6-sol" })),
+    });
+
+    await loadAgentModelOverride(ctx);
+
+    expect(ctx.chatModelOverride).toBeNull();
+    expect(effectiveAgentChatModel(ctx)).toBe("openai/gpt-6-sol");
   });
 
   it("sets and resets the server override for configured owners and ops", async () => {
@@ -60,10 +71,10 @@ describe("agent model settings", () => {
     }));
     expect(repo.setGuildChatModelOverride).toHaveBeenCalledWith({
       guildId: "guild",
-      chatModel: "openai/gpt-5.6-luna",
+      chatModel: "openai/gpt-6-luna",
       updatedByUserId: "owner",
     });
-    expect(effectiveAgentChatModel(ownerCtx)).toBe("openai/gpt-5.6-luna");
+    expect(effectiveAgentChatModel(ownerCtx)).toBe("openai/gpt-6-luna");
 
     const opsCtx = context("operator", repo);
     opsCtx.chatModelOverride = "bad-provider/missing-model";
@@ -72,7 +83,7 @@ describe("agent model settings", () => {
     await expect(setAgentModel(opsCtx, { action: "reset" }))
       .resolves.toEqual(expect.objectContaining({ content: expect.stringContaining("configured default") }));
     expect(repo.clearGuildChatModelOverride).toHaveBeenCalledWith("guild");
-    expect(effectiveAgentChatModel(opsCtx)).toBe("openai/gpt-5.6-sol");
+    expect(effectiveAgentChatModel(opsCtx)).toBe("openai/gpt-6-sol");
   });
 
   it("denies unconfigured users and leaves durable state unchanged", async () => {
@@ -82,7 +93,7 @@ describe("agent model settings", () => {
 
     await expect(setAgentModel(ctx, {
       action: "set",
-      model: "openai/gpt-5.6-luna",
+      model: "openai/gpt-6-luna",
     })).resolves.toEqual(expect.objectContaining({ content: expect.stringContaining("restricted"), status: "error" }));
     expect(repo.setGuildChatModelOverride).not.toHaveBeenCalled();
     expect(repo.auditTool).toHaveBeenCalledWith(expect.objectContaining({
@@ -126,8 +137,8 @@ describe("agent model settings", () => {
 
     await expect(setAgentModel(ctx, {
       action: "set",
-      model: "openai/gpt-5.6-sol",
-    })).resolves.toEqual(expect.objectContaining({ content: expect.stringContaining("openai/gpt-5.6-sol") }));
+      model: "openai/gpt-6-sol",
+    })).resolves.toEqual(expect.objectContaining({ content: expect.stringContaining("openai/gpt-6-sol") }));
   });
 });
 
@@ -146,7 +157,7 @@ function context(userId: string, repo: Record<string, unknown>): ToolContext {
     config: {
       maxReplyChars: 1_800,
       openRouter: {
-        chatModel: "openai/gpt-5.6-sol",
+        chatModel: "openai/gpt-6-sol",
       },
       allowlists: {
         ownerUserId: "owner",

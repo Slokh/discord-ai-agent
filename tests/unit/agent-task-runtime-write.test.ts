@@ -42,8 +42,8 @@ describe("agent task runtime write", () => {
           parentAgentSessionId: "agent-session-parent",
           parentAgentExecutionId: "agent-execution-parent",
           codegenBackend: "kubernetes-job",
-          codegenModel: "openai/gpt-5.6-terra",
-          codegenReasoningEffort: "medium",
+          codegenModel: "openai/gpt-6-luna",
+          codegenReasoningEffort: "max",
           codegenProvider: "openrouter"
         })
       })
@@ -77,15 +77,15 @@ describe("agent task runtime write", () => {
         traceId: "prompt-message-1",
         status: "queued",
         harness: "runCodingAgent",
-        reasoningEffort: "medium",
+        reasoningEffort: "max",
         metadata: expect.objectContaining({
           backend: "kubernetes-sandbox",
           pgbossJobId: "pgboss-job-1",
           queue: "agent.task",
           parentAgentSessionId: "agent-session-parent",
           parentAgentExecutionId: "agent-execution-parent",
-          codegenModel: "openai/gpt-5.6-terra",
-          codegenReasoningEffort: "medium"
+          codegenModel: "openai/gpt-6-luna",
+          codegenReasoningEffort: "max"
         })
       })
     );
@@ -103,8 +103,8 @@ describe("agent task runtime write", () => {
           queue: "agent.task",
           parentAgentSessionId: "agent-session-parent",
           parentAgentExecutionId: "agent-execution-parent",
-          codegenModel: "openai/gpt-5.6-terra",
-          codegenReasoningEffort: "medium"
+          codegenModel: "openai/gpt-6-luna",
+          codegenReasoningEffort: "max"
         })
       })
     );

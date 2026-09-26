@@ -1,6 +1,6 @@
 import type { AppConfig } from "../config/env.js";
 
-export const CODEGEN_REASONING = "medium" as const;
+export const CODEGEN_REASONING = "max" as const;
 
 export type CodegenExecutionSelection = {
   codegenBackend: "kubernetes-job";

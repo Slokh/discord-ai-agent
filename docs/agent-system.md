@@ -49,10 +49,8 @@ Static prompt skills live in `skills/`. The model can load one exact skill throu
 
 Configuration is validated in `src/config/env.ts`:
 
-- Discord chat defaults to Luna with high reasoning.
-- Utility reasoning defaults to Luna with high reasoning.
-- Code updates default to Terra with medium reasoning.
-- Owner/ops may set a per-guild conversational override to Sol or Luna through the guarded model tool.
+- Discord chat, utility calls, and code updates default to GPT-6 Luna with max reasoning.
+- Owner/ops may set a per-guild conversational override to GPT-6 Sol or Luna through the guarded model tool. Older unsupported overrides fall back to the configured default.
 
 Public-web research crosses the typed `web__run` application capability. Its model contract is one discriminated `operations` array with explicit `search`, `open`, and `time` records; the handler translates search and open records to provider-native operations and answers validated UTC-offset time records directly from the process clock. Its focused handler sends only the authoritative typed web operations to the nested provider, never the full outer Discord request, offers only the matching hosted search or fetch capabilities, and requires hosted execution after the outer agent selects a validated external operation. It rejects hosted responses without recorded execution and readable evidence. Hosted research has a shorter auxiliary-call deadline than the primary conversation; a timeout returns the existing typed evidence limitation so the outer agent can finish from evidence it already has instead of consuming the full chat deadline. This prevents nested research from attempting unrelated work while keeping current-time lookup deterministic and independent of provider latency. Provider requests, configured deadlines, usage, sources, and failures stay in the same runtime ledger. NanoCodex's provider-specific standalone search is disabled so the agent cannot bypass the configured provider or its application telemetry.
 

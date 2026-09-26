@@ -268,7 +268,7 @@ jobs:
       - id: ecr
         uses: aws-actions/amazon-ecr-login@v2
       - name: Generate runtime SBOM
-        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
+        uses: anchore/sbom-action@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2
         with:
           image: ${{ needs.candidate-images.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ needs.candidate-images.outputs.tree_tag }}
           format: cyclonedx-json
@@ -316,7 +316,7 @@ jobs:
           set: |
             *.cache-from=type=gha,scope=runtime
       - name: Generate runtime SBOM
-        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
+        uses: anchore/sbom-action@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2
         with:
           image: discord-ai-agent:ci-runtime
           format: cyclonedx-json

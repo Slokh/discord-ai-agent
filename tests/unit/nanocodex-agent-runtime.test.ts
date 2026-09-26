@@ -37,8 +37,8 @@ describe("NanoCodex agent runtime executor", () => {
   it("runs a retained NanoCodex turn with the full deployment-safe tool contract", async () => {
     const runtime = agentRuntime();
     const runRuntime = vi.fn(async (input: any) => {
-      expect(input.model).toBe("openai/gpt-5.6-luna");
-      expect(input.thinking).toBe("medium");
+      expect(input.model).toBe("openai/gpt-6-luna");
+      expect(input.thinking).toBe("max");
       expect(input.sessionId).toMatch(/^[0-9a-f-]+$/);
       expect(input.sessionId).not.toBe("018f1f9a-7b3c-7a01-8000-000000000001");
       expect(input.hostedWebSearch).toBe(false);
@@ -598,7 +598,7 @@ function toolContext(runtime: ReturnType<typeof agentRuntime>) {
       openRouter: {
         ...config.openRouter,
         apiKey: "test-key",
-        chatModel: "openai/gpt-5.6-luna",
+        chatModel: "openai/gpt-6-luna",
       },
     },
     repo: {},

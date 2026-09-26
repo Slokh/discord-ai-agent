@@ -256,8 +256,8 @@ describe.skipIf(!runDbTests)("pg-boss database behavior", () => {
           harness: "runCodingAgent",
           metadata: expect.objectContaining({
             runtime: "agent",
-            codegenModel: "openai/gpt-5.6-terra",
-            codegenReasoningEffort: "medium",
+            codegenModel: "openai/gpt-6-luna",
+            codegenReasoningEffort: "max",
             parentAgentSessionId: "agent-session-parent",
             parentAgentExecutionId: "agent-execution-parent"
           })
@@ -276,12 +276,12 @@ describe.skipIf(!runDbTests)("pg-boss database behavior", () => {
           taskId,
           status: "running",
           harness: "runCodingAgent",
-          reasoningEffort: "medium",
+          reasoningEffort: "max",
           sandboxRunId: "sandbox-run-1",
           metadata: expect.objectContaining({
             runtime: "agent",
-            codegenModel: "openai/gpt-5.6-terra",
-            codegenReasoningEffort: "medium",
+            codegenModel: "openai/gpt-6-luna",
+            codegenReasoningEffort: "max",
             parentAgentSessionId: "agent-session-parent",
             parentAgentExecutionId: "agent-execution-parent"
           })

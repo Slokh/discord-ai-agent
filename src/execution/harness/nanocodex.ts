@@ -13,9 +13,9 @@ export const NANOCODEX_RUNTIME_LABEL = "nanocodex-native-v1";
 
 export function nanoCodexModel(model: string) {
   const normalized = model.trim().replace(/^openai\//, "");
-  if (normalized === "gpt-5.6-sol" || normalized === "gpt-5.6-terra" || normalized === "gpt-5.6-luna") return normalized;
+  if (normalized === "gpt-6-luna" || normalized === "gpt-6-sol") return normalized;
   throw new Error(
-    `NanoCodex supports OpenRouter model "openai/gpt-5.6-sol", "openai/gpt-5.6-terra", or "openai/gpt-5.6-luna"; received "${model}".`
+    `NanoCodex supports OpenRouter model "openai/gpt-6-luna" or "openai/gpt-6-sol"; received "${model}".`
   );
 }
 

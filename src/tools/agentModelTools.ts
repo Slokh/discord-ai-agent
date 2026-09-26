@@ -1,5 +1,5 @@
 import { summarizeForAudit } from "../util/text.js";
-import { resolveAgentModel } from "./agentModelCatalog.js";
+import { isSupportedAgentModel, resolveAgentModel } from "./agentModelCatalog.js";
 import type { AgentResponse, ToolContext } from "./types.js";
 
 export { normalizeOpenRouterModelId } from "./agentModelId.js";
@@ -26,7 +26,8 @@ export async function loadAgentModelOverride(ctx: ToolContext): Promise<void> {
   const settings = typeof repo.getGuildAgentSettings === "function"
     ? await repo.getGuildAgentSettings(ctx.guildId)
     : undefined;
-  ctx.chatModelOverride = settings?.chatModel?.trim() || null;
+  const override = settings?.chatModel?.trim();
+  ctx.chatModelOverride = override && isSupportedAgentModel(override) ? override : null;
   ctx.chatModelOverrideLoaded = true;
 }
 

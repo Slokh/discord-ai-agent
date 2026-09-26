@@ -25,9 +25,9 @@ describe("config", () => {
         sessionSecret: "",
       });
       expect(config.openRouter).toEqual(expect.objectContaining({
-        chatModel: "openai/gpt-5.6-terra",
-        codegenModel: "openai/gpt-5.6-terra",
-        utilityModel: "openai/gpt-5.6-terra"
+        chatModel: "openai/gpt-6-luna",
+        codegenModel: "openai/gpt-6-luna",
+        utilityModel: "openai/gpt-6-luna"
       }));
       expect(config.execution).not.toHaveProperty("codegenBackend");
       expect(config.execution).not.toHaveProperty("codegenLease");

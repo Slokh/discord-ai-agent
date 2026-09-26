@@ -58,7 +58,7 @@ describe("deployment announcements", () => {
     );
     expect(fixture.openRouter.chat).toHaveBeenCalledWith(expect.objectContaining({
       model: fixture.config.openRouter.utilityModel,
-      reasoningEffort: "medium",
+      reasoningEffort: "max",
       toolChoice: "none"
     }));
     const modelMessages = fixture.openRouter.chat.mock.calls[0]?.[0].messages;

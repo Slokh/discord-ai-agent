@@ -185,7 +185,7 @@ impl Tool for ProtocolTool {
         let wire = nanocodex::tools::contract::ToolOutputWire {
             output: result.output,
             success: result.success,
-            code_mode_value: result
+            structured_result: result
                 .code_mode_value
                 .map(|value| serde_json::value::to_raw_value(&value))
                 .transpose()?,
@@ -442,6 +442,12 @@ mod tests {
     use tokio::time::{Duration, timeout};
 
     #[test]
+    fn pinned_nanocodex_accepts_gpt_6_luna_at_max_reasoning() {
+        assert_eq!("gpt-6-luna".parse::<Model>().expect("GPT-6 Luna").as_str(), "gpt-6-luna");
+        assert_eq!("max".parse::<Thinking>().expect("max effort").as_str(), "max");
+    }
+
+    #[test]
     fn protocol_input_owns_a_private_blocking_close_on_exec_descriptor() {
         let mut descriptors = [0; 2];
         assert_eq!(unsafe { libc::pipe(descriptors.as_mut_ptr()) }, 0);
@@ -510,7 +516,7 @@ mod tests {
         });
         let history = Vec::new();
         let context =
-            ToolContext::new("gpt-5.6-sol", "session-test", "outer-call", &history, 1_000);
+            ToolContext::new("gpt-6-sol", "session-test", "outer-call", &history, 1_000);
         let execution = timeout(
             Duration::from_secs(2),
             runtime.execute_code(
@@ -523,6 +529,7 @@ mod tests {
 
         let result_directory = result_sender.await.expect("result sender completed");
         std::fs::remove_dir_all(result_directory).expect("remove result directory");
+        let execution = execution.expect("Code Mode execution should complete");
         assert!(execution.success);
         assert_eq!(execution.nested_calls.len(), 1);
     }
@@ -591,7 +598,7 @@ mod tests {
             result_directory
         });
         let history = Vec::new();
-        let context = ToolContext::new("gpt-5.6-sol", "session-web-test", "outer-call", &history, 1_000);
+        let context = ToolContext::new("gpt-6-sol", "session-web-test", "outer-call", &history, 1_000);
         let execution = timeout(
             Duration::from_secs(2),
             runtime.execute_code(
@@ -604,6 +611,7 @@ mod tests {
 
         let result_directory = result_sender.await.expect("result sender completed");
         std::fs::remove_dir_all(result_directory).expect("remove result directory");
+        let execution = execution.expect("Code Mode execution should complete");
         assert!(execution.success, "{execution:?}");
         assert_eq!(execution.nested_calls.len(), 1);
     }

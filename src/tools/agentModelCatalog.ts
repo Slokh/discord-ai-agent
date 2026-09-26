@@ -11,9 +11,13 @@ export type AgentModelResolution =
   };
 
 const NANOCODEX_MODELS = [
-  { id: "openai/gpt-5.6-sol", aliases: ["sol", "gpt 5.6 sol", "gpt-5.6-sol"] },
-  { id: "openai/gpt-5.6-luna", aliases: ["luna", "gpt 5.6 luna", "gpt-5.6-luna"] },
+  { id: "openai/gpt-6-luna", aliases: ["luna", "gpt 6 luna", "gpt-6-luna"] },
+  { id: "openai/gpt-6-sol", aliases: ["sol", "gpt 6 sol", "gpt-6-sol"] },
 ] as const;
+
+export function isSupportedAgentModel(model: string): boolean {
+  return NANOCODEX_MODELS.some((candidate) => candidate.id === model);
+}
 
 /** Resolve only models implemented by the embedded NanoCodex runtime. */
 export async function resolveAgentModel(

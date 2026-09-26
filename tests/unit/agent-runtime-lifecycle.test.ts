@@ -152,8 +152,8 @@ describe("agent runtime lifecycle", () => {
         queueName: "agent.task",
         backendName: "local-process-sandbox",
         codegenBackend: "kubernetes-job" as const,
-        codegenModel: "openai/gpt-5.6-terra" as const,
-        codegenReasoningEffort: "medium" as const,
+        codegenModel: "openai/gpt-6-luna" as const,
+        codegenReasoningEffort: "max" as const,
         codegenProvider: "openrouter"
       }))
     };
@@ -229,16 +229,16 @@ describe("agent runtime lifecycle", () => {
         taskId: "task-runtime-first",
         status: "queued",
         harness: "runCodingAgent",
-        model: "openai/gpt-5.6-terra",
-        reasoningEffort: "medium",
+        model: "openai/gpt-6-luna",
+        reasoningEffort: "max",
         metadata: expect.objectContaining({
           queue: "agent.task",
           parentAgentSessionId: "agent-session-1",
           parentAgentExecutionId: "agent-execution-parent",
           parentAgentThreadKey: "discord:guild:channel",
           codegenBackend: "kubernetes-job",
-          codegenModel: "openai/gpt-5.6-terra",
-          codegenReasoningEffort: "medium",
+          codegenModel: "openai/gpt-6-luna",
+          codegenReasoningEffort: "max",
           codegenProvider: "openrouter",
           targetBranch: "ai/reuse-existing-pr-branch-follow-up-7ad0",
           targetPullRequestNumber: 120,
@@ -392,7 +392,7 @@ function fakeConfig() {
     ...config,
     openRouter: {
       ...config.openRouter,
-      codegenModel: "openai/gpt-5.6-terra" as const
+      codegenModel: "openai/gpt-6-luna" as const
     },
     execution: {
       ...config.execution,

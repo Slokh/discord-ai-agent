@@ -40,8 +40,8 @@ describe("agent task enqueue", () => {
         queueName: "agent.task",
         backendName: "kubernetes-sandbox",
         codegenBackend: "kubernetes-job",
-        codegenModel: "openai/gpt-5.6-terra",
-        codegenReasoningEffort: "medium",
+        codegenModel: "openai/gpt-6-luna",
+        codegenReasoningEffort: "max",
         codegenProvider: "openrouter"
       })
     );

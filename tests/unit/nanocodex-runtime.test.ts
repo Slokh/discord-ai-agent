@@ -46,10 +46,10 @@ describe("NanoCodex native runtime protocol", () => {
     child.kill("SIGTERM");
   });
 
-  it("accepts every model supported by the owned NanoCodex fork", () => {
-    expect(nanoCodexModel("openai/gpt-5.6-sol")).toBe("gpt-5.6-sol");
-    expect(nanoCodexModel("openai/gpt-5.6-terra")).toBe("gpt-5.6-terra");
-    expect(nanoCodexModel("openai/gpt-5.6-luna")).toBe("gpt-5.6-luna");
+  it("accepts the GPT-6 models supported by the pinned upstream NanoCodex", () => {
+    expect(nanoCodexModel("openai/gpt-6-luna")).toBe("gpt-6-luna");
+    expect(nanoCodexModel("openai/gpt-6-sol")).toBe("gpt-6-sol");
+    expect(() => nanoCodexModel("openai/gpt-5.6-luna")).toThrow(/supports only/);
   });
 
   it("runs one scoped turn and returns tool results to NanoCodex", async () => {
@@ -60,7 +60,7 @@ describe("NanoCodex native runtime protocol", () => {
     const resultPromise = runNanoCodexRuntime({
       apiKey: "secret-key",
       apiBaseUrl: "https://openrouter.ai/api/v1/",
-      model: "openai/gpt-5.6-sol",
+      model: "openai/gpt-6-sol",
       thinking: "high",
       instructions: "Keep scope exact.",
       prompt: "Do the thing.",
@@ -87,7 +87,7 @@ describe("NanoCodex native runtime protocol", () => {
       request_id: "request-1",
       api_key: "secret-key",
       api_base_url: "https://openrouter.ai/api/v1",
-      model: "gpt-5.6-sol",
+      model: "gpt-6-sol",
       model_id_prefix: "openai",
       hosted_web_search: true,
       workspace_tools: false,
@@ -128,7 +128,7 @@ describe("NanoCodex native runtime protocol", () => {
 
     const snapshot = {
       version: 1,
-      model: "gpt-5.6-sol",
+      model: "gpt-6-sol",
       lineage_id: "lineage",
       prompt_cache_key: "cache",
       workspace: "/workspace",
@@ -158,7 +158,7 @@ describe("NanoCodex native runtime protocol", () => {
     const result = runNanoCodexRuntime({
       apiKey: "secret-key",
       apiBaseUrl: "https://openrouter.ai/api/v1",
-      model: "openai/gpt-5.6-luna",
+      model: "openai/gpt-6-luna",
       thinking: "low",
       instructions: "test",
       prompt: "test",
@@ -185,7 +185,7 @@ describe("NanoCodex native runtime protocol", () => {
     const result = runNanoCodexRuntime({
       apiKey: "secret-key",
       apiBaseUrl: "https://openrouter.ai/api/v1",
-      model: "openai/gpt-5.6-sol",
+      model: "openai/gpt-6-sol",
       thinking: "low",
       instructions: "test",
       prompt: "test",
@@ -220,7 +220,7 @@ describe("NanoCodex native runtime protocol", () => {
     const result = runNanoCodexRuntime({
       apiKey: "secret-key",
       apiBaseUrl: "https://openrouter.ai/api/v1",
-      model: "openai/gpt-5.6-sol",
+      model: "openai/gpt-6-sol",
       thinking: "low",
       instructions: "test",
       prompt: "test",
@@ -277,7 +277,7 @@ describe("NanoCodex native runtime protocol", () => {
     const result = runNanoCodexRuntime({
       apiKey: "secret-key",
       apiBaseUrl: "https://openrouter.ai/api/v1",
-      model: "openai/gpt-5.6-sol",
+      model: "openai/gpt-6-sol",
       thinking: "low",
       instructions: "test",
       prompt: "test",
@@ -297,7 +297,7 @@ describe("NanoCodex native runtime protocol", () => {
   });
 
   it("accepts only NanoCodex models and converts tool schemas", () => {
-    expect(nanoCodexModel("openai/gpt-5.6-luna")).toBe("gpt-5.6-luna");
+    expect(nanoCodexModel("openai/gpt-6-luna")).toBe("gpt-6-luna");
     expect(() => nanoCodexModel("z-ai/glm-5.2")).toThrow(/supports only/);
     expect(nanoCodexToolDefinitions([{
       type: "function",

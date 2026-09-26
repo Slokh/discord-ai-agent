@@ -74,6 +74,18 @@ describe("release scanner", () => {
     ]);
   });
 
+  it("allows the tracked Auto GitHub connection only in agent configuration", () => {
+    const connection = `github-${ownerName}`;
+
+    expect(scanContent(".auto/agents/pr-review.yaml", `githubConnection: ${connection}`)).toEqual([]);
+    expect(scanContent("docs/example.md", `githubConnection: ${connection}`)).toEqual([
+      expect.objectContaining({ ruleId: "private-owner", line: 1 }),
+    ]);
+    expect(scanContent(".auto/agents/pr-review.yaml", `githubConnection: ${connection} # ${ownerName}`)).toEqual([
+      expect.objectContaining({ ruleId: "private-owner", line: 1 }),
+    ]);
+  });
+
   it("keeps public owner repository exemptions in one tracked metadata policy", async () => {
     const source = await import("node:fs/promises").then((fs) => fs.readFile("scripts/scanRelease.ts", "utf8"));
     const policy = await import("node:fs/promises").then((fs) => fs.readFile("release-public-repositories.json", "utf8"));

@@ -18,7 +18,7 @@ export const ALLOWED_FIXTURE_SNOWFLAKES: string[] = [];
 type DeniedTerm = {
   ruleId: string;
   term: string;
-  allowLine?: (line: string) => boolean;
+  allowLine?: (line: string, filePath: string) => boolean;
 };
 
 type ReleaseRepositoryPolicy = { publicRepositories?: unknown };
@@ -31,6 +31,7 @@ type ReleaseHostnamePolicy = { publicHostnames?: unknown };
 const publicOwnerRepositoryPaths = releasePublicRepositoryPaths();
 const publicHostnames = releasePublicHostnames();
 const privateChannelName = ["mind", "cool"].join("");
+const publicOwnerConnectionName = `github-${["Slo", "kh"].join("")}`;
 
 function releasePublicRepositoryPaths() {
   const parsed = JSON.parse(readFileSync("release-public-repositories.json", "utf8")) as ReleaseRepositoryPolicy;
@@ -93,9 +94,10 @@ const deniedTerms: DeniedTerm[] = [
   deny("private-phrase", ["bato", "mon"]),
   {
     ...deny("private-owner", ["Slo", "kh"]),
-    allowLine: (line) => {
+    allowLine: (line, filePath) => {
       const lower = line.toLowerCase();
-      return publicOwnerRepositoryPaths.some((path) => lower.includes(path));
+      return publicOwnerRepositoryPaths.some((path) => lower.includes(path))
+        || isTrackedAutoGitHubConnection(line, filePath);
     }
   }
 ];
@@ -134,7 +136,7 @@ export function scanContent(filePath: string, content: string): Finding[] {
     for (const item of deniedTerms) {
       const termIndex = lower.indexOf(item.term.toLowerCase());
       if (termIndex !== -1) {
-        if (item.allowLine?.(line)) continue;
+        if (item.allowLine?.(line, filePath)) continue;
         findings.push({
           file: filePath,
           line: lineNumber,
@@ -190,6 +192,12 @@ function isPlaceholderBearerToken(token: string) {
   return ["example", "test", "token", "xxx", "placeholder", "redacted", "<", "$", "{"].some((marker) =>
     lower.includes(marker)
   );
+}
+
+function isTrackedAutoGitHubConnection(line: string, filePath: string) {
+  const normalizedPath = filePath.replace(/\\/g, "/");
+  if (!/^\.auto\/agents\/[^/]+\.ya?ml$/.test(normalizedPath)) return false;
+  return line.trim().toLowerCase() === `githubConnection: ${publicOwnerConnectionName}`.toLowerCase();
 }
 
 function shouldReportSnowflake(filePath: string, line: string, value: string) {

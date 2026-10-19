@@ -75,6 +75,32 @@ spec:
         - protocol: TCP
           port: {{ $proxy.credentialedPort }}
 ---
+# Only sandboxes the trusted launcher labels as model (computer profile) may
+# reach the port that injects the OpenRouter credential and nothing else.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "discord-ai-agent.fullname" . }}-sandbox-model-egress
+  labels:
+    {{- include "discord-ai-agent.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: discord-ai-agent
+      app.kubernetes.io/component: sandbox
+      {{ $proxy.modelPodLabel.key }}: {{ $proxy.modelPodLabel.value | quote }}
+  policyTypes: ["Egress"]
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: {{ include "discord-ai-agent.name" . }}
+              app.kubernetes.io/instance: {{ .Release.Name }}
+              app.kubernetes.io/component: egress-proxy
+      ports:
+        - protocol: TCP
+          port: {{ $proxy.modelPort }}
+---
 # The proxy accepts only sandbox clients and may reach only DNS and public
 # HTTPS; its addon repeats the address check after resolving each name.
 apiVersion: networking.k8s.io/v1
@@ -108,6 +134,15 @@ spec:
       ports:
         - protocol: TCP
           port: {{ $proxy.credentialedPort }}
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: discord-ai-agent
+              app.kubernetes.io/component: sandbox
+              {{ $proxy.modelPodLabel.key }}: {{ $proxy.modelPodLabel.value | quote }}
+      ports:
+        - protocol: TCP
+          port: {{ $proxy.modelPort }}
   egress:
     - to:
         - namespaceSelector:

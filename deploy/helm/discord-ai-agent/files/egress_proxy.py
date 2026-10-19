@@ -4,8 +4,11 @@ Every tunnel is limited to public port-443 destinations. The proxy resolves the
 target itself, refuses any non-global or explicitly denied address, and pins
 the connection to the checked address so DNS rebinding cannot redirect it.
 
-Only connections on the credentialed listener whose CONNECT host and TLS SNI
-both name a credential host are intercepted. There, a placeholder in the
+Each listener owns a fixed credential set: the credentialed listener injects
+OpenRouter and GitHub, the model listener injects only OpenRouter (using the
+spend-capped sandbox key when configured), and any other listener injects
+nothing. A connection is intercepted only when its CONNECT host and TLS SNI
+both name a host in its listener's set. There, a placeholder in the
 Authorization header is replaced with the real credential before the request
 continues over verified TLS. Every other connection is an opaque passthrough
 tunnel, so sandboxes see the real certificate and no credential is added.
@@ -45,6 +48,7 @@ def _host(value: str | None) -> str:
 
 DENY_NETWORKS = [ipaddress.ip_network(cidr) for cidr in _csv("EGRESS_DENY_CIDRS")]
 CREDENTIALED_PORT = int(os.environ["EGRESS_CREDENTIALED_PORT"])
+MODEL_PORT = int(os.environ["EGRESS_MODEL_PORT"])
 
 
 def _public(address: str) -> bool:
@@ -129,19 +133,25 @@ def _swap(header: str, placeholder: str, secret: str) -> str | None:
 class EgressProxy:
     def __init__(self) -> None:
         github = GitHubCredential()
+        openrouter_hosts = _csv("EGRESS_OPENROUTER_HOSTS")
+        openrouter_placeholder = os.environ["EGRESS_OPENROUTER_PLACEHOLDER"]
         openrouter_key = os.environ.get("OPENROUTER_API_KEY", "")
-        self.credentials = [
-            Credential(
-                "openrouter",
-                _csv("EGRESS_OPENROUTER_HOSTS"),
-                os.environ["EGRESS_OPENROUTER_PLACEHOLDER"],
-                lambda: openrouter_key,
-            ),
-            Credential("github", _csv("EGRESS_GITHUB_HOSTS"), os.environ["EGRESS_GITHUB_PLACEHOLDER"], github.value),
-        ]
+        # Untrusted programs share the model listener's pods, so it prefers a
+        # separately spend-capped key and never carries GitHub.
+        model_key = os.environ.get("SANDBOX_OPENROUTER_API_KEY", "") or openrouter_key
+        self.listeners = {
+            CREDENTIALED_PORT: [
+                Credential("openrouter", openrouter_hosts, openrouter_placeholder, lambda: openrouter_key),
+                Credential("github", _csv("EGRESS_GITHUB_HOSTS"), os.environ["EGRESS_GITHUB_PLACEHOLDER"], github.value),
+            ],
+            MODEL_PORT: [
+                Credential("openrouter-sandbox", openrouter_hosts, openrouter_placeholder, lambda: model_key),
+            ],
+        }
 
-    def _credential(self, host: str) -> Credential | None:
-        return next((credential for credential in self.credentials if host in credential.hosts), None)
+    def _credential(self, listener: int | None, host: str) -> Credential | None:
+        credentials = self.listeners.get(listener, []) if listener is not None else []
+        return next((credential for credential in credentials if host in credential.hosts), None)
 
     def http_connect(self, flow: http.HTTPFlow) -> None:
         if flow.request.port != ALLOWED_PORT:
@@ -169,7 +179,7 @@ class EgressProxy:
         sni = _host(data.client_hello.sni)
         target = _host(data.context.server.address[0]) if data.context.server.address else ""
         listener = data.context.client.sockname[1] if data.context.client.sockname else None
-        if listener != CREDENTIALED_PORT or not sni or sni != target or self._credential(sni) is None:
+        if not sni or sni != target or self._credential(listener, sni) is None:
             data.ignore_connection = True
 
     async def requestheaders(self, flow: http.HTTPFlow) -> None:
@@ -178,7 +188,7 @@ class EgressProxy:
             return
         sni = _host(flow.client_conn.sni)
         listener = flow.client_conn.sockname[1] if flow.client_conn.sockname else None
-        credential = self._credential(sni) if listener == CREDENTIALED_PORT else None
+        credential = self._credential(listener, sni)
         if credential is None or _host(flow.request.pretty_host) != sni:
             return
         header = flow.request.headers.get("authorization")

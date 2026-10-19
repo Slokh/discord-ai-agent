@@ -123,10 +123,12 @@ networkPolicy:
   enabled: false
 
 # Credential-injecting egress proxy for sandboxes. Sandboxes hold placeholder
-# tokens; the credentialed port swaps them for real credentials only inside
-# verified TLS to the matching hosts. The public port never injects. Both
-# allow public HTTPS and refuse private, loopback, link-local, and CGNAT
-# destinations after resolving names.
+# tokens; each port swaps them for real credentials only inside verified TLS
+# to the matching hosts. The credentialed port (repository profile) injects
+# OpenRouter and GitHub; the model port (computer profile) injects only
+# OpenRouter, preferring the optional spend-capped SANDBOX_OPENROUTER_API_KEY;
+# the public port never injects. All allow public HTTPS and refuse private,
+# loopback, link-local, and CGNAT destinations after resolving names.
 egressProxy:
   enabled: false
   image: docker.io/mitmproxy/mitmproxy:12.2.3@sha256:00b77b5d8804c8ad18cb6caefbf9d5849e895e8986c5ce011f4ae30f4385962f
@@ -135,8 +137,13 @@ egressProxy:
   credentialedPodLabel:
     key: discord-ai-agent.dev/egress
     value: credentialed
+  # Computer-profile sandboxes carry this pod label to reach the model port.
+  modelPodLabel:
+    key: discord-ai-agent.dev/egress
+    value: model
   credentialedPort: 8080
   publicPort: 8081
+  modelPort: 8082
   githubRepository: Slokh/discord-ai-agent
   placeholders:
     openRouterApiKey: discord-ai-agent-egress-placeholder-openrouter

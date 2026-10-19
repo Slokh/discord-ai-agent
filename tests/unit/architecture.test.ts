@@ -114,8 +114,8 @@ describe("architecture guardrails", () => {
   it("confines sandbox egress to the egress proxy, callback API, and DNS", async () => {
     const policy = await fs.readFile(path.join(process.cwd(), "deploy/helm/discord-ai-agent/templates/networkpolicy.yaml"), "utf8");
     const documents = policy.split(/^---$/m);
-    const sandboxPolicies = documents.filter((document) => /name: .*-sandbox(?:-credentialed)?-egress\n/.test(document));
-    expect(sandboxPolicies).toHaveLength(2);
+    const sandboxPolicies = documents.filter((document) => /name: .*-sandbox(?:-credentialed|-model)?-egress\n/.test(document));
+    expect(sandboxPolicies).toHaveLength(3);
     for (const document of sandboxPolicies) {
       expect(document).toContain('policyTypes: ["Egress"]');
       expect(document).not.toContain("ipBlock");
@@ -127,6 +127,33 @@ describe("architecture guardrails", () => {
     expect(sandboxPolicies[0]).toContain("k8s-app: kube-dns");
     expect(sandboxPolicies[1]).toContain("{{ $proxy.credentialedPodLabel.key }}");
     expect(sandboxPolicies[1]).toContain("port: {{ $proxy.credentialedPort }}");
+    expect(sandboxPolicies[1]).not.toContain("modelPort");
+    expect(sandboxPolicies[2]).toContain("{{ $proxy.modelPodLabel.key }}");
+    expect(sandboxPolicies[2]).toContain("port: {{ $proxy.modelPort }}");
+    expect(sandboxPolicies[2]).not.toContain("credentialedPort");
+  });
+
+  it("injects only the model credential on the computer-profile proxy port", async () => {
+    const policy = await fs.readFile(path.join(process.cwd(), "deploy/helm/discord-ai-agent/templates/networkpolicy.yaml"), "utf8");
+    const proxyPolicy = policy.split(/^---$/m).find((document) => /name: .*-egress-proxy\n/.test(document)) ?? "";
+    const values = await fs.readFile(path.join(process.cwd(), "deploy/helm/discord-ai-agent/values.yaml"), "utf8");
+    const proxy = await fs.readFile(path.join(process.cwd(), "deploy/helm/discord-ai-agent/templates/egress-proxy.yaml"), "utf8");
+    const addon = await fs.readFile(path.join(process.cwd(), "deploy/helm/discord-ai-agent/files/egress_proxy.py"), "utf8");
+    expect(values).toMatch(/credentialedPodLabel:\n\s+key: discord-ai-agent\.dev\/egress\n\s+value: credentialed/);
+    expect(values).toMatch(/modelPodLabel:\n\s+key: discord-ai-agent\.dev\/egress\n\s+value: model/);
+    expect(values).toMatch(/credentialedPort: 8080\n\s+publicPort: 8081\n\s+modelPort: 8082/);
+    expect(proxyPolicy).toMatch(/\{\{ \$proxy\.credentialedPodLabel\.key \}\}[^\n]*\n\s+ports:\n\s+- protocol: TCP\n\s+port: \{\{ \$proxy\.credentialedPort \}\}/);
+    expect(proxyPolicy).toMatch(/\{\{ \$proxy\.modelPodLabel\.key \}\}[^\n]*\n\s+ports:\n\s+- protocol: TCP\n\s+port: \{\{ \$proxy\.modelPort \}\}/);
+    for (const port of ["credentialedPort", "publicPort", "modelPort"]) {
+      expect(proxy).toContain(`--mode regular@{{ $proxy.${port} }}`);
+    }
+    expect(proxy).toContain("key: SANDBOX_OPENROUTER_API_KEY, optional: true");
+    const modelListener = addon.slice(addon.indexOf("MODEL_PORT: ["), addon.indexOf("],", addon.indexOf("MODEL_PORT: [")));
+    expect(modelListener).toContain("openrouter_hosts");
+    expect(modelListener).toContain("model_key");
+    expect(modelListener).not.toMatch(/github/i);
+    expect(addon).toContain('os.environ.get("SANDBOX_OPENROUTER_API_KEY", "") or openrouter_key');
+    expect(addon).toContain("self._credential(listener, sni) is None");
   });
 
   it("keeps the egress proxy away from private and metadata networks after name resolution", async () => {
@@ -141,7 +168,6 @@ describe("architecture guardrails", () => {
     }
     expect(addon).toContain("ip.is_global and not ip.is_multicast");
     expect(addon).toContain("data.server.address = (addresses[0], port)");
-    expect(addon).toContain("listener != CREDENTIALED_PORT");
     expect(addon).toContain("data.ignore_connection = True");
   });
 

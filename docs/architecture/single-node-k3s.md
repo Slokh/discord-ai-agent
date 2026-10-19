@@ -108,7 +108,7 @@ gVisor and K3s versions are pinned with SHA-256 checksums in Terraform, like K3s
 ### Security implications
 
 - A gVisor escape lands on a disposable node whose kubelet, under NodeRestriction, sees only the Secrets of pods scheduled to it. That is the per-task sandbox Secret and the namespace image-pull Secret, which can pull only non-secret images.
-- Sandboxes never hold the real OpenRouter key or GitHub token. Only the server-side proxy does, and it injects them only into verified TLS to the matching hosts for pods the launcher labels as credentialed.
+- Sandboxes never hold the real OpenRouter key or GitHub token. Only the server-side proxy does, and it injects them only into verified TLS to the matching hosts. Repository-profile pods (`credentialed` label) get OpenRouter and GitHub on port 8080. Computer-profile pods (`model` label) get only OpenRouter on port 8082, preferably a separate spend-capped `SANDBOX_OPENROUTER_API_KEY`, because the untrusted program in that pod can spend it for the task's lifetime.
 - IMDSv2 with a hop limit of 1 and the NetworkPolicy deny of `169.254.0.0/16` both keep pods away from node identity.
 - DNS to kube-dns remains available to sandboxes and is the remaining unfiltered channel.
 

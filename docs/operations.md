@@ -273,14 +273,22 @@ Isolation layers, outermost first:
 - **Node pool.** Only tainted spot agents run sandboxes. Their IAM role and security group grant nothing beyond joining the cluster and pulling the sandbox image.
 - **gVisor.** The `gvisor` RuntimeClass (handler `runsc`, `systrap` platform) carries scheduling constraints, so any pod using it is pinned to the sandbox pool and tolerates its taint. It also declares a fixed pod overhead.
 - **Admission.** The `<release>-sandbox-isolation` ValidatingAdmissionPolicy fails closed. Any pod that runs as `discord-ai-agent-sandbox` or carries `app.kubernetes.io/component=sandbox` is rejected unless it uses the `gvisor` RuntimeClass and that service account, shares no host namespace, mounts no hostPath or Kubernetes API token, and runs no privileged container. A Job built without these fields therefore fails to start instead of running on the server.
-- **Network.** NetworkPolicy (enforced by K3s's embedded kube-router) lets every sandbox pod reach only the egress proxy's public port, the callback API, and kube-dns. Only pods also labeled `discord-ai-agent.dev/egress=credentialed` may reach the proxy's credentialed port. The proxy accepts only sandbox clients and may itself reach only DNS and public port 443.
+- **Network.** NetworkPolicy (enforced by K3s's embedded kube-router) lets every sandbox pod reach only the egress proxy's public port, the callback API, and kube-dns. Only pods labeled `discord-ai-agent.dev/egress=credentialed` may reach the proxy's credentialed port, and only pods labeled `discord-ai-agent.dev/egress=model` may reach its model port. The proxy enforces the same rules on ingress, accepts only sandbox clients, and may itself reach only DNS and public port 443.
 - **Credentials.** Sandboxes receive placeholder tokens, never the real OpenRouter key or GitHub token.
 
 ### Egress proxy
 
 `<release>-egress-proxy` is a pinned mitmproxy image with the repository addon `deploy/helm/discord-ai-agent/files/egress_proxy.py`, scheduled on the server node. It mirrors the credential-injecting proxy in paradigmxyz/centaur. For every tunnel it allows only port 443. It resolves the hostname itself, refuses any non-global, multicast, or denied address (`0.0.0.0/8`, `10.0.0.0/8`, `100.64.0.0/10`, `127.0.0.0/8`, `169.254.0.0/16`, `172.16.0.0/12`, `192.168.0.0/16`), and pins the connection to the checked address so DNS rebinding cannot redirect it.
 
-On the credentialed port, a tunnel is intercepted only when its CONNECT host and TLS SNI are the same credential host. The proxy then replaces the placeholder in `Authorization` with the real credential, including inside `Basic` credentials, only when the request's Host also matches, and forwards over certificate-verified TLS. GitHub uses a repository-scoped App installation token minted exactly as in `src/github/appToken.ts`, or `GITHUB_TOKEN` when no App is configured. Every other tunnel, and everything on the public port, is opaque passthrough: no interception and no injection.
+Each listener owns a fixed credential set:
+
+| Port | Admitted pods | Injects |
+| --- | --- | --- |
+| 8080 credentialed | `discord-ai-agent.dev/egress=credentialed` (repository profile) | OpenRouter (`OPENROUTER_API_KEY`) for `openrouter.ai`; GitHub for `github.com`, `api.github.com`, `uploads.github.com` |
+| 8082 model | `discord-ai-agent.dev/egress=model` (computer profile) | OpenRouter only, for `openrouter.ai`, using `SANDBOX_OPENROUTER_API_KEY` when set, else `OPENROUTER_API_KEY` |
+| 8081 public | any sandbox pod | nothing |
+
+A tunnel is intercepted only when its CONNECT host and TLS SNI are the same host in that listener's set. The proxy then replaces the placeholder in `Authorization` with the real credential, including inside `Basic` credentials, only when the request's Host also matches, and forwards over certificate-verified TLS. GitHub hosts are never intercepted on 8082, so the GitHub placeholder is forwarded unchanged and useless there. GitHub uses a repository-scoped App installation token minted exactly as in `src/github/appToken.ts`, or `GITHUB_TOKEN` when no App is configured. Every other tunnel is opaque passthrough: no interception and no injection.
 
 Contract for the Job launcher (`src/execution/backend.ts`), which must match these chart defaults:
 
@@ -291,15 +299,17 @@ Contract for the Job launcher (`src/execution/backend.ts`), which must match the
 | `runtimeClassName` | `gvisor` (adds the selector and toleration itself; setting them explicitly is harmless) |
 | `priorityClassName` | `discord-ai-agent-sandbox` (value -100, never preempts) |
 | `serviceAccountName` | `discord-ai-agent-sandbox`; also set `automountServiceAccountToken: false` |
-| Credentialed pod label (code updates only) | `discord-ai-agent.dev/egress=credentialed` |
-| Credentialed proxy URL | `http://discord-ai-agent-egress-proxy:8080` |
-| Public proxy URL (computer profile and any untrusted program) | `http://discord-ai-agent-egress-proxy:8081` |
+| Repository profile (code updates) | pod label `discord-ai-agent.dev/egress=credentialed`, proxy `http://discord-ai-agent-egress-proxy:8080` |
+| Computer profile | pod label `discord-ai-agent.dev/egress=model`, proxy `http://discord-ai-agent-egress-proxy:8082` |
+| Public proxy (optional, untrusted program traffic; never injects) | `http://discord-ai-agent-egress-proxy:8081`, reachable by any sandbox pod |
 | `NO_PROXY` | `discord-ai-agent-api,.svc,.cluster.local,localhost,127.0.0.1` |
 | `OPENROUTER_API_KEY` placeholder | `discord-ai-agent-egress-placeholder-openrouter` |
 | `GITHUB_TOKEN` placeholder | `discord-ai-agent-egress-placeholder-github` |
 | Proxy CA ConfigMap | `discord-ai-agent-egress-proxy-ca`, key `ca.crt` (suggested mount `/etc/discord-ai-agent/egress-proxy/ca.crt`) |
 
-Set `HTTPS_PROXY`, `HTTP_PROXY`, and their lowercase forms to the chosen proxy URL. Node trusts the CA additively through `NODE_EXTRA_CA_CERTS`. Child processes that replace the default bundle when configured need a combined bundle: the image's `/etc/ssl/certs/ca-certificates.crt` followed by `ca.crt`, written to a writable path (for example an `emptyDir`) and exported as `SSL_CERT_FILE` and `GIT_SSL_CAINFO`. This covers git, `gh`, curl, and NanoCodex's `rustls-native-certs`. Only intercepted credential hosts present proxy-signed certificates, so programs that read only the system store (Wine, Chromium) still reach every other host normally. The placeholders are public constants; the credentialed pod label and port separation are what keep injection away from the computer profile.
+Set `HTTPS_PROXY`, `HTTP_PROXY`, and their lowercase forms to the chosen proxy URL. Node trusts the CA additively through `NODE_EXTRA_CA_CERTS`. Child processes that replace the default bundle when configured need a combined bundle: the image's `/etc/ssl/certs/ca-certificates.crt` followed by `ca.crt`, written to a writable path (for example an `emptyDir`) and exported as `SSL_CERT_FILE` and `GIT_SSL_CAINFO`. This covers git, `gh`, curl, and NanoCodex's `rustls-native-certs`. Only intercepted credential hosts present proxy-signed certificates, so programs that read only the system store (Wine, Chromium) still reach every other host normally. The placeholders are public constants; the per-profile pod label and port separation are what keep GitHub injection away from the computer profile.
+
+Residual risk on the model port: the untrusted program runs in the same pod as NanoCodex, so for the task's lifetime (at most the 30-minute task deadline) it can send its own requests to `openrouter.ai` through 8082 and spend model credits on the injected key. It cannot obtain the key itself, reach GitHub with credentials, or reach any private address. The mitigation is a separate OpenRouter key with a hard credit limit, stored as the optional `SANDBOX_OPENROUTER_API_KEY` key of the application Secret (`discord-ai-agent-env`). Only the egress proxy reads it, so it is not part of the application environment manifest. Without it, 8082 falls back to `OPENROUTER_API_KEY` and the exposure is that key's full balance.
 
 The interception CA is generated once by Helm, retained across upgrades and uninstall (`helm.sh/resource-policy: keep`), and valid for ten years. Rotate it by deleting the `discord-ai-agent-egress-proxy-ca-key` Secret and redeploying when no sandbox is running. The worker's launcher Role can read Secrets in the namespace and therefore this key; the worker is trusted. Sandboxes can still resolve arbitrary names through cluster DNS; DNS is the remaining covert channel and is not filtered.
 

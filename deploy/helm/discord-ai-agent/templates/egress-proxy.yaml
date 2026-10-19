@@ -134,6 +134,9 @@ spec:
               value: /tmp
             - name: PYTHONDONTWRITEBYTECODE
               value: "1"
+            # mitmproxy prints its log; without a TTY, stdout is otherwise block-buffered.
+            - name: PYTHONUNBUFFERED
+              value: "1"
             - name: EGRESS_CREDENTIALED_PORT
               value: {{ $proxy.credentialedPort | quote }}
             - name: EGRESS_MODEL_PORT

@@ -216,9 +216,9 @@ npm run eval -- --dry-run
 
 CI classifies the changed paths and starts lint, tests, production build, repository-policy checks, and relevant DB or infrastructure verification in parallel. Documentation-only and callback-receiver-only changes do not start the DB service; application and high-consequence lifecycle changes still do. The production build performs the TypeScript compilation, so CI does not repeat a separate no-emit compilation. CodeQL remains an independent PR and scheduled analysis. On a deployable `main` push, the same CI run publishes images and invokes the reusable K3s deployment workflow after `verify` succeeds. GitHub Actions reaches the outbound-only production host through Systems Manager rather than exposing the Kubernetes API. This keeps rollout and post-deploy verification on the source commit's check graph. Pull requests skip the deployment job. Active main runs are not cancelled by newer pushes, and the production deployment workflow remains serialized under its own non-cancelling concurrency group.
 
-For same-repository PRs, the optional candidate-image path waits for the cheaper verification jobs to pass, then publishes runtime and codegen images to separate ECR repositories under the checked-out Git tree hash. Its OIDC role has no production-repository or Kubernetes access. Dependency, Docker, or native-manifest changes scan those exact remote images on one shared runner. After merge, CI calculates the merged tree hash, promotes only the matching candidates to commit-tagged production references, and deletes the temporary tags; a one-day lifecycle is the cleanup fallback. Candidate repositories disable redundant ECR scanning because CI scans affected candidates and the production repositories scan the promoted release. Exact-tree promotion lets main omit repeated tests and rebuilding. Once candidate publication is enabled, a missing candidate fails closed rather than rebuilding an unverified release. Before enablement, main retains the existing full verification and builds and pushes both images through one Docker Bake graph. PR builds restore trusted default-branch BuildKit caches but do not fill one-use PR cache scopes. Nested Rust targets, Terraform providers, coverage, and other local build state are excluded from the Docker context.
+CI builds two images from one Docker Bake `release` group: the runtime image (`final` target) into the `ECR_REPOSITORY` repository and the sandbox image (`codegen` target: repository tooling plus the desktop layer) into `ECR_REPOSITORY-sandbox`. Both always carry the same tag. For same-repository PRs, the optional candidate-image path waits for the cheaper verification jobs to pass, then pushes both images to their repositories under a `tree-<Git tree hash>` tag. The OIDC build role may push only to those two repositories and has no Kubernetes or Systems Manager access. Dependency, Docker, or native-manifest changes scan the exact remote runtime candidate on one shared runner; the sandbox image relies on ECR scan-on-push. After merge, CI calculates the merged tree hash, promotes the sandbox candidate and then the runtime candidate to the commit-SHA tag, and deletes both tree tags; the one-day untagged lifecycle is the cleanup fallback. Exact-tree promotion lets main omit repeated tests and rebuilding. Once candidate publication is enabled, a missing candidate in either repository fails closed rather than rebuilding an unverified release. Before enablement, main retains the existing full verification and builds and pushes both images through the same Bake group. PR builds restore trusted default-branch BuildKit caches (separate `runtime` and `codegen` scopes) but do not fill one-use PR cache scopes. Nested Rust targets, Terraform providers, coverage, and other local build state are excluded from the Docker context.
 
-After Helm completes, deployment verifies the Postgres StatefulSet, bot and worker readiness, exact immutable image and `APP_REVISION`, the existing public-table baseline, the application's lack of sandbox-launch authority in the lightweight profile, Discord gateway readiness, and a 30-second restart-free window. These checks make no model call, create no Discord message, and spend no funds. Failure restores the exact prior Helm revision when one exists; a failed first install leaves the bot at zero replicas. Migrations remain forward-only and must preserve the preceding application revision long enough for this recovery path.
+Before Helm runs, deployment confirms that the application Secret contains `TASK_SIGNING_SECRET` (by key presence only). After Helm completes, it verifies the Postgres StatefulSet, bot, worker, callback API, and egress-proxy readiness, the exact immutable image and `APP_REVISION`, that the worker runs as the `-worker` launcher identity with `SANDBOX_IMAGE` set to the same-tag sandbox image, that the `gvisor` RuntimeClass exists, that only the worker may create Jobs, and that the app, sandbox, and egress-proxy identities cannot create Jobs or Pods or read Secrets. It also verifies the existing public-table baseline, Discord gateway readiness, and a 30-second restart-free window. These checks make no model call, create no Discord message, and spend no funds. Failure restores the exact prior Helm revision when one exists; a failed first install leaves the bot at zero replicas. Migrations remain forward-only and must preserve the preceding application revision long enough for this recovery path.
 
 The bot does not resolve improvement cases or publish a deployment announcement merely because a new pod became ready. Release pods wait for the workflow to write the verified revision and unique rollout ID to Postgres after every gate passes. The private eval runner retains aggregate-only per-contract outcomes, promotion applies complete receipts, and production observation later supplies traffic-sampled quality proof. Runtime/delivery contracts remain `verifying` until a revision-matched terminal execution is supplied. The system never replays a member's old request as authority. Local, non-SHA revisions bypass this production-only promotion gate.
 
@@ -236,7 +236,18 @@ Run the deterministic failure suite with `npm run test:reliability`. It covers s
 
 ## Kubernetes production
 
-The production deployment is the Helm chart in `deploy/helm/discord-ai-agent/`; `deploy/terraform/aws/` is its authoritative AWS stack. One `t3a.medium` EC2 host runs K3s, Postgres, the bot, and the worker. The host has no inbound security-group rule and accepts deployment and operator commands only through Systems Manager.
+The production deployment is the Helm chart in `deploy/helm/discord-ai-agent/`; `deploy/terraform/aws/` is its authoritative AWS stack. One `t3a.medium` EC2 host runs the K3s server, Postgres, the bot, the worker, the callback API, and the sandbox egress proxy. Its security group admits only the sandbox node pool (below), and it accepts deployment and operator commands only through Systems Manager.
+
+Sandbox Jobs never run on that host. A separate spot Auto Scaling group (`<prefix>-k3s-sandbox`, minimum 0, maximum 1, desired 0) runs disposable K3s agents. They join with `discord-ai-agent.dev/pool=sandbox` and the taint `discord-ai-agent.dev/sandbox=true:NoSchedule`, and they install the pinned gVisor `runsc` and `containerd-shim-runsc-v1`. Their IAM role may only register with Systems Manager, pull the sandbox ECR repository, and read the agent join record. Their security group may reach the server only on 6443/tcp, 8472/udp, and 10250/tcp, and accepts only flannel VXLAN (8472/udp) back from the server. The server writes an agent-only join token and its private API URL to the `<prefix>/k3s/agent-join` secret on every boot. A resource policy denies every other principal `GetSecretValue`, and the token cannot join another server.
+
+The pool scales to zero and nothing scales it up automatically yet. A sandbox Job stays `Pending` until an agent joins. Scale up before code-update or computer-profile work, and back to zero afterwards; Terraform ignores `desired_capacity` so it never undoes this:
+
+```bash
+AWS_PROFILE=production-operator aws autoscaling set-desired-capacity \
+  --auto-scaling-group-name <prefix>-k3s-sandbox --desired-capacity 1
+```
+
+Spot interruption terminates any running sandbox; the launcher's single infrastructure retry and `sandbox_disappeared` diagnosis cover it.
 
 The 30 GiB root disk is disposable. The retained 20 GiB encrypted Postgres disk and separate 8 GiB encrypted K3s-state disk are pinned to the same availability zone and backed up daily for 14 days. The Auto Scaling group replaces a failed host; bootstrap attaches both exact volumes before starting K3s. Secrets Manager retains the two Kubernetes Secret manifests without putting their values in Terraform state. See [Single-node K3s production](architecture/single-node-k3s.md) for the complete decision and recovery contract.
 
@@ -253,9 +264,56 @@ Use Helm—not `kubectl rollout undo`—for recovery so one field manager contin
 
 ## Sandbox and network posture
 
-The worker service account may create per-task Jobs, Secrets, and ConfigMaps. The sandbox service account has no Kubernetes API access. Sandbox secrets omit Discord and database credentials. Network policy should permit the internal callback API, DNS, and required HTTPS destinations only.
+Every sandbox runs untrusted code: code updates run `npm install` of arbitrary dependencies, and the computer profile downloads and runs member-supplied programs. Untrusted code never shares a node or credentials with production Postgres.
 
-The app and sandbox service accounts disable automatic Kubernetes token mounts; only the trusted worker receives the launcher identity. Sandbox callback bearer tokens are scoped to the task and sandbox-run IDs and expire after two hours. Each task receives a separately derived callback-signing key rather than the deployment master secret; each exact body also carries a two-minute timestamped HMAC, limiting cross-task forgery and replay while allowing normal clock skew. Terminal callbacks remain idempotent. Generic HTTPS egress excludes loopback, link-local/cloud-metadata, carrier-grade NAT, and RFC1918 ranges; the internal API is allowed separately by pod identity. On Cilium clusters, enable the FQDN policy to narrow public HTTPS to the reviewed host list.
+The worker service account (`<release>-worker`) is the only identity with a Kubernetes token and the sandbox-launcher Role. It may create per-task Jobs, Secrets, and ConfigMaps. The app, sandbox, and egress-proxy service accounts disable token mounts and have no RBAC. Sandbox secrets omit Discord and database credentials. Sandbox callback bearer tokens are scoped to the task and sandbox-run IDs and expire after two hours. Each task receives a separately derived callback-signing key rather than the deployment master secret; each exact body also carries a two-minute timestamped HMAC, limiting cross-task forgery and replay while allowing normal clock skew. Terminal callbacks remain idempotent.
+
+Isolation layers, outermost first:
+
+- **Node pool.** Only tainted spot agents run sandboxes. Their IAM role and security group grant nothing beyond joining the cluster and pulling the sandbox image.
+- **gVisor.** The `gvisor` RuntimeClass (handler `runsc`, `systrap` platform) carries scheduling constraints, so any pod using it is pinned to the sandbox pool and tolerates its taint. It also declares a fixed pod overhead.
+- **Admission.** The `<release>-sandbox-isolation` ValidatingAdmissionPolicy fails closed. Any pod that runs as `discord-ai-agent-sandbox` or carries `app.kubernetes.io/component=sandbox` is rejected unless it uses the `gvisor` RuntimeClass and that service account, shares no host namespace, mounts no hostPath or Kubernetes API token, and runs no privileged container. A Job built without these fields therefore fails to start instead of running on the server.
+- **Network.** NetworkPolicy (enforced by K3s's embedded kube-router) lets every sandbox pod reach only the egress proxy's public port, the callback API, and kube-dns. Only pods labeled `discord-ai-agent.dev/egress=credentialed` may reach the proxy's credentialed port, and only pods labeled `discord-ai-agent.dev/egress=model` may reach its model port. The proxy enforces the same rules on ingress, accepts only sandbox clients, and may itself reach only DNS and public port 443.
+- **Credentials.** Sandboxes receive placeholder tokens, never the real OpenRouter key or GitHub token.
+
+### Egress proxy
+
+`<release>-egress-proxy` is a pinned mitmproxy image with the repository addon `deploy/helm/discord-ai-agent/files/egress_proxy.py`, scheduled on the server node. It mirrors the credential-injecting proxy in paradigmxyz/centaur. For every tunnel it allows only port 443. It resolves the hostname itself, refuses any non-global, multicast, or denied address (`0.0.0.0/8`, `10.0.0.0/8`, `100.64.0.0/10`, `127.0.0.0/8`, `169.254.0.0/16`, `172.16.0.0/12`, `192.168.0.0/16`), and pins the connection to the checked address so DNS rebinding cannot redirect it.
+
+Each listener owns a fixed credential set:
+
+| Port | Admitted pods | Injects |
+| --- | --- | --- |
+| 8080 credentialed | `discord-ai-agent.dev/egress=credentialed` (repository profile) | OpenRouter (`OPENROUTER_API_KEY`) for `openrouter.ai`; GitHub for `github.com`, `api.github.com`, `uploads.github.com` |
+| 8082 model | `discord-ai-agent.dev/egress=model` (computer profile) | OpenRouter only, for `openrouter.ai`, using `SANDBOX_OPENROUTER_API_KEY` when set, else `OPENROUTER_API_KEY` |
+| 8081 public | any sandbox pod | nothing |
+
+A tunnel is intercepted only when its CONNECT host and TLS SNI are the same host in that listener's set. The proxy then replaces the placeholder in `Authorization` with the real credential, including inside `Basic` credentials, only when the request's Host also matches, and forwards over certificate-verified TLS. GitHub hosts are never intercepted on 8082, so the GitHub placeholder is forwarded unchanged and useless there. GitHub uses a repository-scoped App installation token minted exactly as in `src/github/appToken.ts`, or `GITHUB_TOKEN` when no App is configured. Every other tunnel is opaque passthrough: no interception and no injection.
+
+Contract for the Job launcher (`src/execution/backend.ts`), which must match these chart defaults:
+
+| Field | Value |
+| --- | --- |
+| Pool node label | `discord-ai-agent.dev/pool=sandbox` |
+| Pool taint | `discord-ai-agent.dev/sandbox=true:NoSchedule` |
+| `runtimeClassName` | `gvisor` (adds the selector and toleration itself; setting them explicitly is harmless) |
+| `priorityClassName` | `discord-ai-agent-sandbox` (value -100, never preempts) |
+| `serviceAccountName` | `discord-ai-agent-sandbox`; also set `automountServiceAccountToken: false` |
+| Repository profile (code updates) | pod label `discord-ai-agent.dev/egress=credentialed`, proxy `http://discord-ai-agent-egress-proxy:8080` |
+| Computer profile | pod label `discord-ai-agent.dev/egress=model`, proxy `http://discord-ai-agent-egress-proxy:8082` |
+| Public proxy (optional, untrusted program traffic; never injects) | `http://discord-ai-agent-egress-proxy:8081`, reachable by any sandbox pod |
+| `NO_PROXY` | `discord-ai-agent-api,.svc,.cluster.local,localhost,127.0.0.1` |
+| `OPENROUTER_API_KEY` placeholder | `discord-ai-agent-egress-placeholder-openrouter` |
+| `GITHUB_TOKEN` placeholder | `discord-ai-agent-egress-placeholder-github` |
+| Proxy CA ConfigMap | `discord-ai-agent-egress-proxy-ca`, key `ca.crt` (suggested mount `/etc/discord-ai-agent/egress-proxy/ca.crt`) |
+
+Set `HTTPS_PROXY`, `HTTP_PROXY`, and their lowercase forms to the chosen proxy URL. Node trusts the CA additively through `NODE_EXTRA_CA_CERTS`. Child processes that replace the default bundle when configured need a combined bundle: the image's `/etc/ssl/certs/ca-certificates.crt` followed by `ca.crt`, written to a writable path (for example an `emptyDir`) and exported as `SSL_CERT_FILE` and `GIT_SSL_CAINFO`. This covers git, `gh`, curl, and NanoCodex's `rustls-native-certs`. Only intercepted credential hosts present proxy-signed certificates, so programs that read only the system store (Wine, Chromium) still reach every other host normally. The placeholders are public constants; the per-profile pod label and port separation are what keep GitHub injection away from the computer profile.
+
+Residual risk on the model port: the untrusted program runs in the same pod as NanoCodex, so for the task's lifetime (at most the 30-minute task deadline) it can send its own requests to `openrouter.ai` through 8082 and spend model credits on the injected key. It cannot obtain the key itself, reach GitHub with credentials, or reach any private address. The mitigation is a separate OpenRouter key with a hard credit limit, stored as the optional `SANDBOX_OPENROUTER_API_KEY` key of the application Secret (`discord-ai-agent-env`). Only the egress proxy reads it, so it is not part of the application environment manifest. Without it, 8082 falls back to `OPENROUTER_API_KEY` and the exposure is that key's full balance.
+
+The interception CA is generated once by Helm, retained across upgrades and uninstall (`helm.sh/resource-policy: keep`), and valid for ten years. Rotate it by deleting the `discord-ai-agent-egress-proxy-ca-key` Secret and redeploying when no sandbox is running. The worker's launcher Role can read Secrets in the namespace and therefore this key; the worker is trusted. Sandboxes can still resolve arbitrary names through cluster DNS; DNS is the remaining covert channel and is not filtered.
+
+The optional Cilium FQDN policy predates the proxy and is not used by K3s.
 
 Every code-update task runs in a separate Kubernetes Job. The regular worker owns queue handoff and reconciliation; no dedicated warm worker, persistent cache, or alternate execution backend exists.
 
@@ -276,7 +334,7 @@ helm upgrade --install discord-ai-agent deploy/helm/discord-ai-agent \
   --set sandbox.imagePullPolicy=IfNotPresent
 ```
 
-Create the application Secret first and point `DATABASE_URL` at a Postgres instance reachable from the cluster. Validate chat delivery and one harmless code-update request, then inspect the Job, callback events, PR, and cleanup. This is an advanced integration path, not the default contributor loop.
+Kind has no gVisor runtime; sandbox Jobs need `runsc` on a node, a node labeled and tainted like the sandbox pool, and `--set sandbox.isolation.enabled=true --set egressProxy.enabled=true --set networkPolicy.enabled=true --set api.enabled=true` to exercise the production path. Without them, test only chat delivery locally. Create the application Secret first and point `DATABASE_URL` at a Postgres instance reachable from the cluster. Validate chat delivery and one harmless code-update request, then inspect the Job, callback events, PR, and cleanup. This is an advanced integration path, not the default contributor loop.
 
 ## Recovery checks
 

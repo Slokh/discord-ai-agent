@@ -57,6 +57,23 @@ RUN apt-get update \
   && apt-get update \
   && apt-get install -y --no-install-recommends gh \
   && rm -rf /var/lib/apt/lists/*
+# Desktop layer for the computer profile: a virtual display, input automation,
+# screenshots, a browser, and Wine for Windows programs. Untrusted programs run
+# only under gVisor on the tainted sandbox node pool.
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends \
+    chromium \
+    fonts-dejavu-core \
+    fonts-liberation2 \
+    fonts-noto-color-emoji \
+    fonts-noto-core \
+    imagemagick \
+    wine \
+    wine64 \
+    xauth \
+    xdotool \
+    xvfb \
+  && rm -rf /var/lib/apt/lists/*
 RUN test -x /usr/local/bin/discord-agent-nanocodex-runtime
 USER node
 

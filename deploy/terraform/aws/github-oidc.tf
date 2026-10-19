@@ -51,7 +51,7 @@ data "aws_iam_policy_document" "github_actions_build" {
       "ecr:PutImage",
       "ecr:UploadLayerPart",
     ]
-    resources = [aws_ecr_repository.app.arn]
+    resources = [aws_ecr_repository.app.arn, aws_ecr_repository.sandbox.arn]
   }
 
   statement {
@@ -69,7 +69,7 @@ resource "aws_iam_role_policy" "github_actions_build" {
 data "aws_iam_policy_document" "github_actions_deploy" {
   statement {
     actions   = ["ecr:DescribeImages"]
-    resources = [aws_ecr_repository.app.arn]
+    resources = [aws_ecr_repository.app.arn, aws_ecr_repository.sandbox.arn]
   }
 
   statement {

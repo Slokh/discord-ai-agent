@@ -238,15 +238,30 @@ jobs:
       - id: ecr
         uses: aws-actions/amazon-ecr-login@v2
       - uses: docker/setup-buildx-action@v4
+      - id: missing
+        name: Select candidate images not yet published for this tree
+        env:
+          TAG: ${{ steps.identity.outputs.tree_tag }}
+        run: |
+          # Tags are immutable and rebuilds are not byte-identical, so a retry
+          # after a partial publish reuses images already pushed for this tag.
+          targets=()
+          aws ecr describe-images --repository-name "$ECR_REPOSITORY" --image-ids "imageTag=$TAG" >/dev/null 2>&1 || targets+=(runtime)
+          aws ecr describe-images --repository-name "$ECR_REPOSITORY-sandbox" --image-ids "imageTag=$TAG" >/dev/null 2>&1 || targets+=(codegen)
+          echo "targets=$(IFS=,; echo "${targets[*]}")" >>"$GITHUB_OUTPUT"
       - name: Build and publish tree-addressed candidate images
+        if: steps.missing.outputs.targets != ''
         uses: docker/bake-action@v7
         with:
           push: true
           provenance: false
           files: docker-bake.hcl
+          targets: ${{ steps.missing.outputs.targets }}
           set: |
             runtime.tags=${{ steps.ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ steps.identity.outputs.tree_tag }}
-            *.cache-from=type=gha,scope=runtime
+            codegen.tags=${{ steps.ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}-sandbox:${{ steps.identity.outputs.tree_tag }}
+            runtime.cache-from=type=gha,scope=runtime
+            codegen.cache-from=type=gha,scope=codegen
 
   candidate-security:
     needs: [changes, candidate-images]
@@ -401,28 +416,51 @@ jobs:
           REGISTRY: ${{ steps.ecr.outputs.registry }}
           TREE_TAG: ${{ steps.identity.outputs.tree_tag }}
         run: |
+          # The sandbox image is promoted first so a runtime release tag never
+          # exists without its matching sandbox image.
+          docker buildx imagetools create \
+            --tag "$REGISTRY/$ECR_REPOSITORY-sandbox:$IMAGE_TAG" \
+            "$REGISTRY/$ECR_REPOSITORY-sandbox:$TREE_TAG"
           docker buildx imagetools create \
             --tag "$REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" \
             "$REGISTRY/$ECR_REPOSITORY:$TREE_TAG"
-          aws ecr batch-delete-image \
-            --repository-name "$ECR_REPOSITORY" \
-            --image-ids "imageTag=$TREE_TAG" >/dev/null || true
+          for repository in "$ECR_REPOSITORY-sandbox" "$ECR_REPOSITORY"; do
+            aws ecr batch-delete-image \
+              --repository-name "$repository" \
+              --image-ids "imageTag=$TREE_TAG" >/dev/null || true
+          done
       - name: Require the exact verified candidate
         if: vars.CANDIDATE_IMAGE_PUBLISHING_ENABLED == 'true' && steps.promote.outcome != 'success'
         run: |
           echo "No candidate images matched the merged Git tree; refusing an unverified production rebuild."
           exit 1
-      - name: Build and publish images when no verified candidate exists
+      - id: missing
+        name: Select release images not yet published for this commit
         if: vars.CANDIDATE_IMAGE_PUBLISHING_ENABLED != 'true'
+        env:
+          TAG: ${{ env.IMAGE_TAG }}
+        run: |
+          # Tags are immutable and rebuilds are not byte-identical, so a retry
+          # after a partial publish reuses images already pushed for this tag.
+          targets=()
+          aws ecr describe-images --repository-name "$ECR_REPOSITORY" --image-ids "imageTag=$TAG" >/dev/null 2>&1 || targets+=(runtime)
+          aws ecr describe-images --repository-name "$ECR_REPOSITORY-sandbox" --image-ids "imageTag=$TAG" >/dev/null 2>&1 || targets+=(codegen)
+          echo "targets=$(IFS=,; echo "${targets[*]}")" >>"$GITHUB_OUTPUT"
+      - name: Build and publish images when no verified candidate exists
+        if: vars.CANDIDATE_IMAGE_PUBLISHING_ENABLED != 'true' && steps.missing.outputs.targets != ''
         uses: docker/bake-action@v7
         with:
           push: true
           provenance: false
           files: docker-bake.hcl
+          targets: ${{ steps.missing.outputs.targets }}
           set: |
             runtime.tags=${{ steps.ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ env.IMAGE_TAG }}
-            *.cache-from=type=gha,scope=runtime
+            codegen.tags=${{ steps.ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}-sandbox:${{ env.IMAGE_TAG }}
+            runtime.cache-from=type=gha,scope=runtime
+            codegen.cache-from=type=gha,scope=codegen
             runtime.cache-to=type=gha,mode=max,scope=runtime,ignore-error=true
+            codegen.cache-to=type=gha,mode=max,scope=codegen,ignore-error=true
 
   deploy-k3s:
     needs: [changes, verify, publish-images]

@@ -83,3 +83,35 @@ Abort the migration and restore EKS before its destruction if any of these remai
 - ECR credentials refresh without persistent AWS credentials;
 - a host replacement can reattach the K3s-state and Postgres volumes; or
 - deployment failure can restore the prior Helm release without paid model traffic or Discord-visible smoke messages.
+
+## Addendum: dedicated sandbox node pool
+
+### Decision
+
+Untrusted code no longer runs on the production host. Code-update sandboxes already ran `npm install` of arbitrary dependencies. The computer profile now downloads and runs member-supplied programs, including Windows executables under Wine. Every sandbox Job therefore runs on a separate tainted spot K3s agent under gVisor, behind a credential-injecting egress proxy, with deny-by-default sandbox NetworkPolicy. The server host keeps Postgres, the bot, the worker, the callback API, and the proxy. This is still one control plane and one Terraform stack; it adds a second, disposable workload node that holds no state.
+
+### Shape
+
+- `<prefix>-k3s-sandbox` Auto Scaling group: spot only, minimum 0, maximum 1, desired 0, across both public subnets, with price-capacity-optimized allocation over several x86 instance types. It uses the same pinned AL2023 image and K3s binary as the server, adds the pinned gVisor release, and uses a K3s `config-v3.toml.tmpl` that registers the `runsc` containerd runtime with a cgroup driver matching runc.
+- Agents join with `discord-ai-agent.dev/pool=sandbox` and taint `discord-ai-agent.dev/sandbox=true:NoSchedule`. The chart's `gvisor` RuntimeClass carries that selector and toleration, and a ValidatingAdmissionPolicy rejects sandbox pods that do not use it.
+- Own IAM role: Systems Manager registration, pull from the sandbox ECR repository, and read of the agent join record. It has no volume, application-secret, or other ECR repository access.
+- Own security group: egress to the server on 6443/tcp, 8472/udp, and 10250/tcp, plus HTTPS for node bootstrap and AWS APIs. Ingress is flannel VXLAN from the server only, because server-originated overlay packets are new UDP flows. The server security group gains the matching three ingress rules from the sandbox group.
+- Join credential: the server keeps a random agent-only token on the encrypted K3s-state volume (`--agent-token-file`). After every boot it writes the secure-format token and its private API URL to the `<prefix>/k3s/agent-join` Secrets Manager secret. A resource policy denies `GetSecretValue` to every principal except the sandbox role. An agent token cannot join a server.
+- Second ECR repository `<prefix>-sandbox` for the sandbox image, which CI tags and promotes with the runtime image.
+
+### Costs and responsibilities
+
+At zero desired capacity the pool costs nothing beyond the extra ECR storage. A running agent is billed at spot rates only while it exists. Nothing scales the pool up automatically yet: an operator sets desired capacity to 1 for sandbox work and back to 0 afterwards, and until then sandbox Jobs stay `Pending`. The ASG ignores Terraform drift on desired capacity so manual scaling is never reverted. An autoscaler or launcher-driven scale-up is a follow-up decision. Spot interruption ends a running sandbox and surfaces as `sandbox_disappeared`.
+
+gVisor and K3s versions are pinned with SHA-256 checksums in Terraform, like K3s and Helm on the server. gVisor ships only a release archive, so the archive is pinned and its full layout is installed: `runsc`, `containerd-shim-runsc-v1`, and the `gvisor-bin/` sidecars (including `gvisor_sentry`) that `runsc` requires next to itself.
+
+### Security implications
+
+- A gVisor escape lands on a disposable node whose kubelet, under NodeRestriction, sees only the Secrets of pods scheduled to it. That is the per-task sandbox Secret and the namespace image-pull Secret, which can pull only non-secret images.
+- Sandboxes never hold the real OpenRouter key or GitHub token. Only the server-side proxy does, and it injects them only into verified TLS to the matching hosts. Repository-profile pods (`credentialed` label) get OpenRouter and GitHub on port 8080. Computer-profile pods (`model` label) get only OpenRouter on port 8082, preferably a separate spend-capped `SANDBOX_OPENROUTER_API_KEY`, because the untrusted program in that pod can spend it for the task's lifetime.
+- IMDSv2 with a hop limit of 1 and the NetworkPolicy deny of `169.254.0.0/16` both keep pods away from node identity.
+- DNS to kube-dns remains available to sandboxes and is the remaining unfiltered channel.
+
+### Rollout
+
+The server-side join changes ship in launch-template user data and take effect only when the server instance is replaced, or when an operator applies the same files on the running host. Until the join record exists, agents retry for about 15 minutes and then fail their join unit. Sandbox Jobs fail closed at admission until the launcher sets `runtimeClassName: gvisor`. Without a running agent they stay `Pending`; neither case runs untrusted code on the server.

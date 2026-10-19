@@ -75,3 +75,27 @@ variable "helm_archive_sha256" {
   type        = string
   default     = "c306b46f719b0a4da32d0f78ee21bf90ce8d602f15b22ab753f0674d1670a7f3"
 }
+
+variable "sandbox_instance_types" {
+  description = "Spot instance types, in preference order, for the tainted sandbox K3s agent pool."
+  type        = list(string)
+  default     = ["t3a.large", "t3.large", "m6a.large", "m5a.large"]
+}
+
+variable "sandbox_root_volume_size" {
+  description = "Disposable encrypted gp3 root capacity for sandbox images and task workspaces."
+  type        = number
+  default     = 40
+}
+
+variable "gvisor_version" {
+  description = "Pinned gVisor release providing runsc, containerd-shim-runsc-v1, and its gvisor-bin sidecars on sandbox nodes."
+  type        = string
+  default     = "20260928.0"
+}
+
+variable "gvisor_archive_sha256" {
+  description = "SHA-256 of the pinned x86_64 gVisor release archive."
+  type        = string
+  default     = "f3ed9131bc252259df150e270154180188f9df56b73a2312940325e1f522a2d6"
+}

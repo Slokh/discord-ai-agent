@@ -14,6 +14,8 @@ release="$5"
 registry="$6"
 repository="$7"
 source_revision="${SOURCE_REVISION:-$image_tag}"
+# Terraform names the sandbox image repository after the runtime repository.
+sandbox_repository="$repository-sandbox"
 
 [[ "$image_tag" =~ ^[0-9a-f]{40}$ ]]
 [[ "$source_revision" =~ ^[0-9a-f]{40}$ ]]
@@ -29,6 +31,8 @@ systemctl is-active --quiet k3s.service
 systemctl start discord-ai-agent-bootstrap.service
 systemctl start discord-ai-agent-ecr-refresh.service
 kubectl get --raw=/readyz >/dev/null
+# Sandbox callbacks and the launcher need the signing key; check presence only.
+kubectl --namespace "$namespace" get secret discord-ai-agent-env -o json | jq -e '.data | has("TASK_SIGNING_SECRET")' >/dev/null
 
 workspace="$(mktemp -d)"
 cleanup() { rm -rf "$workspace"; }
@@ -73,6 +77,11 @@ helm_args=(
   --set "image.repository=$registry/$repository"
   --set "image.tag=$image_tag"
   --set "bot.replicas=$bot_replicas"
+  --set "sandbox.image=$registry/$sandbox_repository:$image_tag"
+  --set api.enabled=true
+  --set sandbox.isolation.enabled=true
+  --set egressProxy.enabled=true
+  --set networkPolicy.enabled=true
   --set-string "config.appRevision=$image_tag"
   --set-string "config.releaseVerificationId=$deployment_id"
 )
@@ -91,6 +100,8 @@ helm upgrade --install "$release" deploy/helm/discord-ai-agent \
 
 kubectl --namespace "$namespace" rollout status "statefulset/$release-postgres" --timeout=3m >/dev/null
 kubectl --namespace "$namespace" rollout status "deployment/$release-worker" --timeout=3m >/dev/null
+kubectl --namespace "$namespace" rollout status "deployment/$release-api" --timeout=3m >/dev/null
+kubectl --namespace "$namespace" rollout status "deployment/$release-egress-proxy" --timeout=3m >/dev/null
 if [ "$bot_replicas" = "1" ]; then
   kubectl --namespace "$namespace" rollout status "deployment/$release-bot" --timeout=3m >/dev/null
 else
@@ -109,8 +120,23 @@ for component in bot worker; do
   [ "${actual_replicas:-0}" = "$expected" ]
 done
 
-permission="$(kubectl auth can-i create jobs.batch --namespace "$namespace" --as="system:serviceaccount:$namespace:$release-app" || true)"
-[ "$permission" = "no" ]
+worker_account="$(kubectl --namespace "$namespace" get deployment "$release-worker" -o jsonpath='{.spec.template.spec.serviceAccountName}')"
+worker_sandbox_image="$(kubectl --namespace "$namespace" get deployment "$release-worker" -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name=="SANDBOX_IMAGE")].value}')"
+[ "$worker_account" = "$release-worker" ]
+[ "$worker_sandbox_image" = "$registry/$sandbox_repository:$image_tag" ]
+kubectl get runtimeclass gvisor -o jsonpath='{.handler}' | grep -qx runsc
+
+# Only the worker may launch sandbox Jobs; the app, sandbox, and egress proxy
+# identities have no Kubernetes write authority.
+permission="$(kubectl auth can-i create jobs.batch --namespace "$namespace" --as="system:serviceaccount:$namespace:$release-worker" || true)"
+[ "$permission" = "yes" ]
+for account in "$release-app" discord-ai-agent-sandbox "$release-egress-proxy"; do
+  for verb in "create jobs.batch" "get secrets" "create pods"; do
+    # shellcheck disable=SC2086
+    permission="$(kubectl auth can-i $verb --namespace "$namespace" --as="system:serviceaccount:$namespace:$account" || true)"
+    [ "$permission" = "no" ]
+  done
+done
 
 table_count="$(kubectl --namespace "$namespace" exec "statefulset/$release-postgres" -- sh -c \
   'PGPASSWORD="$POSTGRES_PASSWORD" psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atqc "select count(*) from information_schema.tables where table_schema = '\''public'\''"')"

@@ -26,7 +26,12 @@ spec:
       securityContext:
         {{- toYaml .Values.podSecurityContext | nindent 8 }}
       terminationGracePeriodSeconds: {{ .Values.worker.terminationGracePeriodSeconds }}
+      {{- if .Values.api.enabled }}
+      # Only the worker holds the sandbox-launcher identity and token.
+      serviceAccountName: {{ include "discord-ai-agent.fullname" . }}-worker
+      {{- else }}
       serviceAccountName: {{ include "discord-ai-agent.fullname" . }}-app
+      {{- end }}
       containers:
         - name: worker
           securityContext:
@@ -40,5 +45,10 @@ spec:
             {{- include "discord-ai-agent.discordEnv" . | nindent 12 }}
             {{- include "discord-ai-agent.openRouterEnv" . | nindent 12 }}
             {{- include "discord-ai-agent.paymentEnv" . | nindent 12 }}
+            {{- if .Values.api.enabled }}
+            {{- include "discord-ai-agent.sandboxLauncherEnv" . | nindent 12 }}
+            {{- include "discord-ai-agent.sandboxCallbackEnv" . | nindent 12 }}
+            {{- include "discord-ai-agent.githubEnv" . | nindent 12 }}
+            {{- end }}
           resources:
             {{- toYaml .Values.worker.resources | nindent 12 }}

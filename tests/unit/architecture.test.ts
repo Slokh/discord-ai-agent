@@ -161,10 +161,15 @@ describe("architecture guardrails", () => {
     const proxyPolicy = policy.split(/^---$/m).find((document) => /name: .*-egress-proxy\n/.test(document)) ?? "";
     const values = await fs.readFile(path.join(process.cwd(), "deploy/helm/discord-ai-agent/values.yaml"), "utf8");
     const addon = await fs.readFile(path.join(process.cwd(), "deploy/helm/discord-ai-agent/files/egress_proxy.py"), "utf8");
+    const denyCidrs = values
+      .slice(values.indexOf("  denyCidrs:\n") + "  denyCidrs:\n".length)
+      .split("\n")
+      .filter((_line, index, lines) => lines.slice(0, index + 1).every((entry) => entry.startsWith("    - ")))
+      .map((line) => line.slice("    - ".length));
     expect(proxyPolicy).toContain('policyTypes: ["Ingress", "Egress"]');
     for (const cidr of ["10.0.0.0/8", "100.64.0.0/10", "127.0.0.0/8", "169.254.0.0/16", "172.16.0.0/12", "192.168.0.0/16"]) {
       expect(proxyPolicy).toContain(`- ${cidr}`);
-      expect(values).toMatch(new RegExp(`denyCidrs:[\\s\\S]*- ${cidr.replace(/\./g, "\\.")}`));
+      expect(denyCidrs).toContain(cidr);
     }
     expect(addon).toContain("ip.is_global and not ip.is_multicast");
     expect(addon).toContain("data.server.address = (addresses[0], port)");

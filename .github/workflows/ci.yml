@@ -238,13 +238,25 @@ jobs:
       - id: ecr
         uses: aws-actions/amazon-ecr-login@v2
       - uses: docker/setup-buildx-action@v4
+      - id: missing
+        name: Select candidate images not yet published for this tree
+        env:
+          TAG: ${{ steps.identity.outputs.tree_tag }}
+        run: |
+          # Tags are immutable and rebuilds are not byte-identical, so a retry
+          # after a partial publish reuses images already pushed for this tag.
+          targets=()
+          aws ecr describe-images --repository-name "$ECR_REPOSITORY" --image-ids "imageTag=$TAG" >/dev/null 2>&1 || targets+=(runtime)
+          aws ecr describe-images --repository-name "$ECR_REPOSITORY-sandbox" --image-ids "imageTag=$TAG" >/dev/null 2>&1 || targets+=(codegen)
+          echo "targets=$(IFS=,; echo "${targets[*]}")" >>"$GITHUB_OUTPUT"
       - name: Build and publish tree-addressed candidate images
+        if: steps.missing.outputs.targets != ''
         uses: docker/bake-action@v7
         with:
           push: true
           provenance: false
           files: docker-bake.hcl
-          targets: release
+          targets: ${{ steps.missing.outputs.targets }}
           set: |
             runtime.tags=${{ steps.ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ steps.identity.outputs.tree_tag }}
             codegen.tags=${{ steps.ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}-sandbox:${{ steps.identity.outputs.tree_tag }}
@@ -422,14 +434,26 @@ jobs:
         run: |
           echo "No candidate images matched the merged Git tree; refusing an unverified production rebuild."
           exit 1
-      - name: Build and publish images when no verified candidate exists
+      - id: missing
+        name: Select release images not yet published for this commit
         if: vars.CANDIDATE_IMAGE_PUBLISHING_ENABLED != 'true'
+        env:
+          TAG: ${{ env.IMAGE_TAG }}
+        run: |
+          # Tags are immutable and rebuilds are not byte-identical, so a retry
+          # after a partial publish reuses images already pushed for this tag.
+          targets=()
+          aws ecr describe-images --repository-name "$ECR_REPOSITORY" --image-ids "imageTag=$TAG" >/dev/null 2>&1 || targets+=(runtime)
+          aws ecr describe-images --repository-name "$ECR_REPOSITORY-sandbox" --image-ids "imageTag=$TAG" >/dev/null 2>&1 || targets+=(codegen)
+          echo "targets=$(IFS=,; echo "${targets[*]}")" >>"$GITHUB_OUTPUT"
+      - name: Build and publish images when no verified candidate exists
+        if: vars.CANDIDATE_IMAGE_PUBLISHING_ENABLED != 'true' && steps.missing.outputs.targets != ''
         uses: docker/bake-action@v7
         with:
           push: true
           provenance: false
           files: docker-bake.hcl
-          targets: release
+          targets: ${{ steps.missing.outputs.targets }}
           set: |
             runtime.tags=${{ steps.ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ env.IMAGE_TAG }}
             codegen.tags=${{ steps.ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}-sandbox:${{ env.IMAGE_TAG }}

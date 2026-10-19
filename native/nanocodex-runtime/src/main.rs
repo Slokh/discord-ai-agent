@@ -7,14 +7,18 @@ use std::{
 };
 
 use async_trait::async_trait;
-use nanocodex::{
-    Model, Nanocodex, OpenAi, ReasoningMode, Thinking, Tool, Tools,
-    agent::session::{SessionId, SessionSnapshot},
-    oai::transport::ResponsesTransport,
-    tools::{
-        ToolContext, ToolDefinition, ToolInput, ToolOutput, ToolResult, contract::ToolOutputBody,
+use nanocode::{
+    Lineage, Model, ModelSelection, Nanocode, OpenAi, ReasoningMode, SessionCheckpoint, Thinking,
+    Tool, Tools,
+    agent::events::AgentEvent,
+    durability::MemoryStore,
+    oai::{session::SessionId, transport::ResponsesTransport},
+    tool_contract::{
+        ToolContext, ToolDefinition, ToolInput, ToolOutput, ToolOutputBody, ToolOutputWire,
+        ToolResult,
     },
 };
+use nanocode_backend_codex::{CodexCheckpointExt, session::SessionSnapshot};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, value::RawValue};
 use thiserror::Error;
@@ -139,6 +143,10 @@ enum RuntimeError {
     Nanocodex(String),
 }
 
+fn nanocode_error(error: impl std::fmt::Display) -> RuntimeError {
+    RuntimeError::Nanocodex(error.to_string())
+}
+
 #[derive(Clone)]
 struct ProtocolTool {
     request_id: Arc<str>,
@@ -182,7 +190,7 @@ impl Tool for ProtocolTool {
         if result.call_id != call_id {
             return Ok(ToolOutput::error("Application tool result call ID mismatch"));
         }
-        let wire = nanocodex::tools::contract::ToolOutputWire {
+        let wire = ToolOutputWire {
             output: result.output,
             success: result.success,
             structured_result: result
@@ -293,16 +301,16 @@ async fn run_agent(
     let model = request
         .model
         .parse::<Model>()
-        .map_err(RuntimeError::InvalidModel)?;
+        .map_err(|error| RuntimeError::InvalidModel(error.to_string()))?;
     let thinking = request
         .thinking
         .parse::<Thinking>()
-        .map_err(RuntimeError::InvalidThinking)?;
+        .map_err(|error| RuntimeError::InvalidThinking(error.to_string()))?;
     let reasoning_mode = request
         .reasoning_mode
         .parse::<ReasoningMode>()
-        .map_err(RuntimeError::InvalidReasoningMode)?;
-    let session_id = request
+        .map_err(|error| RuntimeError::InvalidReasoningMode(error.to_string()))?;
+    request
         .session_id
         .parse::<SessionId>()
         .map_err(|error| RuntimeError::InvalidSessionId(error.to_string()))?;
@@ -317,13 +325,12 @@ async fn run_agent(
     if let Some(prefix) = request.model_id_prefix {
         openai = openai.model_id_prefix(prefix);
     }
-    let openai = openai
-        .build()
-        .map_err(|error| RuntimeError::Nanocodex(error.to_string()))?;
+    let openai = openai.build().map_err(nanocode_error)?;
 
-    // Discord turns never receive NanoCodex workspace or image-generation
-    // tools. Hosted search is the one native capability enabled here; every
-    // application mutation still crosses the typed protocol bridge below.
+    // Discord turns never receive NanoCodex image-generation tools. Hosted
+    // search and the sandbox workspace tools are the only native capabilities
+    // enabled here; every application mutation still crosses the typed
+    // protocol bridge below.
     let mut tools = Tools::builder()
         .without_defaults()
         .web_search(request.hosted_web_search)
@@ -337,54 +344,135 @@ async fn run_agent(
             result_sequence: Arc::clone(&result_sequence),
         });
     }
-    let tools = tools
-        .build()
-        .map_err(|error| RuntimeError::Nanocodex(error.to_string()))?;
+    let tools = tools.build().map_err(nanocode_error)?;
 
-    let mut builder = Nanocodex::builder(openai)
-        .session_id(session_id)
+    // One process serves one turn. The application owns continuity through
+    // the returned snapshot, so durability stays in memory and the runtime
+    // never writes session journals into the process home directory.
+    let mut runtime = Nanocode::builder()
+        .openai(openai)
+        .tools(tools)
         .instructions(request.instructions)
         .thinking(thinking)
-        .reasoning_mode(reasoning_mode)
-        .fast_mode(request.fast_mode)
-        .tools(tools);
+        .durability(MemoryStore::new().map_err(nanocode_error)?)
+        .without_subagents()
+        .without_cua()
+        .runner_management(false);
     if let Some(workspace) = request.workspace {
-        builder = builder.workspace(workspace);
+        runtime = runtime.workspace(workspace);
     }
-    if let Some(snapshot) = request.resume {
-        builder = builder.resume(snapshot);
-    }
-    let (agent, mut events) = builder
-        .build()
-        .map_err(|error| RuntimeError::Nanocodex(error.to_string()))?;
+    let runtime = runtime.build_async().await.map_err(nanocode_error)?;
+
+    let checkpoint = session_checkpoint(
+        request.session_id,
+        model,
+        thinking,
+        reasoning_mode,
+        request.fast_mode,
+        request.resume,
+    )?;
+    let outcome = run_turn(
+        &runtime,
+        checkpoint,
+        thinking,
+        request.fast_mode,
+        request.prompt,
+        request_id,
+        outbound,
+    )
+    .await;
+    let shutdown = runtime.shutdown().await;
+    outcome?;
+    shutdown.map_err(nanocode_error)
+}
+
+/// Builds the session identity NanoCodex resumes from. A fresh session still
+/// uses the application's deterministic session ID, so tool calls and later
+/// snapshots stay attributable to the same Discord session.
+fn session_checkpoint(
+    session_id: String,
+    model: Model,
+    thinking: Thinking,
+    reasoning_mode: ReasoningMode,
+    fast_mode: bool,
+    resume: Option<SessionSnapshot>,
+) -> Result<SessionCheckpoint, RuntimeError> {
+    let lineage = Lineage::root(session_id.clone());
+    let checkpoint = match resume {
+        Some(snapshot) => {
+            SessionCheckpoint::codex(session_id, lineage, thinking, snapshot).map_err(nanocode_error)?
+        }
+        None => SessionCheckpoint::native(
+            session_id.clone(),
+            ModelSelection::Codex(model),
+            thinking,
+            lineage,
+            session_id,
+            None,
+            false,
+            serde_json::json!({ "fast_mode": fast_mode, "conversation": null }),
+        ),
+    };
+    Ok(checkpoint.with_reasoning_mode(reasoning_mode))
+}
+
+async fn run_turn(
+    runtime: &Nanocode,
+    checkpoint: SessionCheckpoint,
+    thinking: Thinking,
+    fast_mode: bool,
+    prompt: String,
+    request_id: Arc<str>,
+    outbound: mpsc::UnboundedSender<Value>,
+) -> Result<(), RuntimeError> {
+    let (agent, mut events) = runtime.resume(checkpoint).await.map_err(nanocode_error)?;
+    // A resumed snapshot carries the thinking level and service tier it was
+    // recorded with; the current request is authoritative for both.
+    agent.set_thinking(thinking).await.map_err(nanocode_error)?;
+    agent.set_fast_mode(fast_mode).await.map_err(nanocode_error)?;
 
     let event_request_id = Arc::clone(&request_id);
     let event_outbound = outbound.clone();
     let event_task = tokio::spawn(async move {
         while let Some(event) = events.recv().await {
-            let event = serde_json::to_value(event)?;
-            let message = serde_json::to_value(OutboundMessage::Event {
-                protocol_version: PROTOCOL_VERSION,
-                request_id: &event_request_id,
-                event,
-            })?;
-            if event_outbound.send(message).is_err() {
+            let terminal = event.kind.is_terminal();
+            forward_event(&event_request_id, &event_outbound, &event)?;
+            if terminal {
                 break;
             }
         }
         Ok::<(), serde_json::Error>(())
     });
 
-    let turn = agent
-        .prompt(request.prompt)
-        .await
-        .map_err(|error| RuntimeError::Nanocodex(error.to_string()))?;
-    let result = turn
-        .result()
-        .await
-        .map_err(|error| RuntimeError::Nanocodex(error.to_string()))?;
-    let usage = serde_json::to_value(result.usage())?;
-    let snapshot = serde_json::to_value(result.snapshot())?;
+    let turn = agent.prompt(prompt).await.map_err(nanocode_error)?;
+    let result = turn.result().await.map_err(nanocode_error)?;
+    // Deliver the turn's remaining lifecycle events, ending with its terminal
+    // event, before the completion message so the ledger keeps their order.
+    match tokio::time::timeout(Duration::from_secs(5), event_task).await {
+        Ok(joined) => joined
+            .map_err(|error| RuntimeError::Nanocodex(format!("event task failed: {error}")))?
+            .map_err(RuntimeError::Json)?,
+        Err(_) => {
+            return Err(RuntimeError::Nanocodex(
+                "turn completed without a terminal event".to_owned(),
+            ));
+        }
+    }
+
+    let usage = match result.usage() {
+        Some(usage) => serde_json::to_value(usage)?,
+        None => Value::Object(serde_json::Map::new()),
+    };
+    let snapshot = result
+        .try_checkpoint()
+        .map_err(nanocode_error)?
+        .ok_or_else(|| RuntimeError::Nanocodex("turn completed without a checkpoint".to_owned()))?
+        .codex_snapshot()
+        .map_err(nanocode_error)?
+        .ok_or_else(|| {
+            RuntimeError::Nanocodex("turn checkpoint has no conversation snapshot".to_owned())
+        })?;
+    let snapshot = serde_json::to_value(snapshot)?;
     let completed = serde_json::to_value(OutboundMessage::Completed {
         protocol_version: PROTOCOL_VERSION,
         request_id: &request_id,
@@ -393,11 +481,21 @@ async fn run_agent(
         snapshot,
     })?;
     let _ = outbound.send(completed);
-    drop(agent);
-    event_task
-        .await
-        .map_err(|error| RuntimeError::Nanocodex(format!("event task failed: {error}")))?
-        .map_err(RuntimeError::Json)?;
+    agent.shutdown().await.map_err(nanocode_error)?;
+    Ok(())
+}
+
+fn forward_event(
+    request_id: &str,
+    outbound: &mpsc::UnboundedSender<Value>,
+    event: &AgentEvent,
+) -> Result<(), serde_json::Error> {
+    let message = serde_json::to_value(OutboundMessage::Event {
+        protocol_version: PROTOCOL_VERSION,
+        request_id,
+        event: serde_json::to_value(event)?,
+    })?;
+    let _ = outbound.send(message);
     Ok(())
 }
 
@@ -436,15 +534,92 @@ async fn write_stdout(message: &impl Serialize) -> Result<(), RuntimeError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use nanocodex::tools::{ToolContext, runtime::ToolRuntime};
+    use nanocode::code_mode::runtime::ToolRuntime;
     use serde_json::json;
     use std::os::fd::AsRawFd;
     use tokio::time::{Duration, timeout};
 
     #[test]
-    fn pinned_nanocodex_accepts_gpt_6_luna_at_max_reasoning() {
+    fn pinned_nanocode_accepts_gpt_6_luna_at_max_reasoning() {
         assert_eq!("gpt-6-luna".parse::<Model>().expect("GPT-6 Luna").as_str(), "gpt-6-luna");
         assert_eq!("max".parse::<Thinking>().expect("max effort").as_str(), "max");
+    }
+
+    #[test]
+    fn workspace_tools_expose_view_image_for_screenshots() {
+        let workspace = std::env::temp_dir();
+        let tools = Tools::builder()
+            .without_defaults()
+            .add(nanocode::code_mode::WorkspaceTools::new(workspace.clone()))
+            .build()
+            .expect("valid workspace tools");
+        let runtime = ToolRuntime::new_with_tools(workspace, Vec::new(), &tools);
+        let (definitions, _) = nanocode::code_mode::__private::model_contract(&runtime, "session-test");
+        let contract = serde_json::to_string(&definitions).expect("tool contract JSON");
+        for tool in ["exec_command", "write_stdin", "apply_patch", "view_image"] {
+            assert!(contract.contains(&format!("### `{tool}`")), "missing {tool}: {contract}");
+        }
+    }
+
+    #[test]
+    fn fresh_session_keeps_the_application_session_identity() {
+        let session_id = "0190c1a2-3b4c-7d5e-8f60-718293a4b5c6";
+        let checkpoint = session_checkpoint(
+            session_id.to_owned(),
+            Model::Luna,
+            Thinking::High,
+            ReasoningMode::Standard,
+            false,
+            None,
+        )
+        .expect("fresh checkpoint");
+        checkpoint.validate().expect("valid checkpoint");
+        assert_eq!(checkpoint.session_id(), session_id);
+        assert_eq!(checkpoint.conversation_id(), session_id);
+        assert!(checkpoint.codex_snapshot().expect("codex checkpoint").is_none());
+    }
+
+    #[test]
+    fn application_snapshot_round_trips_through_a_checkpoint() {
+        let session_id = "0190c1a2-3b4c-7d5e-8f60-718293a4b5c6";
+        let stored = json!({
+            "version": 1,
+            "model": "gpt-6-luna",
+            "lineage_id": session_id,
+            "prompt_cache_key": session_id,
+            "workspace": "/workspace",
+            "canonical_context": {
+                "type": "message",
+                "role": "user",
+                "content": [{ "type": "input_text", "text": "<environment_context />" }]
+            },
+            "history": [{
+                "type": "message",
+                "role": "assistant",
+                "content": [{ "type": "output_text", "text": "earlier answer" }]
+            }]
+        });
+        let snapshot: SessionSnapshot = serde_json::from_value(stored.clone()).expect("snapshot");
+        let checkpoint = session_checkpoint(
+            session_id.to_owned(),
+            Model::Luna,
+            Thinking::High,
+            ReasoningMode::Standard,
+            false,
+            Some(snapshot),
+        )
+        .expect("resumed checkpoint");
+        assert_eq!(checkpoint.session_id(), session_id);
+        let restored = serde_json::to_value(
+            checkpoint
+                .codex_snapshot()
+                .expect("codex checkpoint")
+                .expect("conversation snapshot"),
+        )
+        .expect("snapshot JSON");
+        for field in ["version", "model", "lineage_id", "prompt_cache_key", "workspace", "canonical_context", "history"] {
+            assert_eq!(restored[field], stored[field], "{field}");
+        }
     }
 
     #[test]
@@ -499,7 +674,7 @@ mod tests {
             })
             .build()
             .expect("valid tools");
-        let runtime = ToolRuntime::new_with_tools(".", None, None, &tools);
+        let runtime = ToolRuntime::new_with_tools(".", Vec::new(), &tools);
         let result_sender = tokio::spawn(async move {
             let call = calls.recv().await.expect("protocol tool call");
             let call_id = call["call_id"].as_str().expect("call id").to_owned();
@@ -582,7 +757,7 @@ mod tests {
             })
             .build()
             .expect("valid tools");
-        let runtime = ToolRuntime::new_with_tools(".", None, None, &tools);
+        let runtime = ToolRuntime::new_with_tools(".", Vec::new(), &tools);
         let result_sender = tokio::spawn(async move {
             let call = calls.recv().await.expect("protocol web tool call");
             let call_id = call["call_id"].as_str().expect("call id").to_owned();

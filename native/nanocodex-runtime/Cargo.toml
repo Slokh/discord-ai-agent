@@ -8,11 +8,12 @@ publish = false
 [dependencies]
 async-trait = "0.1.89"
 libc = "0.2.189"
-nanocodex = { git = "https://github.com/gakonst/nanocodex.git", rev = "4744bd069a6d4f44c0254428042ae45acc4ff535" }
+nanocode = { git = "https://github.com/gakonst/nanocodex.git", rev = "f4981ee6f219fc4c222eda0131c385bf3b1ab4d0" }
+nanocode-backend-codex = { git = "https://github.com/gakonst/nanocodex.git", rev = "f4981ee6f219fc4c222eda0131c385bf3b1ab4d0" }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.149"
 thiserror = "2.0.18"
-tokio = { version = "1.49.0", features = ["io-std", "io-util", "macros", "rt-multi-thread", "sync"] }
+tokio = { version = "1.49.0", features = ["io-std", "io-util", "macros", "rt-multi-thread", "sync", "time"] }
 
 [profile.release]
 codegen-units = 1

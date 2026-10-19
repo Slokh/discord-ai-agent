@@ -183,6 +183,8 @@ describe("architecture guardrails", () => {
     expect(agent).toContain("--node-taint=discord-ai-agent.dev/sandbox=true:NoSchedule");
     expect(agent).toContain("printf '%s  %s\\n' '${gvisor_archive_sha256}' /tmp/gvisor.tar.bz2 | sha256sum --check --status");
     expect(agent).toContain('runtime_type = "io.containerd.runsc.v1"');
+    // runsc refuses to start a sandbox without its gvisor-bin sidecars beside it.
+    expect(agent).toContain("install -m 0755 /tmp/gvisor/gvisor-bin/* /usr/local/bin/gvisor-bin/");
     expect(isolation).toContain("kind: RuntimeClass");
     expect(isolation).toContain("scheduling:");
     expect(isolation).toContain("preemptionPolicy: Never");

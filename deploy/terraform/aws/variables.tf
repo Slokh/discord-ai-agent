@@ -89,7 +89,7 @@ variable "sandbox_root_volume_size" {
 }
 
 variable "gvisor_version" {
-  description = "Pinned gVisor release providing runsc and containerd-shim-runsc-v1 on sandbox nodes."
+  description = "Pinned gVisor release providing runsc, containerd-shim-runsc-v1, and its gvisor-bin sidecars on sandbox nodes."
   type        = string
   default     = "20260928.0"
 }

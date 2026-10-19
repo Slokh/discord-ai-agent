@@ -103,7 +103,7 @@ Untrusted code no longer runs on the production host. Code-update sandboxes alre
 
 At zero desired capacity the pool costs nothing beyond the extra ECR storage. A running agent is billed at spot rates only while it exists. Nothing scales the pool up automatically yet: an operator sets desired capacity to 1 for sandbox work and back to 0 afterwards, and until then sandbox Jobs stay `Pending`. The ASG ignores Terraform drift on desired capacity so manual scaling is never reverted. An autoscaler or launcher-driven scale-up is a follow-up decision. Spot interruption ends a running sandbox and surfaces as `sandbox_disappeared`.
 
-gVisor and K3s versions are pinned with SHA-256 checksums in Terraform, like K3s and Helm on the server. gVisor ships only a release archive, so the archive is pinned and only the two binaries are installed.
+gVisor and K3s versions are pinned with SHA-256 checksums in Terraform, like K3s and Helm on the server. gVisor ships only a release archive, so the archive is pinned and its full layout is installed: `runsc`, `containerd-shim-runsc-v1`, and the `gvisor-bin/` sidecars (including `gvisor_sentry`) that `runsc` requires next to itself.
 
 ### Security implications
 

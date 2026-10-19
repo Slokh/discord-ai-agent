@@ -32,6 +32,26 @@ sandbox:
       memory: 2Gi
   taskTimeoutSeconds: 1800
   ttlSecondsAfterFinished: 3600
+  # Sandboxes run untrusted code. Isolation renders the gVisor RuntimeClass
+  # (whose scheduling pins pods to the tainted sandbox pool), a low
+  # PriorityClass, and an admission policy that rejects sandbox pods outside
+  # them. Names here are the contract the Job launcher matches.
+  isolation:
+    enabled: false
+    runtimeClassName: gvisor
+    runtimeHandler: runsc
+    priorityClassName: discord-ai-agent-sandbox
+    priority: -100
+    nodePoolLabel:
+      key: discord-ai-agent.dev/pool
+      value: sandbox
+    taint:
+      key: discord-ai-agent.dev/sandbox
+      value: "true"
+      effect: NoSchedule
+    overhead:
+      cpu: 100m
+      memory: 128Mi
 
 secret:
   existingSecretName: discord-ai-agent-env
@@ -98,9 +118,46 @@ improvementWatchdog:
 migrations:
   enabled: true
 
+# Sandbox pods may reach only the egress proxy, the callback API, and DNS.
 networkPolicy:
   enabled: false
-  allowSandboxInternetEgress: true
+
+# Credential-injecting egress proxy for sandboxes. Sandboxes hold placeholder
+# tokens; the credentialed port swaps them for real credentials only inside
+# verified TLS to the matching hosts. The public port never injects. Both
+# allow public HTTPS and refuse private, loopback, link-local, and CGNAT
+# destinations after resolving names.
+egressProxy:
+  enabled: false
+  image: docker.io/mitmproxy/mitmproxy:12.2.3@sha256:00b77b5d8804c8ad18cb6caefbf9d5849e895e8986c5ce011f4ae30f4385962f
+  imagePullPolicy: IfNotPresent
+  # Code-update sandboxes carry this pod label to reach the credentialed port.
+  credentialedPodLabel:
+    key: discord-ai-agent.dev/egress
+    value: credentialed
+  credentialedPort: 8080
+  publicPort: 8081
+  githubRepository: Slokh/discord-ai-agent
+  placeholders:
+    openRouterApiKey: discord-ai-agent-egress-placeholder-openrouter
+    githubToken: discord-ai-agent-egress-placeholder-github
+  credentialHosts:
+    openRouter: [openrouter.ai]
+    github: [github.com, api.github.com, uploads.github.com]
+  denyCidrs:
+    - 0.0.0.0/8
+    - 10.0.0.0/8
+    - 100.64.0.0/10
+    - 127.0.0.0/8
+    - 169.254.0.0/16
+    - 172.16.0.0/12
+    - 192.168.0.0/16
+  caValidityDays: 3650
+  nodeSelector:
+    node-role.kubernetes.io/control-plane: "true"
+  resources:
+    requests: { cpu: 50m, memory: 128Mi }
+    limits: { cpu: 500m, memory: 512Mi }
 
 ciliumFqdnPolicy:
   enabled: false

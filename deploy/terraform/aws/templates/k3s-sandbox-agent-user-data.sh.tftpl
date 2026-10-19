@@ -1,0 +1,120 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Disposable spot K3s agent for untrusted sandbox Jobs. It joins tainted and
+# labeled, runs pods only under gVisor, and holds no production state.
+
+dnf install -y bzip2 jq tar
+
+install -d -m 0755 /usr/local/bin /usr/local/sbin /etc/discord-ai-agent /etc/containerd /var/lib/rancher/k3s/agent/etc/containerd
+
+curl -fsSL "https://github.com/k3s-io/k3s/releases/download/${k3s_version}/k3s" -o /tmp/k3s
+printf '%s  %s\n' '${k3s_binary_sha256}' /tmp/k3s | sha256sum --check --status
+install -m 0755 /tmp/k3s /usr/local/bin/k3s
+rm -f /tmp/k3s
+ln -sf /usr/local/bin/k3s /usr/local/bin/kubectl
+ln -sf /usr/local/bin/k3s /usr/local/bin/crictl
+
+curl -fsSL "https://storage.googleapis.com/gvisor/releases/release/${gvisor_version}/x86_64/gvisor.tar.bz2" -o /tmp/gvisor.tar.bz2
+printf '%s  %s\n' '${gvisor_archive_sha256}' /tmp/gvisor.tar.bz2 | sha256sum --check --status
+install -d -m 0700 /tmp/gvisor
+tar -xjf /tmp/gvisor.tar.bz2 -C /tmp/gvisor runsc containerd-shim-runsc-v1
+install -m 0755 /tmp/gvisor/runsc /usr/local/bin/runsc
+install -m 0755 /tmp/gvisor/containerd-shim-runsc-v1 /usr/local/bin/containerd-shim-runsc-v1
+rm -rf /tmp/gvisor.tar.bz2 /tmp/gvisor
+
+# EC2 instances without nested virtualization use the systrap platform. The
+# runsc cgroup driver must match the one K3s selects for runc.
+cat >/etc/containerd/runsc.toml <<'EOF'
+[runsc_config]
+  platform = "systrap"
+EOF
+cat >/etc/containerd/runsc-systemd.toml <<'EOF'
+[runsc_config]
+  platform = "systrap"
+  systemd-cgroup = "true"
+EOF
+
+# K3s ships containerd 2, which reads config-v3.toml.tmpl and keeps its stock
+# configuration through the base template.
+cat >/var/lib/rancher/k3s/agent/etc/containerd/config-v3.toml.tmpl <<'EOF'
+{{ template "base" . }}
+
+[plugins.'io.containerd.cri.v1.runtime'.containerd.runtimes.runsc]
+  runtime_type = "io.containerd.runsc.v1"
+
+[plugins.'io.containerd.cri.v1.runtime'.containerd.runtimes.runsc.options]
+  TypeUrl = "io.containerd.runsc.v1.options"
+  ConfigPath = "{{ if .SystemdCgroup }}/etc/containerd/runsc-systemd.toml{{ else }}/etc/containerd/runsc.toml{{ end }}"
+EOF
+
+cat >/usr/local/sbin/discord-ai-agent-agent-join <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+temporary="$(mktemp -d)"
+trap 'rm -rf "$temporary"' EXIT
+chmod 0700 "$temporary"
+for _ in $(seq 1 90); do
+  if aws secretsmanager get-secret-value --region '${aws_region}' --secret-id '${agent_join_secret_arn}' \
+    --query SecretString --output text >"$temporary/join.json" 2>/dev/null; then
+    break
+  fi
+  sleep 10
+done
+server_url="$(jq -r '.server_url' "$temporary/join.json")"
+[[ "$server_url" =~ ^https://10\.[0-9.]+:6443$ ]]
+jq -r '.token' "$temporary/join.json" | grep -q '^K10'
+umask 077
+{
+  printf 'K3S_URL=%s\n' "$server_url"
+  printf 'K3S_TOKEN=%s\n' "$(jq -r '.token' "$temporary/join.json")"
+} >/etc/discord-ai-agent/k3s-agent.env
+EOF
+chmod 0755 /usr/local/sbin/discord-ai-agent-agent-join
+
+cat >/etc/systemd/system/discord-ai-agent-agent-join.service <<'EOF'
+[Unit]
+Description=Read the K3s agent-only join record
+Wants=network-online.target
+After=network-online.target
+Before=k3s-agent.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/discord-ai-agent-agent-join
+RemainAfterExit=yes
+TimeoutStartSec=20min
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+cat >/etc/systemd/system/k3s-agent.service <<'EOF'
+[Unit]
+Description=Lightweight Kubernetes sandbox agent
+Requires=discord-ai-agent-agent-join.service
+After=discord-ai-agent-agent-join.service network-online.target
+
+[Service]
+Type=notify
+EnvironmentFile=/etc/discord-ai-agent/k3s-agent.env
+KillMode=process
+Delegate=yes
+LimitNOFILE=1048576
+LimitNPROC=infinity
+LimitCORE=infinity
+TasksMax=infinity
+TimeoutStartSec=0
+Restart=always
+RestartSec=5s
+ExecStart=/usr/local/bin/k3s agent \
+  --node-label=discord-ai-agent.dev/pool=sandbox \
+  --node-taint=discord-ai-agent.dev/sandbox=true:NoSchedule
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+systemctl daemon-reload
+systemctl enable discord-ai-agent-agent-join.service k3s-agent.service
+systemctl start --no-block k3s-agent.service

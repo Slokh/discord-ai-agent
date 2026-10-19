@@ -1,4 +1,7 @@
 {{- if .Values.networkPolicy.enabled }}
+{{- $proxy := .Values.egressProxy }}
+# Sandboxes have no direct internet route: every sandbox may reach only the
+# egress proxy's public port, the internal callback API, and cluster DNS.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -21,20 +24,108 @@ spec:
       ports:
         - protocol: TCP
           port: {{ .Values.api.port }}
+    {{- if $proxy.enabled }}
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: {{ include "discord-ai-agent.name" . }}
+              app.kubernetes.io/instance: {{ .Release.Name }}
+              app.kubernetes.io/component: egress-proxy
+      ports:
+        - protocol: TCP
+          port: {{ $proxy.publicPort }}
+    {{- end }}
     - to:
         - namespaceSelector:
             matchLabels:
               kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
       ports:
         - protocol: UDP
           port: 53
         - protocol: TCP
           port: 53
-    {{- if .Values.networkPolicy.allowSandboxInternetEgress }}
+{{- if $proxy.enabled }}
+---
+# Only sandboxes the trusted launcher labels as credentialed (code updates)
+# may reach the port that injects real credentials.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "discord-ai-agent.fullname" . }}-sandbox-credentialed-egress
+  labels:
+    {{- include "discord-ai-agent.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: discord-ai-agent
+      app.kubernetes.io/component: sandbox
+      {{ $proxy.credentialedPodLabel.key }}: {{ $proxy.credentialedPodLabel.value | quote }}
+  policyTypes: ["Egress"]
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: {{ include "discord-ai-agent.name" . }}
+              app.kubernetes.io/instance: {{ .Release.Name }}
+              app.kubernetes.io/component: egress-proxy
+      ports:
+        - protocol: TCP
+          port: {{ $proxy.credentialedPort }}
+---
+# The proxy accepts only sandbox clients and may reach only DNS and public
+# HTTPS; its addon repeats the address check after resolving each name.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "discord-ai-agent.fullname" . }}-egress-proxy
+  labels:
+    {{- include "discord-ai-agent.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "discord-ai-agent.name" . }}
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: egress-proxy
+  policyTypes: ["Ingress", "Egress"]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: discord-ai-agent
+              app.kubernetes.io/component: sandbox
+      ports:
+        - protocol: TCP
+          port: {{ $proxy.publicPort }}
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: discord-ai-agent
+              app.kubernetes.io/component: sandbox
+              {{ $proxy.credentialedPodLabel.key }}: {{ $proxy.credentialedPodLabel.value | quote }}
+      ports:
+        - protocol: TCP
+          port: {{ $proxy.credentialedPort }}
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
     - to:
         - ipBlock:
             cidr: 0.0.0.0/0
             except:
+              - 0.0.0.0/8
               - 10.0.0.0/8
               - 100.64.0.0/10
               - 127.0.0.0/8
@@ -44,5 +135,5 @@ spec:
       ports:
         - protocol: TCP
           port: 443
-    {{- end }}
+{{- end }}
 {{- end }}

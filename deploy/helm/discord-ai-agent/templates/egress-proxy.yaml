@@ -1,0 +1,198 @@
+{{- if .Values.egressProxy.enabled }}
+{{- $proxy := .Values.egressProxy }}
+{{- $name := printf "%s-egress-proxy" (include "discord-ai-agent.fullname" .) }}
+{{- $keySecretName := printf "%s-ca-key" $name }}
+{{- /* Keep the interception CA stable across upgrades; sandboxes trust it. */}}
+{{- $existing := lookup "v1" "Secret" .Release.Namespace $keySecretName }}
+{{- $caCert := "" }}
+{{- $caKey := "" }}
+{{- if and $existing $existing.data (hasKey $existing.data "ca.crt") (hasKey $existing.data "ca.key") }}
+{{- $caCert = index $existing.data "ca.crt" | b64dec }}
+{{- $caKey = index $existing.data "ca.key" | b64dec }}
+{{- else }}
+{{- $ca := genCA "discord-ai-agent sandbox egress proxy" (int $proxy.caValidityDays) }}
+{{- $caCert = $ca.Cert }}
+{{- $caKey = $ca.Key }}
+{{- end }}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ $keySecretName }}
+  labels:
+    {{- include "discord-ai-agent.labels" . | nindent 4 }}
+    app.kubernetes.io/component: egress-proxy
+  annotations:
+    helm.sh/resource-policy: keep
+type: Opaque
+data:
+  ca.crt: {{ $caCert | b64enc }}
+  ca.key: {{ $caKey | b64enc }}
+  mitmproxy-ca.pem: {{ printf "%s\n%s" (trim $caKey) (trim $caCert) | b64enc }}
+---
+# Public CA certificate sandboxes mount to trust intercepted credential hosts.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $name }}-ca
+  labels:
+    {{- include "discord-ai-agent.labels" . | nindent 4 }}
+    app.kubernetes.io/component: egress-proxy
+data:
+  ca.crt: |
+    {{- $caCert | trim | nindent 4 }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $name }}-addon
+  labels:
+    {{- include "discord-ai-agent.labels" . | nindent 4 }}
+    app.kubernetes.io/component: egress-proxy
+data:
+  egress_proxy.py: |
+    {{- .Files.Get "files/egress_proxy.py" | nindent 4 }}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "discord-ai-agent.labels" . | nindent 4 }}
+    app.kubernetes.io/component: egress-proxy
+automountServiceAccountToken: false
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "discord-ai-agent.labels" . | nindent 4 }}
+    app.kubernetes.io/component: egress-proxy
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "discord-ai-agent.name" . }}
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: egress-proxy
+  template:
+    metadata:
+      labels:
+        {{- include "discord-ai-agent.labels" . | nindent 8 }}
+        app.kubernetes.io/component: egress-proxy
+      annotations:
+        checksum/addon: {{ .Files.Get "files/egress_proxy.py" | sha256sum }}
+    spec:
+      serviceAccountName: {{ $name }}
+      automountServiceAccountToken: false
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      {{- with $proxy.nodeSelector }}
+      # Credentials stay on the trusted server node, never the sandbox pool.
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: proxy
+          securityContext:
+            {{- toYaml .Values.containerSecurityContext | nindent 12 }}
+            readOnlyRootFilesystem: true
+          image: {{ $proxy.image | quote }}
+          imagePullPolicy: {{ $proxy.imagePullPolicy }}
+          command: ["/bin/sh", "-c"]
+          args:
+            - >-
+              install -m 0600 /etc/egress-proxy/ca/mitmproxy-ca.pem /var/lib/egress-proxy/mitmproxy-ca.pem &&
+              exec mitmdump
+              --mode regular@{{ $proxy.credentialedPort }}
+              --mode regular@{{ $proxy.publicPort }}
+              --set confdir=/var/lib/egress-proxy
+              --set connection_strategy=lazy
+              --set flow_detail=0
+              --set stream_large_bodies=1m
+              -s /etc/egress-proxy/addon/egress_proxy.py
+          ports:
+            - name: credentialed
+              containerPort: {{ $proxy.credentialedPort }}
+            - name: public
+              containerPort: {{ $proxy.publicPort }}
+          readinessProbe:
+            exec:
+              command: ["python3", "-c", "import socket; socket.create_connection(('127.0.0.1', {{ $proxy.publicPort }}), 2).close()"]
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            exec:
+              command: ["python3", "-c", "import socket; socket.create_connection(('127.0.0.1', {{ $proxy.publicPort }}), 2).close()"]
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          env:
+            - name: HOME
+              value: /tmp
+            - name: PYTHONDONTWRITEBYTECODE
+              value: "1"
+            - name: EGRESS_CREDENTIALED_PORT
+              value: {{ $proxy.credentialedPort | quote }}
+            - name: EGRESS_DENY_CIDRS
+              value: {{ join "," $proxy.denyCidrs | quote }}
+            - name: EGRESS_OPENROUTER_HOSTS
+              value: {{ join "," $proxy.credentialHosts.openRouter | quote }}
+            - name: EGRESS_GITHUB_HOSTS
+              value: {{ join "," $proxy.credentialHosts.github | quote }}
+            - name: EGRESS_OPENROUTER_PLACEHOLDER
+              value: {{ $proxy.placeholders.openRouterApiKey | quote }}
+            - name: EGRESS_GITHUB_PLACEHOLDER
+              value: {{ $proxy.placeholders.githubToken | quote }}
+            - name: GITHUB_REPOSITORY
+              value: {{ $proxy.githubRepository | quote }}
+            {{- include "discord-ai-agent.openRouterEnv" . | nindent 12 }}
+            {{- include "discord-ai-agent.githubEnv" . | nindent 12 }}
+          volumeMounts:
+            - name: ca
+              mountPath: /etc/egress-proxy/ca
+              readOnly: true
+            - name: addon
+              mountPath: /etc/egress-proxy/addon
+              readOnly: true
+            - name: state
+              mountPath: /var/lib/egress-proxy
+            - name: tmp
+              mountPath: /tmp
+          resources:
+            {{- toYaml $proxy.resources | nindent 12 }}
+      volumes:
+        - name: ca
+          secret:
+            secretName: {{ $keySecretName }}
+            items:
+              - key: mitmproxy-ca.pem
+                path: mitmproxy-ca.pem
+        - name: addon
+          configMap:
+            name: {{ $name }}-addon
+        - name: state
+          emptyDir: {}
+        - name: tmp
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "discord-ai-agent.labels" . | nindent 4 }}
+    app.kubernetes.io/component: egress-proxy
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: {{ include "discord-ai-agent.name" . }}
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: egress-proxy
+  ports:
+    - name: credentialed
+      port: {{ $proxy.credentialedPort }}
+      targetPort: credentialed
+    - name: public
+      port: {{ $proxy.publicPort }}
+      targetPort: public
+{{- end }}

@@ -32,6 +32,17 @@ resource "aws_ecr_repository" "app" {
   }
 }
 
+# The sandbox (codegen + desktop) image runs untrusted repository and member
+# programs; only tainted sandbox nodes pull it.
+resource "aws_ecr_repository" "sandbox" {
+  name                 = "${var.aws_resource_prefix}-sandbox"
+  image_tag_mutability = "IMMUTABLE"
+
+  image_scanning_configuration {
+    scan_on_push = true
+  }
+}
+
 locals {
   ecr_lifecycle_policy = jsonencode({
     rules = [
@@ -63,5 +74,10 @@ locals {
 
 resource "aws_ecr_lifecycle_policy" "app" {
   repository = aws_ecr_repository.app.name
+  policy     = local.ecr_lifecycle_policy
+}
+
+resource "aws_ecr_lifecycle_policy" "sandbox" {
+  repository = aws_ecr_repository.sandbox.name
   policy     = local.ecr_lifecycle_policy
 }

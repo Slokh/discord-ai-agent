@@ -1,0 +1,97 @@
+{{- if .Values.sandbox.isolation.enabled }}
+{{- $isolation := .Values.sandbox.isolation }}
+apiVersion: node.k8s.io/v1
+kind: RuntimeClass
+metadata:
+  name: {{ $isolation.runtimeClassName }}
+  labels:
+    {{- include "discord-ai-agent.labels" . | nindent 4 }}
+handler: {{ $isolation.runtimeHandler }}
+overhead:
+  podFixed:
+    cpu: {{ $isolation.overhead.cpu }}
+    memory: {{ $isolation.overhead.memory }}
+# Pods using this class are scheduled only onto the tainted sandbox pool, the
+# only nodes with runsc installed.
+scheduling:
+  nodeSelector:
+    {{ $isolation.nodePoolLabel.key }}: {{ $isolation.nodePoolLabel.value | quote }}
+  tolerations:
+    - key: {{ $isolation.taint.key }}
+      operator: Equal
+      value: {{ $isolation.taint.value | quote }}
+      effect: {{ $isolation.taint.effect }}
+---
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: {{ $isolation.priorityClassName }}
+  labels:
+    {{- include "discord-ai-agent.labels" . | nindent 4 }}
+value: {{ $isolation.priority }}
+globalDefault: false
+preemptionPolicy: Never
+description: Untrusted sandbox Jobs; never preempt application workloads.
+---
+# Fails closed: any pod in this namespace that runs as the sandbox service
+# account or carries the sandbox component label must use gVisor, share no host
+# namespace or path, run unprivileged, and carry no Kubernetes API token.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: {{ include "discord-ai-agent.fullname" . }}-sandbox-isolation
+  labels:
+    {{- include "discord-ai-agent.labels" . | nindent 4 }}
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: ["CREATE"]
+        resources: ["pods"]
+  matchConditions:
+    - name: sandbox-pod
+      expression: >-
+        object.spec.serviceAccountName == {{ .Values.sandbox.serviceAccountName | squote }} ||
+        (has(object.metadata.labels) &&
+          'app.kubernetes.io/component' in object.metadata.labels &&
+          object.metadata.labels['app.kubernetes.io/component'] == 'sandbox')
+  validations:
+    - expression: >-
+        has(object.spec.runtimeClassName) && object.spec.runtimeClassName == {{ $isolation.runtimeClassName | squote }}
+      message: Sandbox pods must use the {{ $isolation.runtimeClassName }} RuntimeClass.
+    - expression: >-
+        object.spec.serviceAccountName == {{ .Values.sandbox.serviceAccountName | squote }}
+      message: Sandbox pods must use the sandbox service account.
+    - expression: >-
+        !(has(object.spec.hostNetwork) && object.spec.hostNetwork) &&
+        !(has(object.spec.hostPID) && object.spec.hostPID) &&
+        !(has(object.spec.hostIPC) && object.spec.hostIPC)
+      message: Sandbox pods must not share host namespaces.
+    - expression: >-
+        !has(object.spec.volumes) || object.spec.volumes.all(v,
+          !has(v.hostPath) &&
+          !(has(v.projected) && has(v.projected.sources) && v.projected.sources.exists(s, has(s.serviceAccountToken))))
+      message: Sandbox pods must not mount host paths or Kubernetes API tokens.
+    - expression: >-
+        object.spec.containers.all(c, !has(c.securityContext) ||
+          !(has(c.securityContext.privileged) && c.securityContext.privileged)) &&
+        (!has(object.spec.initContainers) || object.spec.initContainers.all(c, !has(c.securityContext) ||
+          !(has(c.securityContext.privileged) && c.securityContext.privileged)))
+      message: Sandbox containers must not be privileged.
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: {{ include "discord-ai-agent.fullname" . }}-sandbox-isolation
+  labels:
+    {{- include "discord-ai-agent.labels" . | nindent 4 }}
+spec:
+  policyName: {{ include "discord-ai-agent.fullname" . }}-sandbox-isolation
+  validationActions: [Deny]
+  matchResources:
+    namespaceSelector:
+      matchLabels:
+        kubernetes.io/metadata.name: {{ .Release.Namespace }}
+{{- end }}

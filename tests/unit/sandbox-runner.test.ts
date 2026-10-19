@@ -55,10 +55,11 @@ describe("sandboxRunner", () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "sandbox-shims-"));
     try {
       const env = {
+        taskType: "code_update",
         githubRepository: "owner/repository",
         githubBaseBranch: "main",
         sandboxCacheDir: "/cache/agent's-data",
-      } as Pick<SandboxEnv, "githubRepository" | "githubBaseBranch" | "sandboxCacheDir"> as SandboxEnv;
+      } as Pick<SandboxEnv, "taskType" | "githubRepository" | "githubBaseBranch" | "sandboxCacheDir"> as SandboxEnv;
       await expect(writeSandboxToolShims(tempDir, env)).resolves.toEqual([
         "agent-task-context",
         "agent-cache-info",
@@ -498,8 +499,8 @@ describe("sandboxRunner", () => {
         {
           area: "Code-update task lifecycle",
           purpose: "Tracks code update requests through Discord progress and PRs.",
-          files: ["src/discord/taskNotifications.ts"],
-          checks: ["tests/unit/task-notifications.test.ts"]
+          files: ["src/discord/taskResultDelivery.ts"],
+          checks: ["tests/unit/task-result-delivery.test.ts"]
         }
       ]
     };
@@ -509,7 +510,7 @@ describe("sandboxRunner", () => {
     expect(initial).toContain("Use repository guides, exact anchors, and the project map as navigation aids");
     expect(initial).toContain("Batch initial reconnaissance");
     expect(initial).toContain("Make a focused regression test early");
-    expect(initial).toContain("src/discord/taskNotifications.ts");
+    expect(initial).toContain("src/discord/taskResultDelivery.ts");
 
     const recovery = codeUpdateRecoveryPrompt(env as any, {
       attempt: 2,

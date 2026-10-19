@@ -1,9 +1,11 @@
+import type { AgentTaskType } from "./sandboxProfiles.js";
+
 export type AgentTaskStatus = "queued" | "running" | "succeeded" | "failed" | "no_changes" | "cancelled";
 
 export type AgentTaskJob = {
   taskId: string;
   traceId?: string;
-  taskType: "code_update" | "improvement_report" | "improvement_repair" | "diagnosis";
+  taskType: AgentTaskType;
   request: string;
   title: string;
   requestedBy: string;

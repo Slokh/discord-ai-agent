@@ -30,7 +30,7 @@ assertOpenRouterConfig(config);
 assertExecutionConfig(config);
 
 const deployed = deploymentToolset(config);
-for (const name of ["getDiscordStats", "searchDiscordHistory", "runCodingAgent", "web__run"] as const) {
+for (const name of ["getDiscordStats", "searchDiscordHistory", "runSandboxAgent", "web__run"] as const) {
   if (!deployed.localTools.some((tool) => tool.name === name)) throw new Error(`Post-deploy canary is missing deployed capability ${name}.`);
 }
 for (const type of ["openrouter:web_search", "openrouter:web_fetch"] as const) {

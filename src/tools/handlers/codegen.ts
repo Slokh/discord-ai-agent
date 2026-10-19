@@ -1,17 +1,18 @@
 import { createAgentUpdateFromRequest, cancelAgentTask, getAgentTaskStatus, listAgentTasks, retryAgentTask } from "../agentTaskTools.js";
 import { cleanToolResponse } from "../responseFormatting.js";
+import { SANDBOX_TASK_MODES, taskTypeForSandboxMode, type SandboxTaskMode } from "../../execution/sandboxProfiles.js";
 import { stringArgument, stringArrayArgument, numberArgument } from "./arguments.js";
 import type { ToolName } from "../toolDefinition.js";
 import type { LocalToolHandler } from "./types.js";
 
 export const codegenToolHandlers = {
-  "runCodingAgent": async (ctx, route, _originalText) => {
+  "runSandboxAgent": async (ctx, route, _originalText) => {
     const response = await createAgentUpdateFromRequest(
               ctx,
               stringArgument(route.arguments, "request")!,
               stringArgument(route.arguments, "title")!,
               {
-                taskType: stringArgument(route.arguments, "mode") === "diagnosis" ? "diagnosis" : "code_update",
+                taskType: taskTypeForSandboxMode(sandboxTaskMode(stringArgument(route.arguments, "mode"))),
                 improvementCaseId: stringArgument(route.arguments, "improvementCaseId"),
                 targetBranch: stringArgument(route.arguments, "targetBranch"),
                 targetPullRequestNumber: numberArgument(
@@ -62,3 +63,7 @@ export const codegenToolHandlers = {
     return { ...response, content: cleanToolResponse(response.content, ctx.config.maxReplyChars) };
   },
 } satisfies Partial<Record<ToolName, LocalToolHandler>>;
+
+function sandboxTaskMode(value: string | undefined): SandboxTaskMode {
+  return (SANDBOX_TASK_MODES as readonly string[]).includes(value ?? "") ? (value as SandboxTaskMode) : "code_change";
+}

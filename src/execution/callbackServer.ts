@@ -15,8 +15,11 @@ const MAX_BODY_BYTES = 25 * 1024 * 1024;
 const ARTIFACT_KINDS = [
   "prompt", "command_log", "diff", "pr_body", "model_transcript",
   "tool_transcript", "crawl_summary", "embedding_summary", "raw_json",
-  "response", "diagnostic",
+  "response", "diagnostic", "result_file",
 ] as const;
+/** Discord's default per-attachment upload limit for bots. */
+export const MAX_RESULT_FILE_BYTES = 8 * 1024 * 1024;
+const RESULT_FILE_CONTENT_TYPES = /^(image\/(png|jpeg|gif|webp)|video\/(mp4|webm)|text\/plain|application\/json)$/;
 
 type CallbackKind = "progress" | "complete" | "commands" | "artifacts";
 
@@ -112,6 +115,29 @@ export async function handleSandboxCallbackRequest(input: {
       metadata: objectValue(body.metadata),
     });
     sendJson(input.response, 200, { ok: true });
+    return;
+  }
+
+  if (kind === "artifacts" && body.kind === "result_file") {
+    const execution = await input.agentRuntime.getExecution({ executionId: agentTaskExecutionId(taskId) });
+    const contentType = optionalString(body.contentType) ?? "";
+    const data = body.encoding === "base64" && typeof body.content === "string" ? Buffer.from(body.content, "base64") : null;
+    if (!data || data.length === 0 || data.length > MAX_RESULT_FILE_BYTES || !RESULT_FILE_CONTENT_TYPES.test(contentType)) {
+      sendJson(input.response, 400, { error: "Result files must be base64 images, short videos, text, or JSON up to 8 MiB." });
+      return;
+    }
+    const artifact = execution
+      ? await input.agentRuntime.storeBinaryArtifact({
+          sessionId: execution.sessionId,
+          executionId: execution.executionId,
+          kind: "result_file",
+          name: (optionalString(body.name) ?? "result").slice(0, 200),
+          contentType,
+          data,
+          metadata: { ...objectValue(body.metadata), deliver: true },
+        })
+      : null;
+    sendJson(input.response, 200, { ok: true, artifactId: artifact?.artifactId ?? null });
     return;
   }
 

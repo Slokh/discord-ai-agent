@@ -23,7 +23,7 @@ function codeUpdateContext(repo: Record<string, unknown>, overrides: Partial<Too
   return context(repo, {
     config: {
       github: { token: "github-token" },
-      execution: { taskSigningSecret: "signing-secret" },
+      execution: { taskSigningSecret: "signing-secret", sandbox: { modes: { code_change: true, diagnosis: true, computer: false } } },
     } as ToolContext["config"],
     ...overrides,
   });

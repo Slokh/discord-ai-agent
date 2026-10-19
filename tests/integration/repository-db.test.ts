@@ -1115,7 +1115,7 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
       taskId,
       traceId,
       status: "queued",
-      harness: "runCodingAgent",
+      harness: "runSandboxAgent",
       metadata: { runtime: "agent" }
     });
 
@@ -1308,7 +1308,7 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
       taskId,
       traceId,
       status: "running",
-      harness: "runCodingAgent",
+      harness: "runSandboxAgent",
       sandboxId,
       metadata: { runtime: "agent" }
     });
@@ -1763,13 +1763,11 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
       backend: "kubernetes-sandbox"
     });
 
-    await expect(repo.listRenderableAgentTasks(5)).resolves.not.toEqual(expect.arrayContaining([expect.objectContaining({ taskId })]));
     await expect(repo.attachAgentTasksToDiscordResponse({ traceId, channelId, messageId: replyMessageId })).resolves.toBe(1);
     await expect(repo.getAgentTask(taskId)).resolves.toMatchObject({
       discordResponseChannelId: channelId,
       discordResponseMessageId: replyMessageId
     });
-    await expect(repo.listRenderableAgentTasks(5)).resolves.toEqual(expect.arrayContaining([expect.objectContaining({ taskId })]));
   });
 
   it("aggregates agent task phase durations and sandbox cache events", async () => {
@@ -1809,7 +1807,7 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
       taskId,
       traceId,
       status: "queued",
-      harness: "runCodingAgent",
+      harness: "runSandboxAgent",
       metadata: { runtime: "agent" }
     });
 

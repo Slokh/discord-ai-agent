@@ -68,7 +68,7 @@ describe.skipIf(!runDbTests)("revision quality database contract", () => {
       kind: "tool",
       level: "error",
       eventName: "agent.tool.complete",
-      metadata: { toolName: "runCodingAgent", status: "error" },
+      metadata: { toolName: "runSandboxAgent", status: "error" },
     });
 
     await expect(collectRevisionQuality(database.pool, "quality-revision", 48)).resolves.toMatchObject({

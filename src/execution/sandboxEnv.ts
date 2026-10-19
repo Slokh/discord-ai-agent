@@ -1,17 +1,15 @@
 import os from "node:os";
 import path from "node:path";
 import { productConfig } from "../config/env.js";
+import { parseAgentTaskType, sandboxProfileRequires } from "./sandboxProfiles.js";
 import type { SandboxEnv } from "./types.js";
 
 export type { SandboxEnv, TaskTimings } from "./types.js";
 
 export function loadSandboxEnv(): SandboxEnv {
   const taskId = requiredEnv("TASK_ID");
-  const taskType = process.env.TASK_TYPE === "improvement_report" || process.env.TASK_TYPE === "improvement_repair"
-    ? process.env.TASK_TYPE
-    : process.env.TASK_TYPE === "diagnosis"
-      ? "diagnosis"
-      : "code_update";
+  const taskType = parseAgentTaskType(process.env.TASK_TYPE);
+  if (!taskType) throw new Error(`TASK_TYPE must be a known agent task type; received ${JSON.stringify(process.env.TASK_TYPE ?? "")}.`);
   return {
     taskType,
     taskId,
@@ -27,7 +25,7 @@ export function loadSandboxEnv(): SandboxEnv {
     callbackServerUrl: argumentValue("--callback-url") ?? productConfig.callback.internalUrl,
     taskToken: requiredEnv("AGENT_TASK_TOKEN"),
     taskCallbackSecret: requiredEnv("AGENT_TASK_CALLBACK_SECRET"),
-    githubToken: requiredEnv("GITHUB_TOKEN"),
+    githubToken: sandboxProfileRequires(taskType, "github") ? requiredEnv("GITHUB_TOKEN") : "",
     githubRepository: productConfig.github.repository,
     githubBaseBranch: productConfig.github.baseBranch,
     openRouterApiKey: requiredEnv("OPENROUTER_API_KEY"),

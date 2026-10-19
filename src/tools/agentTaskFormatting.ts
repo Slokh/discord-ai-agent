@@ -1,5 +1,6 @@
 import type { AgentTaskRecord, SandboxCommandEvent, TaskEvent } from "../db/repositories.js";
 import { truncateForDiscord } from "../util/text.js";
+import { parseAgentTaskType, sandboxProfileForTaskType } from "../execution/sandboxProfiles.js";
 
 const AGENT_UPDATE_TITLE_MAX_CHARS = 80;
 const ACTIVE_AGENT_TASK_STALE_MS = 15 * 60 * 1000;
@@ -47,12 +48,26 @@ export function formatAgentTaskResult(input: {
 
   const job = input.job;
   if (!job) {
-    return `Working on it...\n\nI’ll update this message with progress and the PR link when it’s ready.\nTask ID: \`${input.taskId}\`.`;
+    return `Working on it...\n\nI’ll update this message when it’s done.\nTask ID: \`${input.taskId}\`.`;
   }
 
-  if (job.status === "succeeded" && job.taskType === "diagnosis") {
-    const result = agentTaskDiagnosisResult(input.taskEvents);
-    return result || `Repository diagnosis completed. Task ID: \`${input.taskId}\`.`;
+  const reportsResult = !publishesPullRequest(job.taskType);
+  if (job.status === "succeeded" && reportsResult) {
+    const result = agentTaskReportedResult(input.taskEvents);
+    return result || `Done. Task ID: \`${input.taskId}\`.`;
+  }
+
+  if (reportsResult && (job.status === "failed" || job.status === "no_changes")) {
+    const diagnosis = agentTaskFailureDiagnosis(input.taskEvents) ?? fallbackSandboxFailureDiagnosis(job.error);
+    return [
+      diagnosis
+        ? `I couldn’t finish that: ${diagnosis.summary}`
+        : `I couldn’t finish that: ${truncateForDiscord(job.error ?? "the sandbox stopped unexpectedly.", 900)}`,
+      diagnosis?.finalResponse ? diagnosis.finalResponse : "",
+      diagnosis?.nextAction ? `Next: ${diagnosis.nextAction}` : "",
+    ]
+      .filter(Boolean)
+      .join("\n");
   }
 
   if (job.status === "succeeded" && job.prUrl) {
@@ -100,9 +115,17 @@ export function formatAgentTaskResult(input: {
   return `I’m still working on that code change. Current status: \`${job.status}\`. Task ID: \`${input.taskId}\`.`;
 }
 
-function agentTaskDiagnosisResult(taskEvents: TaskEvent[] | undefined) {
+function publishesPullRequest(taskType: string) {
+  const parsed = parseAgentTaskType(taskType);
+  return parsed ? sandboxProfileForTaskType(parsed).publishesPullRequest : true;
+}
+
+/** `diagnosis_complete` is the retained step name from before every result-profile task shared one. */
+const RESULT_STEPS = new Set(["result_complete", "diagnosis_complete"]);
+
+function agentTaskReportedResult(taskEvents: TaskEvent[] | undefined) {
   for (const event of [...(taskEvents ?? [])].reverse()) {
-    if (event.metadata?.step !== "diagnosis_complete") continue;
+    if (!RESULT_STEPS.has(String(event.metadata?.step ?? ""))) continue;
     const summary = event.summary?.trim();
     if (summary) return truncateForDiscord(summary, 1_800);
   }

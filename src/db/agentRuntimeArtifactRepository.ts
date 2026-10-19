@@ -151,6 +151,22 @@ export class AgentRuntimeArtifactRepository {
     return rowToAgentRuntimeArtifact(result.rows[0]);
   }
 
+  async listArtifactsForExecution(input: { executionId: string; kind: string; limit?: number }): Promise<AgentRuntimeArtifactRecord[]> {
+    const result = await this.pool.query(
+      `
+        SELECT *
+        FROM agent_runtime_artifacts
+        WHERE execution_id = $1
+          AND kind = $2
+          AND (expires_at IS NULL OR expires_at > now())
+        ORDER BY created_at ASC, artifact_id ASC
+        LIMIT $3
+      `,
+      [input.executionId, input.kind, Math.max(1, Math.min(100, Math.trunc(input.limit ?? 20)))],
+    );
+    return result.rows.map(rowToAgentRuntimeArtifact);
+  }
+
   async getBinaryArtifact(input: { artifactId: string }): Promise<AgentRuntimeBinaryArtifactContent | undefined> {
     const result = await this.pool.query(
       `

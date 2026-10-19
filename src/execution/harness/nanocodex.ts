@@ -6,6 +6,7 @@ import { progress, recordArtifact } from "../callbacks.js";
 import { codeUpdatePrompt } from "../codegenPrompts.js";
 import { gitChangeStateMetadata, readGitChangeState } from "../repoWorkspace.js";
 import type { SandboxEnv } from "../sandboxEnv.js";
+import { sandboxProfileForTaskType } from "../sandboxProfiles.js";
 import { MAX_RECOVERY_TAIL, formatDuration, sanitizeStepName, tail, truncateSingleLine } from "../sandboxUtils.js";
 import { CodegenNoDiffError, type AgentAttemptSummary, type AgentRunSummary, type NanoCodexRunInput } from "./types.js";
 
@@ -34,7 +35,8 @@ export async function runNanoCodex(input: NanoCodexRunInput): Promise<AgentRunSu
   const attempt = input.attempt ?? 1;
   const totalAttempts = input.totalAttempts ?? 1;
   const model = nanoCodexModel(input.env.openRouterCodegenModel);
-  const prompt = input.prompt ?? codeUpdatePrompt(input.env, input.contextPack);
+  if (!input.prompt && !input.contextPack) throw new Error("NanoCodex needs a prompt or a repository context pack.");
+  const prompt = input.prompt ?? codeUpdatePrompt(input.env, input.contextPack!);
   const startedAt = Date.now();
   const eventLines: string[] = [];
   let finalResponse: string | undefined;
@@ -64,9 +66,7 @@ export async function runNanoCodex(input: NanoCodexRunInput): Promise<AgentRunSu
       model: `openai/${model}`,
       thinking: CODEGEN_REASONING,
       reasoningMode: "standard",
-      instructions: input.instructions ?? (input.env.taskType === "diagnosis"
-        ? "Diagnose the request from repository and runtime evidence. Keep the checkout unchanged and return a concise evidence-backed result."
-        : "Implement the requested repository change completely. Work directly in the provided checkout, follow its repository instructions, verify the result, and leave the working tree with the intended diff."),
+      instructions: input.instructions ?? defaultNanoCodexInstructions(input.env.taskType),
       prompt,
       requestId: input.env.taskId,
       sessionId: nanoCodexSessionId(`code-update:${input.env.taskId}`),
@@ -99,7 +99,9 @@ export async function runNanoCodex(input: NanoCodexRunInput): Promise<AgentRunSu
   }
 
   const durationMs = Date.now() - startedAt;
-  const changeState = await readGitChangeState(input.checkoutDir, input.baseRevision).catch(() => undefined);
+  const changeState = input.baseRevision
+    ? await readGitChangeState(input.checkoutDir, input.baseRevision).catch(() => undefined)
+    : undefined;
   const producedDiff = Boolean(changeState?.hasChanges);
   const summary: AgentAttemptSummary = {
     attempt,
@@ -140,7 +142,17 @@ export function acceptsCleanNanoCodexResult(
   exitCode: number,
   finalResponse?: string,
 ) {
-  return (taskType === "diagnosis" || taskType === "improvement_report") && exitCode === 0 && Boolean(finalResponse?.trim());
+  return sandboxProfileForTaskType(taskType).acceptsResultWithoutDiff && exitCode === 0 && Boolean(finalResponse?.trim());
+}
+
+export function defaultNanoCodexInstructions(taskType: SandboxEnv["taskType"]) {
+  if (taskType === "diagnosis") {
+    return "Diagnose the request from repository and runtime evidence. Keep the checkout unchanged and return a concise evidence-backed result.";
+  }
+  if (sandboxProfileForTaskType(taskType).workspace === "scratch") {
+    return "Carry out the request inside this disposable, isolated computer using the provided workspace and helper commands. Work until the request is accomplished or clearly impossible, then return a concise first-person account of what you did and observed.";
+  }
+  return "Implement the requested repository change completely. Work directly in the provided checkout, follow its repository instructions, verify the result, and leave the working tree with the intended diff.";
 }
 
 function createNanoCodexProgressObserver(input: { env: SandboxEnv; attempt: number; totalAttempts: number }) {

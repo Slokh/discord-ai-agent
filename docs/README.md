@@ -17,7 +17,7 @@ Then open only the guide that owns the change:
 | Prompts, model behavior, tools, images, Discord presentation | [Agent system](agent-system.md) |
 | Discord history, retrieval, memory, database, privacy, retention | [Data](data.md) |
 | Wallets, transfers, wagers, games, randomness | [Payments and games](payments.md) |
-| Code-update tasks, sandboxes, GitHub publication | [Code updates](code-updates.md) |
+| Sandbox tasks (computer and code updates), GitHub publication | [Sandbox tasks and code updates](code-updates.md) |
 | Bugs, friction, reports, evidence, acceptance contracts | [Improvement cases](improvements.md) |
 | Local setup, deployment, sandbox callbacks, production debugging | [Operations](operations.md) |
 | Accepted environment variables and their ownership | [Configuration](configuration.md) |
@@ -29,7 +29,7 @@ Then open only the guide that owns the change:
 - [Agent system](agent-system.md) explains NanoCodex, prompt assembly, tools, typed outcomes, rich responses, and delivery recovery.
 - [Data](data.md) explains Discord indexing, permission-filtered retrieval, conversation memory, the runtime ledger, privacy, migrations, and retention.
 - [Payments and games](payments.md) explains managed wallets, transfer authority, receipt verification, wager state, settlement, and provable RNG.
-- [Code updates](code-updates.md) explains how a conversational request becomes a sandboxed, verified pull request.
+- [Sandbox tasks and code updates](code-updates.md) explains how a conversational request becomes isolated sandbox work: an operated program with screenshots, or a verified pull request.
 - [Improvement cases](improvements.md) explains unified intake, coalescing, evidence, contracts, work linkage, verification, and resolution.
 - [Operations](operations.md) explains configuration, process roles, local and Kubernetes operation, observability, and incident investigation.
 - [Single-node K3s production](architecture/single-node-k3s.md) records the production infrastructure decision, security boundary, recovery path, alternatives, and kill criteria.

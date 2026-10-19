@@ -88,3 +88,18 @@ export async function recordArtifact(
     console.error("Failed to post sandbox artifact", error);
   });
 }
+
+/** Files the sandbox agent chose to attach to its Discord result. */
+export async function recordResultFile(
+  env: SandboxEnv,
+  body: { name: string; contentType: string; data: Buffer; order: number }
+) {
+  await postJson(env, `/internal/tasks/${encodeURIComponent(env.taskId)}/artifacts`, {
+    kind: "result_file",
+    name: body.name,
+    contentType: body.contentType,
+    encoding: "base64",
+    content: body.data.toString("base64"),
+    metadata: { deliver: true, order: body.order, sandboxRunId: env.sandboxRunId }
+  });
+}

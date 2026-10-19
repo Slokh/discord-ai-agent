@@ -4,6 +4,7 @@ import { hasGitHubTaskCredential } from "../config/env.js";
 import type { AgentRuntimeRepository, AgentRuntimeSessionRecord } from "../db/agentRuntimeRepository.js";
 import type { DiscordAiAgentRepository } from "../db/repositories.js";
 import { codegenExecutionSelection } from "../execution/codegenSelection.js";
+import { SANDBOX_TASK_MODES, sandboxProfileRequires, taskTypeForSandboxMode, type SandboxTaskMode } from "../execution/sandboxProfiles.js";
 import type { AgentTaskJob } from "../execution/types.js";
 import type { JobRuntime } from "../jobs/queue.js";
 
@@ -12,15 +13,23 @@ export type AgentRuntimeCodeUpdateEnqueueResult = {
   jobId: string | null;
 };
 
-export function missingCodeUpdateConfig(config: AppConfig): string[] {
+/** What keeps one sandbox mode from starting: its product switch, then the credentials its profile needs. */
+export function missingSandboxModeConfig(config: AppConfig, mode: SandboxTaskMode): string[] {
   const missing: string[] = [];
-  if (!hasGitHubTaskCredential(config)) missing.push("GITHUB_TOKEN (or GITHUB_APP_ID + GITHUB_APP_PRIVATE_KEY + GITHUB_APP_INSTALLATION_ID)");
+  if (!config.execution?.sandbox?.modes?.[mode]) missing.push(`productConfig.sandbox.modes.${mode}`);
+  if (sandboxProfileRequires(taskTypeForSandboxMode(mode), "github") && !hasGitHubTaskCredential(config)) {
+    missing.push("GITHUB_TOKEN (or GITHUB_APP_ID + GITHUB_APP_PRIVATE_KEY + GITHUB_APP_INSTALLATION_ID)");
+  }
   if (!config.execution?.taskSigningSecret) missing.push("TASK_SIGNING_SECRET");
   return missing;
 }
 
-export function codeUpdatesAvailable(config: AppConfig) {
-  return missingCodeUpdateConfig(config).length === 0;
+export function availableSandboxModes(config: AppConfig): SandboxTaskMode[] {
+  return SANDBOX_TASK_MODES.filter((mode) => missingSandboxModeConfig(config, mode).length === 0);
+}
+
+export function sandboxTasksAvailable(config: AppConfig) {
+  return availableSandboxModes(config).length > 0;
 }
 
 export async function enqueueAgentRuntimeCodeUpdateTask(input: {
@@ -104,7 +113,7 @@ export async function enqueueAgentRuntimeCodeUpdateTask(input: {
     parts: [
       {
         type: "tool_result",
-        toolName: "runCodingAgent",
+        toolName: "runSandboxAgent",
         taskId,
         title: input.title,
         request: input.request,
@@ -118,7 +127,7 @@ export async function enqueueAgentRuntimeCodeUpdateTask(input: {
       taskId,
       traceId,
       source: "agent.runtime.tool",
-      toolName: "runCodingAgent",
+      toolName: "runSandboxAgent",
       queue: "agent.task",
       parentAgentSessionId: input.session.sessionId,
       parentAgentExecutionId: input.parentExecutionId ?? null,
@@ -137,7 +146,7 @@ export async function enqueueAgentRuntimeCodeUpdateTask(input: {
     taskId,
     traceId,
     status: "queued",
-    harness: "runCodingAgent",
+    harness: "runSandboxAgent",
     model: selection.codegenModel,
     provider: selection.codegenProvider,
     reasoningEffort: selection.codegenReasoningEffort,
@@ -166,7 +175,7 @@ export async function enqueueAgentRuntimeCodeUpdateTask(input: {
     summary: "Queued code-update task from the agent runtime session.",
     metadata: {
       taskId,
-      toolName: "runCodingAgent",
+      toolName: "runSandboxAgent",
       title: input.title,
       queue: "agent.task",
       parentAgentSessionId: input.session.sessionId,
@@ -202,7 +211,7 @@ export async function enqueueAgentRuntimeCodeUpdateTask(input: {
       level: "error",
       eventName: "agent.task.enqueue_failed",
       summary: message,
-      metadata: { taskId, toolName: "runCodingAgent" }
+      metadata: { taskId, toolName: "runSandboxAgent" }
     });
     throw error;
   }
@@ -234,7 +243,7 @@ export async function enqueueAgentRuntimeCodeUpdateTask(input: {
     metadata: {
       taskId,
       jobId,
-      toolName: "runCodingAgent",
+      toolName: "runSandboxAgent",
       queue: queueResult.queueName ?? "agent.task",
       backend: queueResult.backendName ?? null,
       parentAgentSessionId: input.session.sessionId,

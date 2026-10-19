@@ -89,6 +89,12 @@ const declarations: readonly CapabilityDeclaration[] = ([
     ),
   },
   {
+    id: "sandboxTasks",
+    summary: "Isolated sandbox tasks: operate programs and files, diagnose or change this repository, and report back.",
+    // Each mode is enabled by productConfig.sandbox.modes; the tools stay unavailable while every mode is off.
+    toolNames: TOOL_NAMES_BY_CAPABILITY.sandboxTasks,
+  },
+  {
     id: "randomGames",
     summary: "Provably fair randomness and exactly-once wager/game lifecycle.",
     toolNames: TOOL_NAMES_BY_CAPABILITY.randomGames,

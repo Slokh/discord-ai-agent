@@ -1,4 +1,5 @@
 import type { ImprovementAssessmentResult } from "./improvementAssessmentResult.js";
+import type { AgentTaskType } from "./sandboxProfiles.js";
 
 const MAX_CONTEXT_TEXT = 16_000;
 
@@ -21,7 +22,7 @@ export type CodegenPromptContextPack = {
 };
 
 export type CodegenPromptEnv = {
-  taskType?: "code_update" | "improvement_report" | "improvement_repair" | "diagnosis";
+  taskType?: AgentTaskType;
   improvementAssessmentResultPath?: string;
   taskId: string;
   requestedBy: string;
@@ -332,4 +333,38 @@ function tail(value: string, maxChars: number) {
 function formatDuration(ms: number) {
   if (ms < 1000) return `${ms}ms`;
   return `${(ms / 1000).toFixed(ms < 10_000 ? 1 : 0)}s`;
+}
+
+/**
+ * Prompt for scratch-workspace tasks: a disposable, isolated computer with no
+ * repository. The helper commands are the profile's capabilities; the agent
+ * reaches them through its shell tool and inspects screenshots with view_image.
+ */
+export function scratchTaskPrompt(env: CodegenPromptEnv & { workspaceDir: string }) {
+  return [
+    "You are operating a disposable, isolated Linux computer on behalf of a Discord member. Carry out their request below and report back.",
+    "",
+    "Request:",
+    env.taskRequest,
+    "",
+    "Environment:",
+    `- Workspace: ${env.workspaceDir}. Nothing here persists after this task, and nothing you run can reach the requester's machine or private networks.`,
+    "- Helper commands in `$AGENT_TOOL_SHIM_DIR` (run any of them without arguments for usage):",
+    "  - `agent-fetch <url>` downloads one public file. It resolves Google Drive, Dropbox, and GitHub share links and prints the saved path. Discord message links are not downloadable; the request already contains what the requester linked.",
+    "  - `agent-desktop` runs a virtual display. Use `start`, then `run <program>` (a Windows `.exe` or `.msi` runs through Wine automatically), `screenshot`, `windows`, `click`, `key`, `hold`, `type`, `scroll`, `wait` and `stop`.",
+    "  - `agent-deliver <file>...` attaches up to four files, usually your most telling screenshots, to the Discord reply.",
+    "- Look at every screenshot you rely on with the view_image tool. Never describe screen contents you have not viewed.",
+    "- Ordinary shell tools are available, including unzip/7z where installed. Archives often wrap the real program; inspect them before running.",
+    "",
+    "How to work:",
+    "- Download and inspect the input first (file type, archive contents, readme) before running it.",
+    "- Drive programs in short observe-act loops: screenshot, view it, act with one or a few inputs, wait briefly, screenshot again. Real-time programs keep running between your actions, so prefer short waits and keyboard input over long pauses.",
+    "- If the request is to play or win a game, learn the controls from menus, help screens, or readme files, then play as well as you can. Stop when you win, clearly cannot progress, or have used a reasonable share of the time.",
+    "- If the program cannot run here (wrong platform, needs a GPU or network service, crashes under Wine), say exactly what happened and include the screenshot or log line that shows it.",
+    "- Never enter credentials, make purchases, or contact other people or services on anyone's behalf.",
+    "",
+    "Final answer:",
+    "- Write a short, natural Discord reply in first person describing what you did, what happened, and the outcome. Mention notable moments; skip internal tool names and file paths.",
+    "- Deliver one to four screenshots that show the key moments or the final state with `agent-deliver` before you finish.",
+  ].join("\n");
 }

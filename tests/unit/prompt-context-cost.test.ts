@@ -685,7 +685,7 @@ describe("prompt context cost controls", () => {
     expect(systemBytes).toBeLessThan(4_000);
     expect(String(chatMessages("hello there", "")[0]?.content)).not.toContain("searchDiscordHistory");
     expect(String(chatMessages("hello there", "")[0]?.content)).not.toContain("getDiscordStats");
-    expect(String(chatMessages("hello there", "")[0]?.content)).not.toContain("runCodingAgent");
+    expect(String(chatMessages("hello there", "")[0]?.content)).not.toContain("runSandboxAgent");
     expect(localSchemaBytes).toBeLessThan(120_000);
     expect(Buffer.byteLength(JSON.stringify(definitions), "utf8")).toBeLessThan(125_000);
   });

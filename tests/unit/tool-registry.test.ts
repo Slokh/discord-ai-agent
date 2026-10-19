@@ -113,7 +113,7 @@ describe("toolRegistry", () => {
     expect(contracts).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
-          name: "runCodingAgent",
+          name: "runSandboxAgent",
           category: "coding",
           toolClass: "coding",
           mutates: true,
@@ -152,8 +152,8 @@ describe("toolRegistry", () => {
   });
 
   it("tells the model to preserve code-update action intent", () => {
-    const definition = toolDefinitionsForModel().find((tool) => "function" in tool && tool.function.name === "runCodingAgent");
-    if (!definition || !("function" in definition)) throw new Error("runCodingAgent definition not found");
+    const definition = toolDefinitionsForModel().find((tool) => "function" in tool && tool.function.name === "runSandboxAgent");
+    if (!definition || !("function" in definition)) throw new Error("runSandboxAgent definition not found");
     const properties = definition.function.parameters.properties as Record<string, { description?: string }>;
 
     expect(properties.request.description).toContain("Preserve the user's desired outcome");
@@ -287,7 +287,7 @@ describe("toolRegistry", () => {
         expect.objectContaining({
           type: "function",
           function: expect.objectContaining({
-            name: "runCodingAgent",
+            name: "runSandboxAgent",
             description: expect.stringContaining("failing CI, checks, or tests")
           })
         }),

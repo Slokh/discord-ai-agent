@@ -173,7 +173,14 @@ export async function markAgentTaskNotified(pool: DbPool, taskId: string) {
   }
 
 
-export async function listRenderableAgentTasks(pool: DbPool, limit = 20): Promise<AgentTaskRecord[]> {
+/**
+ * Terminal tasks whose result has not yet been handed to durable Discord
+ * delivery. A task leaves this set once its delivery obligation exists.
+ */
+export async function listAgentTasksAwaitingResultDelivery(
+  pool: DbPool,
+  input: { taskTypes: string[]; completedWithinMs: number; limit?: number },
+): Promise<AgentTaskRecord[]> {
     const result = await pool.query(
       `
         SELECT
@@ -184,34 +191,21 @@ export async function listRenderableAgentTasks(pool: DbPool, limit = 20): Promis
           created_at, started_at, cancelled_at, completed_at, notified_at, notification_error,
           progress_updated_at, last_rendered_signature, last_rendered_at, terminal_rendered_at, updated_at
         FROM agent_tasks
-        WHERE notification_error IS NULL
-          AND (
-            (
-              discord_response_channel_id IS NOT NULL
-              AND discord_response_message_id IS NOT NULL
-              AND (
-                (status IN ('succeeded', 'failed', 'no_changes', 'cancelled') AND terminal_rendered_at IS NULL)
-                OR
-                (
-                  status NOT IN ('succeeded', 'failed', 'no_changes', 'cancelled')
-                  AND (
-                    last_rendered_at IS NULL
-                    OR coalesce(progress_updated_at, updated_at) > last_rendered_at
-                  )
-                )
-              )
-            )
-          )
-        ORDER BY
-          CASE WHEN status IN ('succeeded', 'failed', 'no_changes', 'cancelled') THEN 0 ELSE 1 END,
-          coalesce(progress_updated_at, updated_at) ASC
-        LIMIT $1
+        WHERE status IN ('succeeded', 'failed', 'no_changes', 'cancelled')
+          AND terminal_rendered_at IS NULL
+          AND notification_error IS NULL
+          AND improvement_case_id IS NULL
+          AND task_type = ANY($1::text[])
+          AND guild_id IS NOT NULL
+          AND coalesce(discord_response_channel_id, channel_id) IS NOT NULL
+          AND coalesce(completed_at, cancelled_at, updated_at) > now() - ($2::int * interval '1 millisecond')
+        ORDER BY coalesce(completed_at, cancelled_at, updated_at) ASC, task_id ASC
+        LIMIT $3
       `,
-      [Math.max(1, Math.min(100, Math.trunc(limit)))]
+      [input.taskTypes, Math.max(0, Math.trunc(input.completedWithinMs)), Math.max(1, Math.min(50, Math.trunc(input.limit ?? 10)))]
     );
     return result.rows.map(rowToAgentTask);
-  }
-
+}
 
 export async function markAgentTaskRendered(pool: DbPool, input: { taskId: string; signature: string; terminal: boolean }) {
     await pool.query(

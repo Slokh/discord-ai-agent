@@ -24,7 +24,7 @@ describe("tool contract validation", () => {
       ["searchSpotify", { query: "   " }],
       ["findDiscordUsers", { query: "" }],
       ["getDiscordMessageContext", { messageIdOrUrl: "\t" }],
-      ["runCodingAgent", { request: "fix it", title: " " }],
+      ["runSandboxAgent", { request: "fix it", title: " " }],
     ] as const) {
       expect(validateToolCallArguments({
         name,

@@ -42,7 +42,7 @@ describe.skipIf(!runDbTests)("agent task command runtime projection", () => {
       request: "verify a task", requestedBy: "test", backend: "kubernetes-sandbox",
     });
     await agentRuntime.upsertSession({ sessionId, traceId, threadKey: `discord:${guildId}:${channelId}`, guildId, channelId, title: "command projection", request: "verify a task", requestedBy: "test", metadata: { runtime: "agent" } });
-    await agentRuntime.createExecution({ executionId, sessionId, taskId, traceId, status: "running", harness: "runCodingAgent", metadata: { runtime: "agent" } });
+    await agentRuntime.createExecution({ executionId, sessionId, taskId, traceId, status: "running", harness: "runSandboxAgent", metadata: { runtime: "agent" } });
     const artifact = await agentRuntime.storeArtifact({ sessionId, executionId, kind: "command_log", name: "verify command output", content: "Recent tail:\nstderr tail" });
     await agentRuntime.recordEvent({
       sessionId, executionId, traceId, kind: "command", level: "error", eventName: "agent.task.command", summary: "verify exited 1", durationMs: 123,

@@ -6,6 +6,7 @@ import type { SandboxRunRecord } from "../db/repositories.js";
 import { resolveGitHubTaskToken } from "./githubAuth.js";
 import { slugify } from "../util/text.js";
 import { taskBearerToken, taskCallbackSecret } from "./token.js";
+import { sandboxProfileForTaskType, sandboxProfileRequires } from "./sandboxProfiles.js";
 import type { AgentTaskJob, AgentTaskStartResult } from "./types.js";
 
 export type ExecutionContext = {
@@ -74,10 +75,13 @@ export class KubernetesExecutionBackend implements ExecutionBackend {
     const namespace = this.config.execution.kubernetes.namespace;
     const token = taskBearerToken({ taskId: job.taskId, sandboxRunId, secret: this.config.execution.taskSigningSecret });
     const callbackSecret = taskCallbackSecret({ taskId: job.taskId, sandboxRunId, secret: this.config.execution.taskSigningSecret });
-    const githubToken = await resolveGitHubTaskToken(this.config);
+    const profile = sandboxProfileForTaskType(job.taskType);
+    // Each profile receives only the upstream credentials it declares.
+    const githubToken = sandboxProfileRequires(job.taskType, "github") ? await resolveGitHubTaskToken(this.config) : null;
     const labels = {
       "app.kubernetes.io/name": "discord-ai-agent",
       "app.kubernetes.io/component": "sandbox",
+      "discord-ai-agent/sandbox-profile": profile.name,
       "discord-ai-agent/task-id": job.taskId,
       "discord-ai-agent/sandbox-run-id": sandboxRunId
     };
@@ -87,13 +91,15 @@ export class KubernetesExecutionBackend implements ExecutionBackend {
 
     await context.progress?.({
       step: "sandbox_prepare",
-      message: "Preparing an isolated Kubernetes sandbox for the code change.",
+      message: profile.workspace === "scratch"
+        ? "Preparing an isolated Kubernetes sandbox computer."
+        : "Preparing an isolated Kubernetes sandbox for the code change.",
       metadata: { namespace, jobName: name, sandboxRunId }
     });
     await context.recordSandboxRun?.(startResult);
     try {
       await this.createSecret(namespace, secretName, labels, {
-        GITHUB_TOKEN: githubToken,
+        ...(githubToken ? { GITHUB_TOKEN: githubToken } : {}),
         OPENROUTER_API_KEY: this.config.openRouter.apiKey,
         AGENT_TASK_TOKEN: token,
         AGENT_TASK_CALLBACK_SECRET: callbackSecret
@@ -305,6 +311,21 @@ export class KubernetesExecutionBackend implements ExecutionBackend {
           spec: {
             restartPolicy: "Never",
             serviceAccountName: k8sConfig.serviceAccountName,
+            // Sandboxes run untrusted code: no Kubernetes identity, a dedicated
+            // tainted node pool, and the gVisor runtime for every profile.
+            automountServiceAccountToken: false,
+            enableServiceLinks: false,
+            nodeSelector: { ...k8sConfig.isolation.nodeSelector },
+            tolerations: k8sConfig.isolation.tolerations.map((toleration) => ({ ...toleration })),
+            runtimeClassName: k8sConfig.isolation.runtimeClassName,
+            priorityClassName: k8sConfig.isolation.priorityClassName,
+            securityContext: {
+              runAsNonRoot: true,
+              runAsUser: 1000,
+              runAsGroup: 1000,
+              fsGroup: 1000,
+              seccompProfile: { type: "RuntimeDefault" }
+            },
             containers: [
               {
                 name: "sandbox",
@@ -318,6 +339,10 @@ export class KubernetesExecutionBackend implements ExecutionBackend {
                 resources: {
                   requests: { cpu: k8sConfig.cpuRequest, memory: k8sConfig.memoryRequest },
                   limits: { cpu: k8sConfig.cpuLimit, memory: k8sConfig.memoryLimit }
+                },
+                securityContext: {
+                  allowPrivilegeEscalation: false,
+                  capabilities: { drop: ["ALL"] }
                 }
               }
             ]

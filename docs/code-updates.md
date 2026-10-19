@@ -1,12 +1,23 @@
-# Code updates
+# Sandbox tasks and code updates
 
-Members can ask the Discord agent to change its own repository, investigate CI, or repair a prior code-update task. The conversational agent creates durable work; a sandbox performs repository mutation and publication.
+Members can ask the Discord agent to run or operate something (a program, game, installer, archive, or site), to change its own repository, to investigate CI, or to repair a prior task. The conversational agent creates durable work; one isolated sandbox implementation performs it and reports back.
+
+## Profiles
+
+Every task runs through the same queue, Kubernetes Job, runner, NanoCodex harness, signed callbacks, and Discord delivery. The task type selects only a profile in `src/execution/sandboxProfiles.ts`:
+
+| Profile | Task types | Workspace | Outcome | Helpers | Upstream credentials |
+| --- | --- | --- | --- | --- | --- |
+| `repository` | `code_update`, `improvement_repair`, `improvement_report`, `diagnosis` | cached checkout | PR, or a reported result for `diagnosis`/`improvement_report` | `agent-task-context`, `agent-cache-info` | GitHub, OpenRouter |
+| `computer` | `computer_task` | empty scratch directory | reported result with up to four files | `agent-fetch`, `agent-desktop`, `agent-deliver` | OpenRouter |
+
+Code must branch on a profile property, never on a task-type literal. Adding a workload means adding a profile row and its helpers, not a parallel lifecycle.
 
 ## Admission and authority
 
-The model selects `runCodingAgent` only for an explicit current request to modify or debug repository, PR, CI, deployment, or prior task behavior. The feature is hidden when repository credentials or callback signing are incomplete.
+The model selects `runSandboxAgent` with `mode=computer` when a member wants something run or used, `mode=code_change` for an explicit repository change, and `mode=diagnosis` for explicitly read-only repository, PR, CI, or deployment investigation. Each mode is enabled independently by `productConfig.sandbox.modes`. The tool is hidden while every mode is off, and a disabled mode or missing credential returns a not-configured result. Repository modes additionally require GitHub credentials; the computer mode does not. Enable a mode only after the isolated sandbox pool described below is deployed.
 
-Code-update admission is available to all guild members. Safety comes from isolated execution, scoped credentials, branch protection, required verification, and release scanning—not from trying to classify privileged language in chat.
+Sandbox admission is available to all guild members. Safety comes from isolated execution, scoped credentials, branch protection, required verification, and release scanning—not from trying to classify privileged language in chat.
 
 The sandbox supervisor never receives the Discord token or database URL. It receives the OpenRouter and scoped GitHub credentials needed to run the task, but child npm lifecycle scripts and NanoCodex workspace commands use an allowlisted environment without provider, publication, or callback credentials. NanoCodex receives its model credential through the private startup protocol, and only the verified runner retains GitHub publication authority.
 
@@ -14,7 +25,7 @@ The sandbox supervisor never receives the Discord token or database URL. It rece
 
 1. `src/tools/agentTaskTools.ts` records the task projection and exactly one task-linked runtime execution, then returns a status result to the parent chat turn.
 2. `src/jobs/agentTaskEnqueue.ts` atomically hands the task to pg-boss. The parent tool call does not wait for the PR.
-3. Discord task notification code creates or edits one progress message for queued, running, and terminal state.
+3. When the task becomes terminal, the bot's `src/discord/taskResultDelivery.ts` stores one versioned Discord delivery intent (the formatted result plus any files the sandbox agent delivered) and a `discord_delivery_obligations` row of kind `agent_task_result`. The shared delivery sweep replies to the requester's original message and appends the result to their conversation memory. Delivery is durable, retried, and ledger-visible like chat replies; improvement tasks report through the reporter-conversation lifecycle instead.
 4. The task worker admits one repository sandbox at a time on the shared production node. Later work remains durably queued, and the worker holds the active queue job until its task reaches a durable terminal state.
 5. `src/execution/backend.ts` creates an isolated Kubernetes Job.
 6. `src/execution/runnerPipeline.ts` runs the complete repository pipeline.
@@ -25,9 +36,9 @@ Report signals enter the unified improvement worker rather than a reaction-speci
 
 Trusted CI and eval detections skip semantic assessment only after their source-owned contract has been accepted. Deployment and runtime detections are observational and must first distinguish transient infrastructure behavior from a source defect. The reconciler then queues an idempotent `improvement_repair` task from the signal snapshot and active contract version. It uses the normal verified code-update pipeline, links work to the case when queued, and requests auto-merge for the diff-described PR. The durable work remains `in_progress` until GitHub reports the exact published head merged; a terminal check failure retires that PR and enters the bounded repair retry path. Drafts, changed heads, conflicts, requested changes, and unresolved review requirements are explicit operator blockers. Deployment proof—not task completion or PR publication—is the resolution gate.
 
-## Sandbox pipeline
+## Repository pipeline
 
-The runner:
+For the `repository` profile, the runner:
 
 1. refreshes a cached bare mirror of the configured repository;
 2. creates an isolated task worktree and safe branch;
@@ -43,7 +54,17 @@ The runner:
 
 The runner owns commit, push, and PR publication. The coding agent inside the sandbox edits and verifies but does not publish independently.
 
-`src/execution/sandboxToolShims.ts` owns the intentionally small command surface injected into the coding environment. The pipeline installs those shims; feature behavior and callback authority remain in their canonical application owners.
+## Computer pipeline
+
+For the `computer` profile, `src/execution/scratchTask.ts` creates an empty workspace, installs the profile's helpers, and runs NanoCodex with the scratch-task prompt. The agent drives everything through its ordinary shell and `view_image` tools:
+
+- `agent-fetch <url>` (`src/execution/sandboxFetch.ts`) downloads one public file, rewriting Google Drive, Dropbox, and GitHub share links to direct downloads, with a size cap. A share host that answers with an HTML page is reported rather than saved.
+- `agent-desktop` starts an Xvfb display and launches programs on it (Windows `.exe`/`.msi` through Wine), takes screenshots, lists windows, and sends mouse and keyboard input with xdotool.
+- `agent-deliver <file>...` marks up to four files (usually screenshots) for the Discord reply. After the run, the runner uploads them as `result_file` binary artifacts; unsupported types are skipped without failing the task.
+
+A clean, non-empty final answer is the outcome; no diff, branch, or PR is involved. Real-time games are played through short screenshot-act loops, so turn-based, puzzle, and menu-driven programs work best.
+
+`src/execution/sandboxToolShims.ts` owns the intentionally small command surface injected into each profile. The pipeline installs those shims; feature behavior and callback authority remain in their canonical application owners.
 
 ## Context and documentation
 
@@ -66,11 +87,20 @@ GitHub App installation credentials are preferred in production. A local PAT sho
 
 ## Kubernetes isolation
 
+Sandboxes run untrusted code, from dependency install scripts to member-supplied executables, so every profile shares one hardened boundary. Each Job pod:
+
+- is pinned by `productConfig.sandbox.isolation` to the dedicated, tainted sandbox node pool;
+- runs under the `gvisor` RuntimeClass with a low-priority class;
+- runs as a non-root user with all capabilities dropped and no service-account token or service links;
+- receives only the upstream credentials its profile declares.
+
+Sandboxes never share a node with production Postgres.
+
 This backend creates one Job, Secret, and ConfigMap per task. The worker service account can manage those resources and has read-only Pod and Pod-log access for failed-task diagnostics; the sandbox service account has no Kubernetes API permissions. Callback tokens bind task and sandbox-run identity, timestamp, and body. Terminal callbacks are accepted once. Before failed Job cleanup, reconciliation retains the pod phase, termination reason, exit code, signal, and restart count as typed task evidence, plus a bounded redacted log tail as a private runtime artifact.
 
 A handled repository, code, verification, or publication failure sends its signed terminal callback and exits the container cleanly. An unhandled runner exit, eviction, resource kill, or lost terminal callback gets one Kubernetes pod retry under the same task identity. A failed first pod remains running work while that retry is active. If the retry is exhausted, reconciliation classifies the retained evidence as memory exhaustion, eviction, deadline, startup failure, runner crash, disappearance, or explicitly unknown before cleanup.
 
-The shared node deliberately runs one repository sandbox at a time. Increasing that limit requires dedicated measured capacity and durable admission; increasing worker replicas or relying on container limits alone must not reintroduce concurrent memory pressure.
+The sandbox pool deliberately runs one sandbox at a time across every profile. Increasing that limit requires dedicated measured capacity and durable admission; increasing worker replicas or relying on container limits alone must not reintroduce concurrent memory pressure.
 
 NetworkPolicy should allow only DNS, the internal callback API, and the external hosts required for GitHub, OpenRouter, and package installation. A task uses only ephemeral local cache state; correctness never depends on cache persistence.
 

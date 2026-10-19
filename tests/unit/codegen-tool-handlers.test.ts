@@ -39,9 +39,9 @@ describe("codegenToolHandlers", () => {
     };
     if (mode) arguments_.mode = mode;
 
-    await expect(codegenToolHandlers.runCodingAgent!(
+    await expect(codegenToolHandlers.runSandboxAgent!(
       ctx,
-      route("runCodingAgent", arguments_),
+      route("runSandboxAgent", arguments_),
       "original request",
     )).resolves.toEqual({ content: "result", status: "ok", outcome: { kind: "agent_task", state: "succeeded", terminal: true } });
 

@@ -58,6 +58,34 @@ describe("KubernetesExecutionBackend", () => {
     });
   });
 
+  it("isolates every sandbox pod and gives each profile only its declared credentials", async () => {
+    await withExecutionEnv(async () => {
+      const clients = fakeClients();
+      const backend = new KubernetesExecutionBackend(loadConfig(), clients);
+      await backend.start(agentTask());
+      await backend.start({ ...agentTask(), taskId: "task-computer-1", taskType: "computer_task", request: "play this game" });
+
+      const [repositoryJob, computerJob] = vi.mocked(clients.batch.createNamespacedJob).mock.calls.map((call) => call[0].body);
+      for (const job of [repositoryJob, computerJob]) {
+        const pod = job?.spec?.template.spec;
+        expect(pod).toMatchObject({
+          automountServiceAccountToken: false,
+          runtimeClassName: "gvisor",
+          nodeSelector: { "discord-ai-agent.dev/pool": "sandbox" },
+          tolerations: [expect.objectContaining({ key: "discord-ai-agent.dev/sandbox", effect: "NoSchedule" })],
+          securityContext: expect.objectContaining({ runAsNonRoot: true }),
+        });
+        expect(pod?.containers[0]?.securityContext).toMatchObject({ allowPrivilegeEscalation: false, capabilities: { drop: ["ALL"] } });
+      }
+      expect(computerJob?.metadata?.labels?.["discord-ai-agent/sandbox-profile"]).toBe("computer");
+      const [repositorySecret, computerSecret] = vi.mocked(clients.core.createNamespacedSecret).mock.calls.map((call) => call[0].body.stringData);
+      expect(repositorySecret).toHaveProperty("GITHUB_TOKEN");
+      expect(computerSecret).not.toHaveProperty("GITHUB_TOKEN");
+      const computerConfig = vi.mocked(clients.core.createNamespacedConfigMap).mock.calls[1]?.[0].body.data;
+      expect(computerConfig?.TASK_TYPE).toBe("computer_task");
+    });
+  });
+
   it("uses task ids for valid bounded Kubernetes names", async () => {
     await withExecutionEnv(async () => {
       const clients = fakeClients();

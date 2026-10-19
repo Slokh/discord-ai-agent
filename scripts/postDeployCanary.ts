@@ -13,7 +13,7 @@ import {
 } from "../src/config/env.js";
 import { createPool } from "../src/db/pool.js";
 import { createAppDatabase } from "../src/db/repositories.js";
-import { resolveGitHubTaskToken } from "../src/execution/githubAuth.js";
+import { resolveGitHubTaskToken } from "../src/github/appToken.js";
 import { taskBearerToken, taskCallbackSecret } from "../src/execution/token.js";
 import { parseGitHubRepository } from "../src/github/repository.js";
 import { passingRandomCanaryChannel, passingStatsCanaryChannel, passingWebCanaryChannel } from "../src/observability/postDeployCanaryEvidence.js";

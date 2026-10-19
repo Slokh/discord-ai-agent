@@ -28,6 +28,7 @@ import {
   sandboxCachePaths
 } from "./repoWorkspace.js";
 import { loadSandboxEnv, type SandboxEnv, type TaskTimings } from "./sandboxEnv.js";
+import { prepareSandboxEgressTrust } from "./sandboxEgress.js";
 import { productConfig } from "../config/env.js";
 import { writeSandboxToolShims } from "./sandboxToolShims.js";
 import { runNanoCodexPhase, timedPhase } from "./runnerPhases.js";
@@ -46,6 +47,7 @@ type CacheSummary = {
 };
 
 export async function main() {
+  await prepareSandboxEgressTrust();
   const env = loadSandboxEnv();
   const timings: TaskTimings = {};
   const totalStartedAt = Date.now();

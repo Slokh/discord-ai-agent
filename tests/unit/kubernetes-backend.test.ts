@@ -54,7 +54,7 @@ describe("KubernetesExecutionBackend", () => {
       const job = vi.mocked(clients.batch.createNamespacedJob).mock.calls[0]?.[0].body;
       expect(job?.spec?.template.spec?.containers[0]?.image).toBe("registry.example/sandbox:test");
       expect(job?.spec?.backoffLimit).toBe(1);
-      expect(job?.spec?.template.spec).not.toHaveProperty("volumes");
+      expect(job?.spec?.template.spec?.volumes?.map((volume) => volume.name)).toEqual(["egress-proxy-ca"]);
     });
   });
 
@@ -79,10 +79,28 @@ describe("KubernetesExecutionBackend", () => {
       }
       expect(computerJob?.metadata?.labels?.["discord-ai-agent/sandbox-profile"]).toBe("computer");
       const [repositorySecret, computerSecret] = vi.mocked(clients.core.createNamespacedSecret).mock.calls.map((call) => call[0].body.stringData);
-      expect(repositorySecret).toHaveProperty("GITHUB_TOKEN");
+      // Sandboxes hold public placeholders only; the egress proxy holds real credentials.
+      expect(repositorySecret).toMatchObject({
+        GITHUB_TOKEN: "discord-ai-agent-egress-placeholder-github",
+        OPENROUTER_API_KEY: "discord-ai-agent-egress-placeholder-openrouter",
+      });
+      expect(JSON.stringify([repositorySecret, computerSecret])).not.toMatch(/github-token|sk-test/);
       expect(computerSecret).not.toHaveProperty("GITHUB_TOKEN");
-      const computerConfig = vi.mocked(clients.core.createNamespacedConfigMap).mock.calls[1]?.[0].body.data;
-      expect(computerConfig?.TASK_TYPE).toBe("computer_task");
+
+      // GitHub injection is reachable only from the repository profile's credentialed tier.
+      expect(repositoryJob?.spec?.template.metadata?.labels?.["discord-ai-agent.dev/egress"]).toBe("credentialed");
+      expect(computerJob?.spec?.template.metadata?.labels?.["discord-ai-agent.dev/egress"]).toBe("model");
+      const [repositoryConfig, computerConfig] = vi.mocked(clients.core.createNamespacedConfigMap).mock.calls.map((call) => call[0].body.data);
+      expect(repositoryConfig?.HTTPS_PROXY).toBe("http://discord-ai-agent-egress-proxy:8080");
+      expect(computerConfig).toMatchObject({
+        TASK_TYPE: "computer_task",
+        HTTPS_PROXY: "http://discord-ai-agent-egress-proxy:8082",
+        NO_PROXY: expect.stringContaining("discord-ai-agent-api"),
+        NODE_EXTRA_CA_CERTS: "/etc/discord-ai-agent/egress-proxy/ca.crt",
+      });
+      expect(computerJob?.spec?.template.spec?.containers[0]?.volumeMounts).toEqual([
+        expect.objectContaining({ mountPath: "/etc/discord-ai-agent/egress-proxy", readOnly: true }),
+      ]);
     });
   });
 

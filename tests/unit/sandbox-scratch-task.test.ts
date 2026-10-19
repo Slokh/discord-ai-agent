@@ -125,3 +125,16 @@ describe("agent-fetch", () => {
     })).rejects.toThrow(/web page instead of the file/);
   });
 });
+
+describe("sandbox egress trust", () => {
+  it("combines the system bundle with the proxy CA for every child process", async () => {
+    const { prepareSandboxEgressTrust } = await import("../../src/execution/sandboxEgress.js");
+    await fs.writeFile(path.join(tempDir, "system.crt"), "SYSTEM\n");
+    await fs.writeFile(path.join(tempDir, "proxy.crt"), "PROXY\n");
+    const env: NodeJS.ProcessEnv = { SANDBOX_EGRESS_CA_FILE: path.join(tempDir, "proxy.crt") };
+    const bundle = await prepareSandboxEgressTrust(env, { systemBundle: path.join(tempDir, "system.crt"), outputDir: tempDir });
+    expect(await fs.readFile(bundle!, "utf8")).toBe("SYSTEM\nPROXY\n");
+    expect(env).toMatchObject({ SSL_CERT_FILE: bundle, GIT_SSL_CAINFO: bundle });
+    await expect(prepareSandboxEgressTrust({})).resolves.toBeNull();
+  });
+});

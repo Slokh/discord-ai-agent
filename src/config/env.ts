@@ -70,6 +70,23 @@ export const productConfig = {
       runtimeClassName: "gvisor",
       priorityClassName: "discord-ai-agent-sandbox",
     },
+    // Sandboxes hold only public placeholder credentials. The in-cluster
+    // egress proxy swaps them for real ones on verified TLS to the credential
+    // host, and only on the port the profile's egress tier may reach: GitHub
+    // is never injectable from a pod that runs member-supplied programs.
+    egress: {
+      labelKey: "discord-ai-agent.dev/egress",
+      tiers: {
+        credentialed: { label: "credentialed", proxyUrl: "http://discord-ai-agent-egress-proxy:8080" },
+        model: { label: "model", proxyUrl: "http://discord-ai-agent-egress-proxy:8082" },
+      },
+      noProxy: "discord-ai-agent-api,.svc,.cluster.local,localhost,127.0.0.1",
+      placeholders: {
+        openrouter: "discord-ai-agent-egress-placeholder-openrouter",
+        github: "discord-ai-agent-egress-placeholder-github",
+      },
+      ca: { configMap: "discord-ai-agent-egress-proxy-ca", key: "ca.crt", mountDir: "/etc/discord-ai-agent/egress-proxy" },
+    },
   },
   retention: { runtimeEventsDays: 60, auditDays: 90, runtimeSessionsDays: 90, terminalRemindersDays: 90 },
   memory: { compactionThreshold: 100, compactionKeepRecent: 30 },
@@ -219,6 +236,7 @@ export function loadConfig(argv = process.argv) {
         memoryLimit: productConfig.sandbox.memoryLimit,
         ttlSecondsAfterFinished: productConfig.sandbox.ttlSecondsAfterFinished,
         isolation: productConfig.sandbox.isolation,
+        egress: productConfig.sandbox.egress,
       }
     },
     worker: {

@@ -92,7 +92,10 @@ Sandboxes run untrusted code, from dependency install scripts to member-supplied
 - is pinned by `productConfig.sandbox.isolation` to the dedicated, tainted sandbox node pool;
 - runs under the `gvisor` RuntimeClass with a low-priority class;
 - runs as a non-root user with all capabilities dropped and no service-account token or service links;
-- receives only the upstream credentials its profile declares.
+- receives only public placeholders for the upstream credentials its profile declares. The in-cluster egress proxy swaps them for real credentials on verified TLS to the credential host.
+- uses an egress tier chosen by profile (`productConfig.sandbox.egress`). The repository profile is labeled `credentialed` and may have GitHub and OpenRouter injected. The computer profile is labeled `model` and may have only its model credential injected, so a member-supplied program can never obtain GitHub authority.
+
+The runner trusts the proxy CA through `NODE_EXTRA_CA_CERTS` and writes a combined bundle (`src/execution/sandboxEgress.ts`) for git, `gh`, curl, and NanoCodex.
 
 Sandboxes never share a node with production Postgres.
 

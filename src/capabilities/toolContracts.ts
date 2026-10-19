@@ -57,8 +57,7 @@ if (mutationDrift.length) throw new Error(`Tool mutation taxonomy drift: ${mutat
 const DISABLED_PRODUCTION_TOOLS = new Set<ToolName>([
   "setReminder", "listMyReminders", "composeDiscordResponse", "listMyImprovementSignals",
   "getDeploymentStatus", "getSpendSummary", "reportStatus", "setAgentModel",
-  "reportImprovementSignal", "runCodingAgent", "getAgentTaskStatus", "listAgentTasks",
-  "retryAgentTask", "cancelAgentTask", "undoConversationTurns", "createDiscordEmoji",
+  "reportImprovementSignal", "undoConversationTurns", "createDiscordEmoji",
   "updateBotAvatar", "adminTransferWalletFunds", "adminSetWalletStarterAmount",
   "reconcileWalletTransfers", "getSpotifyPlaylistTracks", "getSpotifyAlbumTracks",
   "getSpotifyArtistDiscography", "getSpotifyPlaylistStats", "compareSpotifyPlaylists",

@@ -54,7 +54,53 @@ describe("KubernetesExecutionBackend", () => {
       const job = vi.mocked(clients.batch.createNamespacedJob).mock.calls[0]?.[0].body;
       expect(job?.spec?.template.spec?.containers[0]?.image).toBe("registry.example/sandbox:test");
       expect(job?.spec?.backoffLimit).toBe(1);
-      expect(job?.spec?.template.spec).not.toHaveProperty("volumes");
+      expect(job?.spec?.template.spec?.volumes?.map((volume) => volume.name)).toEqual(["egress-proxy-ca"]);
+    });
+  });
+
+  it("isolates every sandbox pod and gives each profile only its declared credentials", async () => {
+    await withExecutionEnv(async () => {
+      const clients = fakeClients();
+      const backend = new KubernetesExecutionBackend(loadConfig(), clients);
+      await backend.start(agentTask());
+      await backend.start({ ...agentTask(), taskId: "task-computer-1", taskType: "computer_task", request: "play this game" });
+
+      const [repositoryJob, computerJob] = vi.mocked(clients.batch.createNamespacedJob).mock.calls.map((call) => call[0].body);
+      for (const job of [repositoryJob, computerJob]) {
+        const pod = job?.spec?.template.spec;
+        expect(pod).toMatchObject({
+          automountServiceAccountToken: false,
+          runtimeClassName: "gvisor",
+          nodeSelector: { "discord-ai-agent.dev/pool": "sandbox" },
+          tolerations: [expect.objectContaining({ key: "discord-ai-agent.dev/sandbox", effect: "NoSchedule" })],
+          securityContext: expect.objectContaining({ runAsNonRoot: true }),
+        });
+        expect(pod?.containers[0]?.securityContext).toMatchObject({ allowPrivilegeEscalation: false, capabilities: { drop: ["ALL"] } });
+      }
+      expect(computerJob?.metadata?.labels?.["discord-ai-agent/sandbox-profile"]).toBe("computer");
+      const [repositorySecret, computerSecret] = vi.mocked(clients.core.createNamespacedSecret).mock.calls.map((call) => call[0].body.stringData);
+      // Sandboxes hold public placeholders only; the egress proxy holds real credentials.
+      expect(repositorySecret).toMatchObject({
+        GITHUB_TOKEN: "discord-ai-agent-egress-placeholder-github",
+        OPENROUTER_API_KEY: "discord-ai-agent-egress-placeholder-openrouter",
+      });
+      expect(JSON.stringify([repositorySecret, computerSecret])).not.toMatch(/github-token|sk-test/);
+      expect(computerSecret).not.toHaveProperty("GITHUB_TOKEN");
+
+      // GitHub injection is reachable only from the repository profile's credentialed tier.
+      expect(repositoryJob?.spec?.template.metadata?.labels?.["discord-ai-agent.dev/egress"]).toBe("credentialed");
+      expect(computerJob?.spec?.template.metadata?.labels?.["discord-ai-agent.dev/egress"]).toBe("model");
+      const [repositoryConfig, computerConfig] = vi.mocked(clients.core.createNamespacedConfigMap).mock.calls.map((call) => call[0].body.data);
+      expect(repositoryConfig?.HTTPS_PROXY).toBe("http://discord-ai-agent-egress-proxy:8080");
+      expect(computerConfig).toMatchObject({
+        TASK_TYPE: "computer_task",
+        HTTPS_PROXY: "http://discord-ai-agent-egress-proxy:8082",
+        NO_PROXY: expect.stringContaining("discord-ai-agent-api"),
+        NODE_EXTRA_CA_CERTS: "/etc/discord-ai-agent/egress-proxy/ca.crt",
+      });
+      expect(computerJob?.spec?.template.spec?.containers[0]?.volumeMounts).toEqual([
+        expect.objectContaining({ mountPath: "/etc/discord-ai-agent/egress-proxy", readOnly: true }),
+      ]);
     });
   });
 

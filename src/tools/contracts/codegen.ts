@@ -1,14 +1,14 @@
-import { codeUpdatesAvailable } from "../../capabilities/codeUpdates.js";
+import { sandboxTasksAvailable } from "../../capabilities/codeUpdates.js";
 import { defineTool, installToolsWhen, type ToolRegistryEntry } from "../toolDefinition.js";
 
-export const codegenToolContracts = installToolsWhen(codeUpdatesAvailable, [
+export const codegenToolContracts = installToolsWhen(sandboxTasksAvailable, [
   defineTool({
-    name: "runCodingAgent",
+    name: "runSandboxAgent",
     category: "coding",
     toolClass: "coding",
-    examples: ["@ai debug the failing CI on that PR"],
+    examples: ["@ai debug the failing CI on that PR", "@ai try this game and see how far you get", "@ai run this installer and tell me what it does"],
     description:
-      "Start an isolated repository sandbox for an explicitly requested code change or repository/GitHub diagnosis, including failing CI, checks, or tests. Generic requests about my reports or improvement inbox should call listMyImprovementSignals first; opening a coding task still requires explicit current-turn intent. Never use this for public-web research. Use mode=code_change when a repository diff is requested and mode=diagnosis only for explicitly read-only repository work. Any guild member may start a task.",
+      "Start a task in an isolated, disposable sandbox computer; its result is posted back to this Discord message. mode=computer: download, install, run, play, or operate a linked or attached program, game, file, or site (Windows .exe runs via Wine) and report what happened with screenshots. mode=code_change: an explicitly requested change to this bot's repository. mode=diagnosis: explicitly read-only repository/GitHub investigation, including failing CI, checks, or tests. Generic requests about my reports or improvement inbox call listMyImprovementSignals first. Never for public-web research. Requires explicit current-turn intent; any guild member may start a task.",
     mutates: true,
     group: "codegen",
     parameters: {
@@ -19,19 +19,19 @@ export const codegenToolContracts = installToolsWhen(codeUpdatesAvailable, [
           minLength: 1,
           pattern: "\\S",
           description:
-            "The full requested agent update, integration, or repository change to implement. Preserve the user's desired outcome, especially when the wording combines investigation with an action like 'where is X defined, can we change/increase/fix it?'. Do not reduce that to a read-only find/debug request."
+            "The member's full request with every relevant file, share, or attachment URL. Preserve the user's desired outcome; keep combined wording like 'where is X defined, can we change it?' as a change request."
         },
         mode: {
           type: "string",
-          enum: ["code_change", "diagnosis"],
-          description: "Task outcome contract. Defaults to code_change. Use diagnosis only when the user explicitly requests read-only repository, PR, CI, or deployment investigation."
+          enum: ["code_change", "diagnosis", "computer"],
+          description: "Task outcome contract; defaults to code_change. See the tool description."
         },
         title: {
           type: "string",
           minLength: 1,
           pattern: "\\S",
           description:
-            "Concise human task title in plain English, 3-8 words, without prefixes like Agent Codegen. Name the intended change, not just the investigation. Example: Increase model output token limit."
+            "Concise human task title in plain English, 3-8 words, without prefixes like Agent Codegen. Name the intended change or outcome, not just the investigation. Example: Increase model output token limit."
         },
         improvementCaseId: {
           type: "string",
@@ -63,7 +63,7 @@ export const codegenToolContracts = installToolsWhen(codeUpdatesAvailable, [
     toolClass: "coding",
     examples: ["@ai what happened to the last update?"],
     description:
-      "Look up quick status for the current or recent code-update task: progress events, sandbox command output snippets, PR link, and GitHub PR/CI check status when available. Use for read-only status questions like whether an update is done, what PR was opened, or what the latest task ID is. If the user asks to debug, investigate, explain, or fix a GitHub/CI/check/test/repo failure, call runCodingAgent so the sandbox can use gh CLI, logs, repo files, and tests.",
+      "Look up quick status for the current or recent sandbox task: progress events, sandbox command output snippets, PR link, and GitHub PR/CI check status when available. Use for read-only status questions like whether an update is done, what PR was opened, or what the latest task ID is. If the user asks to debug, investigate, explain, or fix a GitHub/CI/check/test/repo failure, call runSandboxAgent so the sandbox can use gh CLI, logs, repo files, and tests.",
     mutates: false,
     group: "codegen",
     category: "coding",
@@ -88,7 +88,7 @@ export const codegenToolContracts = installToolsWhen(codeUpdatesAvailable, [
     toolClass: "coding",
     examples: ["@ai show recent update tasks"],
     description:
-      "List recent visible code-update tasks with their statuses. Use when a user asks for task history, queued work, previous PR attempts, or what updates are in progress.",
+      "List recent visible sandbox tasks with their statuses. Use when a user asks for task history, queued work, previous PR attempts, or what updates are in progress.",
     mutates: false,
     group: "codegen",
     category: "coding",
@@ -117,7 +117,7 @@ export const codegenToolContracts = installToolsWhen(codeUpdatesAvailable, [
     toolClass: "coding",
     examples: ["@ai retry that update"],
     description:
-      "Retry a failed, no-change, or cancelled code-update task using the original request. Use when a user asks to retry, rerun, or try again after a code-update task did not complete.",
+      "Retry a failed, no-change, or cancelled sandbox task using the original request and mode. Use when a user asks to retry, rerun, or try again after a code-update task did not complete.",
     mutates: true,
     group: "codegen",
     category: "coding",
@@ -138,7 +138,7 @@ export const codegenToolContracts = installToolsWhen(codeUpdatesAvailable, [
     toolClass: "coding",
     examples: ["@ai cancel the current update"],
     description:
-      "Cancel an active queued or running code-update task. Use when a user asks to stop, cancel, abort, or kill an in-progress self-update.",
+      "Cancel an active queued or running sandbox task. Use when a user asks to stop, cancel, abort, or kill an in-progress sandbox task.",
     mutates: true,
     group: "codegen",
     category: "coding",

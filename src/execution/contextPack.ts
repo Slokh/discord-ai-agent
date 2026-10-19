@@ -45,10 +45,11 @@ export async function buildCodegenContextPack(checkoutDir: string, taskRequest =
         "src/execution/backend.ts",
         "src/execution/runnerPipeline.ts",
         "src/execution/repoWorkspace.ts",
-        "src/discord/taskNotifications.ts",
+        "src/execution/sandboxProfiles.ts",
+        "src/discord/taskResultDelivery.ts",
         "docs/code-updates.md"
       ],
-      checks: ["tests/unit/sandbox-runner.test.ts", "tests/unit/task-notifications.test.ts", "tests/integration/jobs-db.test.ts"]
+      checks: ["tests/unit/sandbox-runner.test.ts", "tests/unit/task-result-delivery.test.ts", "tests/integration/jobs-db.test.ts"]
     },
     {
       area: "Discord mention and reply lifecycle",

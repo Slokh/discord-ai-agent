@@ -3,7 +3,9 @@ import { resolveGitHubTaskToken } from "../github/appToken.js";
 import { parseGitHubRepository } from "../github/repository.js";
 import { summarizeForAudit, truncateForDiscord } from "../util/text.js";
 import type { AgentTaskRecord, AgentTaskStatus, SandboxCommandEvent, TaskEvent } from "../db/repositories.js";
-import { missingCodeUpdateConfig } from "../capabilities/codeUpdates.js";
+import { missingSandboxModeConfig } from "../capabilities/codeUpdates.js";
+import { sandboxModeForTaskType, taskTypeForSandboxMode, type SandboxTaskMode } from "../execution/sandboxProfiles.js";
+import type { AgentTaskJob } from "../execution/types.js";
 import type { AgentResponse, ToolContext } from "./types.js";
 import {
   agentTaskAuditSummary,
@@ -19,7 +21,7 @@ const ACTIVE_AGENT_TASK_STATUSES: AgentTaskStatus[] = ["queued", "running"];
 const GITHUB_API_BASE_URL = "https://api.github.com";
 
 export type AgentUpdateTarget = {
-  taskType?: "code_update" | "diagnosis";
+  taskType?: AgentTaskJob["taskType"];
   improvementCaseId?: string | null;
   targetBranch?: string | null;
   targetPullRequestNumber?: number | null;
@@ -32,12 +34,12 @@ export async function createAgentUpdateFromRequest(
   title?: string | null,
   target: AgentUpdateTarget = {}
 ): Promise<AgentResponse> {
-  const notConfigured = codegenNotConfiguredMessage(ctx);
+  const notConfigured = sandboxModeNotConfiguredMessage(ctx, sandboxModeForTaskType(target.taskType ?? "code_update"));
   if (notConfigured) return agentTaskMutationResponse(notConfigured, false, "not_configured");
   const updateName = agentUpdateTitleFromRequest(request, title);
 
   const requestedBy = `${ctx.userDisplayName} (${ctx.userId})`;
-  if (target.improvementCaseId && target.taskType === "diagnosis") throw new Error("Linked improvement work must produce a code change; evidence collection is a separate lifecycle step.");
+  if (target.improvementCaseId && target.taskType && target.taskType !== "code_update") throw new Error("Linked improvement work must produce a code change; evidence collection is a separate lifecycle step.");
   if (target.improvementCaseId) await assertImprovementCaseWorkAllowed(ctx, target.improvementCaseId);
   const result = await enqueueAgentCodeUpdateTask(ctx, { request, updateName, requestedBy, ...target });
   const response = formatAgentTaskResult(result);
@@ -47,7 +49,7 @@ export async function createAgentUpdateFromRequest(
     guildId: ctx.guildId,
     channelId: ctx.channelId,
     userId: ctx.userId,
-    toolName: "runCodingAgent",
+    toolName: "runSandboxAgent",
     argumentsSummary: summarizeForAudit({ request, updateName, ...target }),
     resultSummary: summarizeForAudit(agentTaskAuditSummary(result))
   }).catch(() => undefined);
@@ -61,7 +63,7 @@ async function enqueueAgentCodeUpdateTask(
     request: string;
     updateName: string;
     requestedBy: string;
-    taskType?: "code_update" | "diagnosis";
+    taskType?: AgentTaskJob["taskType"];
     improvementCaseId?: string | null;
     retriedFromTaskId?: string | null;
     targetBranch?: string | null;
@@ -72,7 +74,7 @@ async function enqueueAgentCodeUpdateTask(
   if (!ctx.jobs) {
     throw new Error("Agent task queue is unavailable in this process.");
   }
-  await ctx.updateStatus?.("Working on it...\n\nI’ll edit this message with progress and the PR link when it’s ready.");
+  await ctx.updateStatus?.("Working on it...\n\nI’ll follow up here when it’s done.");
   if (!ctx.agentRuntime || !ctx.agentRuntimeSession) {
     throw new Error("Agent runtime session is unavailable; cannot enqueue a code-update task.");
   }
@@ -315,7 +317,7 @@ function formatCheckRuns(checks: GitHubCheckRunsResponse) {
   if (failing.length > 0) {
     lines.push("- Failing checks:");
     lines.push(...failing.slice(0, 8).map((check) => `  - ${formatCheckRunLine(check)}`));
-    lines.push("- Next action: for debugging or fixing, call runCodingAgent so the sandbox can inspect logs with gh CLI and run focused local checks.");
+    lines.push("- Next action: for debugging or fixing, call runSandboxAgent so the sandbox can inspect logs with gh CLI and run focused local checks.");
   }
   if (pending.length > 0) {
     lines.push("- Pending checks:");
@@ -397,13 +399,13 @@ export async function listAgentTasks(ctx: ToolContext, input: { statuses?: strin
 }
 
 export async function retryAgentTask(ctx: ToolContext, input: { taskId?: string } = {}): Promise<AgentResponse> {
-  const notConfigured = codegenNotConfiguredMessage(ctx);
-  if (notConfigured) return agentTaskMutationResponse(notConfigured, false, "not_configured");
   const task = await resolveVisibleAgentTask(ctx, input.taskId, {
     statuses: ["failed", "no_changes", "cancelled"],
     limit: 1
   });
   if (!task) return agentTaskMutationResponse(input.taskId ? `No retryable visible agent task matched \`${input.taskId}\`.` : "No recent failed, no-change, or cancelled agent task matched.", false, "task_not_found");
+  const notConfigured = sandboxModeNotConfiguredMessage(ctx, sandboxModeForTaskType(task.taskType));
+  if (notConfigured) return agentTaskMutationResponse(notConfigured, false, "not_configured");
 
   const requestedBy = `${ctx.userDisplayName} (${ctx.userId}) retrying ${task.taskId}`;
   if (task.improvementCaseId) await assertImprovementCaseWorkAllowed(ctx, task.improvementCaseId);
@@ -411,7 +413,7 @@ export async function retryAgentTask(ctx: ToolContext, input: { taskId?: string 
     request: task.request,
     updateName: task.title,
     requestedBy,
-    taskType: task.taskType === "diagnosis" ? "diagnosis" : "code_update",
+    taskType: taskTypeForSandboxMode(sandboxModeForTaskType(task.taskType)),
     improvementCaseId: task.improvementCaseId,
     retriedFromTaskId: task.taskId
   });
@@ -545,13 +547,13 @@ export function formatSandboxCommandEvents(events: SandboxCommandEvent[]) {
   ].join("\n");
 }
 
-function codegenNotConfiguredMessage(ctx: ToolContext): string | null {
-  const missing = missingCodeUpdateConfig(ctx.config);
+function sandboxModeNotConfiguredMessage(ctx: ToolContext, mode: SandboxTaskMode): string | null {
+  const missing = missingSandboxModeConfig(ctx.config, mode);
   if (missing.length === 0) return null;
+  const label = mode === "computer" ? "Isolated computer tasks" : mode === "diagnosis" ? "Repository diagnosis tasks" : "Code-change tasks";
   return [
-    "Code-update tasks are not configured on this bot, so I can't start one.",
+    `${label} are not enabled on this bot, so I can't start one.`,
     `Missing configuration: ${missing.join(", ")}.`,
-    "The operator can enable code updates by setting those environment variables and restarting the bot."
   ].join("\n");
 }
 

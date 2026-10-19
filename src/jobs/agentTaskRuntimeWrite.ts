@@ -41,7 +41,7 @@ export async function writeAgentTaskQueuedToRuntime(input: {
       request: input.job.request,
       requestedBy: input.job.requestedBy,
       status: "queued",
-      harness: "runCodingAgent",
+      harness: "runSandboxAgent",
       model: selection.codegenModel,
       provider: selection.codegenProvider,
       metadata: {
@@ -65,7 +65,7 @@ export async function writeAgentTaskQueuedToRuntime(input: {
     parts: [
       {
         type: "tool_result",
-        toolName: "runCodingAgent",
+        toolName: "runSandboxAgent",
         taskId: input.job.taskId,
         title: input.job.title,
         request: input.job.request,
@@ -108,7 +108,7 @@ export async function writeAgentTaskQueuedToRuntime(input: {
         taskId: input.job.taskId,
         traceId: input.job.traceId,
         status: "queued",
-        harness: "runCodingAgent",
+        harness: "runSandboxAgent",
         model: selection.codegenModel,
         provider: selection.codegenProvider,
         reasoningEffort: selection.codegenReasoningEffort,
@@ -122,7 +122,7 @@ export async function writeAgentTaskQueuedToRuntime(input: {
       taskId: input.job.taskId,
       traceId: input.job.traceId,
       status: "queued",
-      harness: "runCodingAgent",
+      harness: "runSandboxAgent",
       model: selection.codegenModel,
       provider: selection.codegenProvider,
       reasoningEffort: selection.codegenReasoningEffort,

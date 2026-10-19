@@ -277,7 +277,7 @@
       "category": "codegen",
       "prompt": "update yourself to make active codegen progress messages clearer",
       "expectedTools": [
-        "runCodingAgent"
+        "runSandboxAgent"
       ],
       "skip": true,
       "skipReason": "Codegen opens PRs; keep this documented but skipped in the default suite."
@@ -317,7 +317,7 @@
       "category": "codegen",
       "prompt": "can you make the bot stop double-posting that progress message?",
       "expectedTools": [
-        "runCodingAgent"
+        "runSandboxAgent"
       ],
       "skip": true,
       "skipReason": "Codegen opens PRs; this covers model selection from the stable tool contract for casual code-update wording."

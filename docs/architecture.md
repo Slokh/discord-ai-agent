@@ -8,7 +8,7 @@ The application is TypeScript on Node.js 22 with Postgres, pgvector, Discord, Op
 
 | Role | Owns |
 | --- | --- |
-| `bot` | Discord gateway events, ingress, reactions, delivery, component interactions, deployment announcements, and task notifications |
+| `bot` | Discord gateway events, ingress, reactions, delivery, component interactions, deployment announcements, and sandbox task result delivery |
 | `worker` | Agent executions, crawl and embedding jobs, reminder and scheduled-request delivery, code-update jobs, reconciliation, compaction, and retention |
 | `api` | Internal signed sandbox callbacks and health probe |
 | `console` | Discord-authenticated read-only operator dashboard and public health probe |
@@ -91,17 +91,18 @@ Prompts sharing a Discord thread key are serialized; different keys may execute 
 
 The data lifecycle is the first place to fix missing or stale Discord knowledge. Prompt wording cannot repair content that was never persisted, embedded, permission-filtered, or returned.
 
-## Code-update lifecycle
+## Sandbox task lifecycle
 
-1. The model selects `runCodingAgent` for an explicit request to change the repository, fix CI, inspect a PR, or repair a prior task.
+1. The model selects `runSandboxAgent` for an explicit request to run or operate a program or file (`computer` mode), change the repository, fix CI, inspect a PR, or repair a prior task.
 2. `src/tools/agentTaskTools.ts` creates the task projection and a task-linked runtime execution.
 3. `src/jobs/agentTaskEnqueue.ts` performs the atomic queue handoff.
-4. `src/execution/backend.ts` creates one isolated Kubernetes Job with task-scoped configuration and credentials.
-5. `runnerPipeline.ts` prepares a cached mirror and isolated worktree, builds a focused context pack, runs NanoCodex with workspace tools, refreshes dependencies when manifests change, verifies, scans, pushes an allowed branch, and opens or updates a PR.
+4. `src/execution/backend.ts` creates one isolated Kubernetes Job on the gVisor sandbox pool with the profile's configuration and credentials (`src/execution/sandboxProfiles.ts`).
+5. For repository profiles, `runnerPipeline.ts` prepares a cached mirror and isolated worktree, builds a focused context pack, runs NanoCodex with workspace tools, refreshes dependencies when manifests change, verifies, scans, pushes an allowed branch, and opens or updates a PR. For the computer profile, `scratchTask.ts` runs NanoCodex in an empty workspace with download, virtual-display, and delivery helpers.
 6. Sandbox callbacks and command summaries become `agent.task.*` runtime events. Task rows remain projections used for status and Discord rendering.
 7. Reconcilers turn lost workers, missing Jobs, and absent terminal callbacks into explicit terminal states and cleanup.
+8. The bot hands each terminal requester-facing task to durable delivery (`src/discord/taskResultDelivery.ts`), which replies to the original message with the result and any delivered files.
 
-See [Code updates](code-updates.md) for publication and sandbox details.
+See [Sandbox tasks and code updates](code-updates.md) for profiles, publication, and sandbox details.
 
 ## Sources of truth
 

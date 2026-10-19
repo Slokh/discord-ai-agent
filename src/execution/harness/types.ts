@@ -28,11 +28,14 @@ export class CodegenNoDiffError extends Error {
 
 export type NanoCodexRunInput = {
   env: SandboxEnv;
+  /** Repository checkout or scratch workspace the agent works in. */
   checkoutDir: string;
   gitEnv: NodeJS.ProcessEnv;
   toolShimDir: string;
-  contextPack: CodegenContextPack;
-  baseRevision: string;
+  /** Repository context; scratch workspaces provide `prompt` instead. */
+  contextPack?: CodegenContextPack;
+  /** Repository base revision; absent for scratch workspaces, which never produce a diff. */
+  baseRevision?: string;
   prompt?: string;
   instructions?: string;
   attempt?: number;

@@ -3,9 +3,9 @@ import * as k8s from "@kubernetes/client-node";
 import type { AppConfig } from "../config/env.js";
 import { assertExecutionConfig } from "../config/env.js";
 import type { SandboxRunRecord } from "../db/repositories.js";
-import { resolveGitHubTaskToken } from "./githubAuth.js";
 import { slugify } from "../util/text.js";
 import { taskBearerToken, taskCallbackSecret } from "./token.js";
+import { sandboxProfileForTaskType, sandboxProfileRequires } from "./sandboxProfiles.js";
 import type { AgentTaskJob, AgentTaskStartResult } from "./types.js";
 
 export type ExecutionContext = {
@@ -74,10 +74,20 @@ export class KubernetesExecutionBackend implements ExecutionBackend {
     const namespace = this.config.execution.kubernetes.namespace;
     const token = taskBearerToken({ taskId: job.taskId, sandboxRunId, secret: this.config.execution.taskSigningSecret });
     const callbackSecret = taskCallbackSecret({ taskId: job.taskId, sandboxRunId, secret: this.config.execution.taskSigningSecret });
-    const githubToken = await resolveGitHubTaskToken(this.config);
+    const profile = sandboxProfileForTaskType(job.taskType);
+    const egress = this.config.execution.kubernetes.egress;
+    // Each profile receives only placeholders for the upstream credentials it
+    // declares; the egress proxy holds the real values.
+    const githubToken = sandboxProfileRequires(job.taskType, "github") ? egress.placeholders.github : null;
+    // A profile that holds GitHub authority uses the credentialed proxy port;
+    // every other profile, including ones that run member-supplied programs,
+    // may only have its model credential injected.
+    const egressTier = profile.credentials.includes("github") ? egress.tiers.credentialed : egress.tiers.model;
     const labels = {
       "app.kubernetes.io/name": "discord-ai-agent",
       "app.kubernetes.io/component": "sandbox",
+      "discord-ai-agent/sandbox-profile": profile.name,
+      [egress.labelKey]: egressTier.label,
       "discord-ai-agent/task-id": job.taskId,
       "discord-ai-agent/sandbox-run-id": sandboxRunId
     };
@@ -87,14 +97,16 @@ export class KubernetesExecutionBackend implements ExecutionBackend {
 
     await context.progress?.({
       step: "sandbox_prepare",
-      message: "Preparing an isolated Kubernetes sandbox for the code change.",
+      message: profile.workspace === "scratch"
+        ? "Preparing an isolated Kubernetes sandbox computer."
+        : "Preparing an isolated Kubernetes sandbox for the code change.",
       metadata: { namespace, jobName: name, sandboxRunId }
     });
     await context.recordSandboxRun?.(startResult);
     try {
       await this.createSecret(namespace, secretName, labels, {
-        GITHUB_TOKEN: githubToken,
-        OPENROUTER_API_KEY: this.config.openRouter.apiKey,
+        ...(githubToken ? { GITHUB_TOKEN: githubToken } : {}),
+        OPENROUTER_API_KEY: egress.placeholders.openrouter,
         AGENT_TASK_TOKEN: token,
         AGENT_TASK_CALLBACK_SECRET: callbackSecret
       });
@@ -109,7 +121,8 @@ export class KubernetesExecutionBackend implements ExecutionBackend {
         TARGET_BRANCH: job.targetBranch ?? "",
         TARGET_PULL_REQUEST_NUMBER: job.targetPullRequestNumber == null ? "" : String(job.targetPullRequestNumber),
         TARGET_PULL_REQUEST_URL: job.targetPullRequestUrl ?? "",
-        SANDBOX_STARTED_AT_MS: String(Date.now())
+        SANDBOX_STARTED_AT_MS: String(Date.now()),
+        ...sandboxEgressEnvironment(egressTier.proxyUrl, egress)
       });
 
       await context.progress?.({
@@ -305,6 +318,24 @@ export class KubernetesExecutionBackend implements ExecutionBackend {
           spec: {
             restartPolicy: "Never",
             serviceAccountName: k8sConfig.serviceAccountName,
+            // Sandboxes run untrusted code: no Kubernetes identity, a dedicated
+            // tainted node pool, and the gVisor runtime for every profile.
+            automountServiceAccountToken: false,
+            enableServiceLinks: false,
+            nodeSelector: { ...k8sConfig.isolation.nodeSelector },
+            tolerations: k8sConfig.isolation.tolerations.map((toleration) => ({ ...toleration })),
+            runtimeClassName: k8sConfig.isolation.runtimeClassName,
+            priorityClassName: k8sConfig.isolation.priorityClassName,
+            volumes: [
+              { name: "egress-proxy-ca", configMap: { name: k8sConfig.egress.ca.configMap, items: [{ key: k8sConfig.egress.ca.key, path: "ca.crt" }] } }
+            ],
+            securityContext: {
+              runAsNonRoot: true,
+              runAsUser: 1000,
+              runAsGroup: 1000,
+              fsGroup: 1000,
+              seccompProfile: { type: "RuntimeDefault" }
+            },
             containers: [
               {
                 name: "sandbox",
@@ -318,6 +349,11 @@ export class KubernetesExecutionBackend implements ExecutionBackend {
                 resources: {
                   requests: { cpu: k8sConfig.cpuRequest, memory: k8sConfig.memoryRequest },
                   limits: { cpu: k8sConfig.cpuLimit, memory: k8sConfig.memoryLimit }
+                },
+                volumeMounts: [{ name: "egress-proxy-ca", mountPath: k8sConfig.egress.ca.mountDir, readOnly: true }],
+                securityContext: {
+                  allowPrivilegeEscalation: false,
+                  capabilities: { drop: ["ALL"] }
                 }
               }
             ]
@@ -350,6 +386,25 @@ export class KubernetesExecutionBackend implements ExecutionBackend {
       if (!isKubernetesNotFound(error)) throw error;
     }
   }
+}
+
+export function sandboxEgressEnvironment(
+  proxyUrl: string,
+  egress: AppConfig["execution"]["kubernetes"]["egress"],
+): Record<string, string> {
+  const caFile = `${egress.ca.mountDir}/ca.crt`;
+  return {
+    HTTPS_PROXY: proxyUrl,
+    HTTP_PROXY: proxyUrl,
+    https_proxy: proxyUrl,
+    http_proxy: proxyUrl,
+    NO_PROXY: egress.noProxy,
+    no_proxy: egress.noProxy,
+    // Node's built-in fetch honors the proxy variables only when asked.
+    NODE_USE_ENV_PROXY: "1",
+    NODE_EXTRA_CA_CERTS: caFile,
+    SANDBOX_EGRESS_CA_FILE: caFile,
+  };
 }
 
 function sandboxContainerStatus(pod: k8s.V1Pod) {

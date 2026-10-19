@@ -51,7 +51,7 @@ const expectedFamilyTools = {
     "composeDiscordResponse", "addDiscordReaction", "createDiscordPoll", "updateBotAvatar", "createDiscordEmoji",
     "undoConversationTurns", "drawRandom", "revealRandomness", "settleRandomWager",
   ],
-  codegen: ["runCodingAgent", "getAgentTaskStatus", "listAgentTasks", "retryAgentTask", "cancelAgentTask"],
+  codegen: ["runSandboxAgent", "getAgentTaskStatus", "listAgentTasks", "retryAgentTask", "cancelAgentTask"],
   image: ["generateImage", "inspectDiscordImages", "getDiscordUserAvatar"],
   generatedData: ["readGeneratedFile", "queryGeneratedCsv", "queryGeneratedTable"],
   spotify: [

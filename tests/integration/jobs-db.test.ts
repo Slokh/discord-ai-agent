@@ -253,7 +253,7 @@ describe.skipIf(!runDbTests)("pg-boss database behavior", () => {
       expect(session).toEqual(
         expect.objectContaining({
           status: "running",
-          harness: "runCodingAgent",
+          harness: "runSandboxAgent",
           metadata: expect.objectContaining({
             runtime: "agent",
             codegenModel: "openai/gpt-6-luna",
@@ -267,7 +267,7 @@ describe.skipIf(!runDbTests)("pg-boss database behavior", () => {
         expect.objectContaining({
           clientMessageId: taskId,
           role: "tool",
-          parts: [expect.objectContaining({ type: "tool_result", toolName: "runCodingAgent", taskId })]
+          parts: [expect.objectContaining({ type: "tool_result", toolName: "runSandboxAgent", taskId })]
         })
       ]);
       await expect(agentRuntimeRepo.listExecutions({ sessionId })).resolves.toEqual([
@@ -275,7 +275,7 @@ describe.skipIf(!runDbTests)("pg-boss database behavior", () => {
           executionId: `agent-task-execution-${taskId}`,
           taskId,
           status: "running",
-          harness: "runCodingAgent",
+          harness: "runSandboxAgent",
           reasoningEffort: "max",
           sandboxRunId: "sandbox-run-1",
           metadata: expect.objectContaining({

@@ -8,6 +8,7 @@ import { discordReply } from "./api.js";
 import { discordChannelThreadKey, isSelfMessage, isSelfUser, shouldProcessGuildEvent } from "./mentionParsing.js";
 import { fetchDiscordMessage, type DiscordAgentRequestInput } from "./requestContext.js";
 import { DiscordResponseSink } from "./responseSink.js";
+import { sandboxModeForTaskType, taskTypeForSandboxMode } from "../execution/sandboxProfiles.js";
 
 export const DISCORD_RETRY_EMOJIS = new Set(["🔄", "🔃"]);
 
@@ -77,7 +78,7 @@ async function retryAgentTaskFromReaction(input: DiscordAgentRequestInput, messa
       config: input.config, repo: input.repo, agentRuntime: input.agentRuntime, jobs: input.jobs, session,
       request: task.request, title: task.title, requestedBy, traceId: retryId,
       guildId: message.guildId, channelId: message.channelId, userId: user.id, threadKey: session.threadKey,
-      taskType: task.taskType === "diagnosis" ? "diagnosis" : "code_update",
+      taskType: taskTypeForSandboxMode(sandboxModeForTaskType(task.taskType)),
       improvementCaseId: task.improvementCaseId ?? undefined,
       retriedFromTaskId: task.taskId, discordResponseChannelId: status.value.channelId, discordResponseMessageId: status.value.id,
     });

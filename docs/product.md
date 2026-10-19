@@ -9,6 +9,7 @@ Discord AI Agent is a shared assistant for a private Discord community. A member
 - Permission-aware use of server history and attachments.
 - Current external evidence for facts that can change.
 - Useful partial results when a complete result is impossible.
+- Isolated sandbox tasks that run or operate a linked program, game, or file and report back with screenshots.
 - Reviewable code-update PRs when a member asks the bot to change itself.
 - Enough retained evidence to explain a wrong, slow, missing, or surprising result.
 - Durable conversational schedules that can deliver a reminder or run fresh read-only work, survive restarts, and be managed by ordinary replies.

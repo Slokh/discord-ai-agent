@@ -4,14 +4,14 @@ import { Octokit } from "@octokit/rest";
 import type { AppConfig } from "../config/env.js";
 import { OpenRouterClient } from "../models/openrouter.js";
 import { complete, progress, recordArtifact } from "./callbacks.js";
-import { categoryForCodegenPhase, CodegenTaskError, diagnoseCodegenFailure, renderCodegenFailureDiagnosis, type CodegenFailureDiagnosis } from "./codegenFailureDiagnosis.js";
+import { CodegenTaskError, diagnoseCodegenFailure, renderCodegenFailureDiagnosis, type CodegenFailureDiagnosis } from "./codegenFailureDiagnosis.js";
 import { codeUpdateVerificationRepairPrompt, improvementReportRepairPrompt, renderCodegenContextPack } from "./codegenPrompts.js";
 import { runCommand } from "./commands.js";
 import { buildCodegenContextPack } from "./contextPack.js";
 import { changedDependencyManifestFiles, codegenNpmScriptEnv, prepareDependencies, readDependencyManifestState } from "./dependencyCache.js";
 import { readImprovementAssessmentResult, validatedImprovementTriage, type ImprovementAssessmentResult } from "./improvementAssessmentResult.js";
-import { NANOCODEX_RUNTIME_LABEL, nanoCodexModel, runNanoCodex } from "./harness/nanocodex.js";
-import type { AgentRunSummary, NanoCodexRunInput } from "./harness/types.js";
+import { NANOCODEX_RUNTIME_LABEL } from "./harness/nanocodex.js";
+import type { NanoCodexRunInput } from "./harness/types.js";
 import { codeUpdateBranchName, codeUpdatePullRequestMetadata, codeUpdatePullRequestTitle } from "./prFormatting.js";
 import {
   assertCodeUpdatePushAllowed,
@@ -28,10 +28,14 @@ import {
   sandboxCachePaths
 } from "./repoWorkspace.js";
 import { loadSandboxEnv, type SandboxEnv, type TaskTimings } from "./sandboxEnv.js";
+import { prepareSandboxEgressTrust } from "./sandboxEgress.js";
 import { productConfig } from "../config/env.js";
 import { writeSandboxToolShims } from "./sandboxToolShims.js";
+import { runNanoCodexPhase, timedPhase } from "./runnerPhases.js";
+import { runScratchTask, taskResultOutcome } from "./scratchTask.js";
+import { sandboxProfileForTaskType } from "./sandboxProfiles.js";
 import { parseGitHubRepository } from "../github/repository.js";
-import { conciseError, formatDuration, tail, uniqueStrings } from "./sandboxUtils.js";
+import { tail, uniqueStrings } from "./sandboxUtils.js";
 
 type CacheSummary = {
   repo?: "hit" | "miss";
@@ -43,11 +47,14 @@ type CacheSummary = {
 };
 
 export async function main() {
+  await prepareSandboxEgressTrust();
   const env = loadSandboxEnv();
   const timings: TaskTimings = {};
   const totalStartedAt = Date.now();
   try {
-    const result = await runCodeUpdate(env, timings, totalStartedAt);
+    const result = sandboxProfileForTaskType(env.taskType).workspace === "scratch"
+      ? await runScratchTask(env, timings, totalStartedAt)
+      : await runCodeUpdate(env, timings, totalStartedAt);
     const resultSummary = "resultSummary" in result ? result.resultSummary : null;
     await complete(env, {
       status: result.status,
@@ -277,25 +284,8 @@ export async function runCodeUpdate(env: SandboxEnv, timings: TaskTimings, total
     });
     const changeState = await readGitChangeState(checkoutDir, baseRevision);
     if (!changeState.hasChanges) {
-      if (env.taskType === "diagnosis") {
-        const resultSummary = nanoCodexSummary.attempts.at(-1)?.finalResponse?.trim();
-        if (!resultSummary) throw new Error("Read-only diagnosis finished without a result.");
-        timings.total = Date.now() - totalStartedAt;
-        await progress(env, "diagnosis_complete", resultSummary, { taskType: env.taskType });
-        return {
-          status: "succeeded" as const,
-          branchName: null,
-          prUrl: null,
-          draft: null,
-          verifyPassed: true,
-          updatedExistingPullRequest: false,
-          improvementAssessment: null,
-          autoMergeEnabled: false,
-          headRevision: null,
-          resultSummary,
-          timings,
-          cacheSummary
-        };
+      if (!sandboxProfileForTaskType(env.taskType).publishesPullRequest) {
+        return taskResultOutcome(env, nanoCodexSummary, timings, totalStartedAt, cacheSummary);
       }
       if (improvementAssessment && improvementAssessment.disposition !== "confirmed_fixed") {
         timings.total = Date.now() - totalStartedAt;
@@ -602,36 +592,6 @@ function noChangeImprovementResult(
   };
 }
 
-async function timedPhase<T>(
-  env: SandboxEnv,
-  timings: TaskTimings,
-  step: string,
-  message: string,
-  run: () => Promise<T>,
-  metadata: Record<string, unknown> = {}
-): Promise<T> {
-  await progress(env, step, message, metadata);
-  const startedAt = Date.now();
-  try {
-    const result = await run();
-    const durationMs = Date.now() - startedAt;
-    timings[step] = durationMs;
-    await progress(env, `${step}_complete`, `Finished ${step} in ${formatDuration(durationMs)}.`, { ...metadata, durationMs });
-    return result;
-  } catch (error) {
-    const durationMs = Date.now() - startedAt;
-    timings[step] = durationMs;
-    await progress(env, `${step}_failed`, `${step} failed after ${formatDuration(durationMs)}.`, {
-      ...metadata,
-      durationMs,
-      error: conciseError(error)
-    }).catch(() => undefined);
-    if (error instanceof CodegenTaskError || (error instanceof Error && error.name === "CodegenNoDiffError")) throw error;
-    const message = error instanceof Error ? error.message : String(error);
-    throw new CodegenTaskError(categoryForCodegenPhase(step), step, message, { cause: error });
-  }
-}
-
 async function runPrePublicationVerification(input: {
   env: SandboxEnv;
   timings: TaskTimings;
@@ -656,40 +616,4 @@ async function runPrePublicationVerification(input: {
         env: input.npmScriptEnv
       })
   );
-}
-
-async function runNanoCodexPhase(input: {
-  env: SandboxEnv;
-  timings: TaskTimings;
-  input: NanoCodexRunInput;
-  phase?: string;
-  message?: string;
-}) {
-  const phase = input.phase ?? "nanocodex";
-  return timedPhase(
-    input.env,
-    input.timings,
-    phase,
-    input.message ?? "Running NanoCodex to implement the requested change.",
-    async () => {
-      const summary = await runNanoCodex(input.input);
-      await recordAgentAttemptSummary(input.env, `NanoCodex ${phase.replaceAll("_", " ")} summary`, summary);
-      return summary;
-    },
-    { model: `openai/${nanoCodexModel(input.env.openRouterCodegenModel)}`, harness: NANOCODEX_RUNTIME_LABEL }
-  );
-}
-
-async function recordAgentAttemptSummary(env: SandboxEnv, name: string, summary: AgentRunSummary) {
-  await recordArtifact(env, {
-    kind: "diagnostic",
-    name,
-    content: JSON.stringify(summary, null, 2),
-    contentType: "application/json",
-    metadata: {
-      harness: NANOCODEX_RUNTIME_LABEL,
-      attempts: summary.attempts.length,
-      producedDiff: summary.attempts.some((attempt) => attempt.producedDiff)
-    }
-  });
 }

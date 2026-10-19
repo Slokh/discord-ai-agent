@@ -12,6 +12,7 @@ import type { WalletService } from "../payments/walletService.js";
 import type { DiscordCrawler } from "./crawler.js";
 import { persistDiscordMessage } from "./messagePersistence.js";
 import { sweepDiscordDeliveryObligations } from "./deliverySweep.js";
+import { startAgentTaskResultDelivery } from "./taskResultDelivery.js";
 import { handleMessageCreate, queueIncomingMessageEmbedding } from "./messageIngress.js";
 import { persistReactionMessage, persistReactionMessageUpdate } from "./reactions.js";
 import { deletedMessageIdsForConfiguredGuild, isSelfMessage, isSelfUser, shouldProcessGuildEvent } from "./mentionParsing.js";
@@ -56,6 +57,7 @@ export function createDiscordAiAgentBot(input: {
       partials: [Partials.Message, Partials.Channel, Partials.Reaction]
     });
   const taskSupervisor = new DiscordTaskSupervisor(logger);
+  let taskResultDelivery: { stop: () => void } | null = null;
 
   client.once(Events.ClientReady, (readyClient) => {
     logger.info(
@@ -78,6 +80,16 @@ export function createDiscordAiAgentBot(input: {
         maxReplyChars: input.config.maxReplyChars,
         premiumSkuIds: input.config.discord.premiumSkuIds
       }) });
+      taskResultDelivery ??= startAgentTaskResultDelivery({
+        client: readyClient,
+        repo: input.repo,
+        agentRuntime,
+        obligations,
+        logger,
+        maxReplyChars: input.config.maxReplyChars,
+        premiumSkuIds: input.config.discord.premiumSkuIds,
+        run: (label, task) => void taskSupervisor.run({ kind: "maintenance", label, task }),
+      });
     }
   });
 
@@ -178,9 +190,11 @@ export function createDiscordAiAgentBot(input: {
       await client.login(input.config.discord.token);
     },
     drain: async (timeoutMs = 30_000) => {
+      taskResultDelivery?.stop();
       await taskSupervisor.drain(timeoutMs);
     },
     destroy: () => {
+      taskResultDelivery?.stop();
       taskSupervisor.stopAccepting();
       client.destroy();
     }

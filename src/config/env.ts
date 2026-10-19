@@ -4,6 +4,7 @@ import { z } from "zod";
 import { parseGitHubRepository } from "../github/repository.js";
 import { assertNoRetiredEnvironmentVariables, environmentVariableNames } from "./environment.js";
 import { CONSOLE_PUBLIC_URL } from "../console/constants.js";
+import { SANDBOX_TASK_MODES, sandboxProfileRequires, taskTypeForSandboxMode } from "../execution/sandboxProfiles.js";
 
 type ProcessRole = "all" | "api" | "bot" | "worker" | "console";
 const PUBLIC_REPOSITORY_URL = "https://github.com/Slokh/discord-ai-agent";
@@ -55,7 +56,37 @@ export const productConfig = {
     // memory and causing unrelated workspaces to be evicted together.
     maxConcurrentTasks: 1,
     taskTimeoutSeconds: 1_800,
-    ttlSecondsAfterFinished: 3_600
+    ttlSecondsAfterFinished: 3_600,
+    // Which sandbox task modes members may start. Every mode shares one
+    // sandbox implementation; enable a mode only once the isolated sandbox
+    // node, gVisor runtime, and credential proxy below are deployed. The
+    // execution subsystem stays dormant while every mode is off.
+    modes: { code_change: false, diagnosis: false, computer: false },
+    // Every sandbox Job runs on the dedicated tainted pool under gVisor, never
+    // beside production Postgres. Names match the Helm chart and Terraform.
+    isolation: {
+      nodeSelector: { "discord-ai-agent.dev/pool": "sandbox" },
+      tolerations: [{ key: "discord-ai-agent.dev/sandbox", operator: "Equal", value: "true", effect: "NoSchedule" }],
+      runtimeClassName: "gvisor",
+      priorityClassName: "discord-ai-agent-sandbox",
+    },
+    // Sandboxes hold only public placeholder credentials. The in-cluster
+    // egress proxy swaps them for real ones on verified TLS to the credential
+    // host, and only on the port the profile's egress tier may reach: GitHub
+    // is never injectable from a pod that runs member-supplied programs.
+    egress: {
+      labelKey: "discord-ai-agent.dev/egress",
+      tiers: {
+        credentialed: { label: "credentialed", proxyUrl: "http://discord-ai-agent-egress-proxy:8080" },
+        model: { label: "model", proxyUrl: "http://discord-ai-agent-egress-proxy:8082" },
+      },
+      noProxy: "discord-ai-agent-api,.svc,.cluster.local,localhost,127.0.0.1",
+      placeholders: {
+        openrouter: "discord-ai-agent-egress-placeholder-openrouter",
+        github: "discord-ai-agent-egress-placeholder-github",
+      },
+      ca: { configMap: "discord-ai-agent-egress-proxy-ca", key: "ca.crt", mountDir: "/etc/discord-ai-agent/egress-proxy" },
+    },
   },
   retention: { runtimeEventsDays: 60, auditDays: 90, runtimeSessionsDays: 90, terminalRemindersDays: 90 },
   memory: { compactionThreshold: 100, compactionKeepRecent: 30 },
@@ -192,6 +223,7 @@ export function loadConfig(argv = process.argv) {
       sandbox: {
         maxConcurrentTasks: productConfig.sandbox.maxConcurrentTasks,
         taskTimeoutSeconds: productConfig.sandbox.taskTimeoutSeconds,
+        modes: { ...productConfig.sandbox.modes },
       },
       kubernetes: {
         namespace: env.POD_NAMESPACE || productConfig.sandbox.namespace,
@@ -202,7 +234,9 @@ export function loadConfig(argv = process.argv) {
         cpuLimit: productConfig.sandbox.cpuLimit,
         memoryRequest: productConfig.sandbox.memoryRequest,
         memoryLimit: productConfig.sandbox.memoryLimit,
-        ttlSecondsAfterFinished: productConfig.sandbox.ttlSecondsAfterFinished
+        ttlSecondsAfterFinished: productConfig.sandbox.ttlSecondsAfterFinished,
+        isolation: productConfig.sandbox.isolation,
+        egress: productConfig.sandbox.egress,
       }
     },
     worker: {
@@ -211,9 +245,8 @@ export function loadConfig(argv = process.argv) {
       // optional paid embedding consumer dormant unless it is redesigned as an
       // explicit, bounded backfill.
       embeddingEnabled: false,
-      // Repository mutation is intentionally not part of the lightweight
-      // friend-server deployment. Keep the execution subsystem dormant.
-      taskEnabled: false,
+      // The sandbox task worker runs only when some sandbox mode is enabled.
+      taskEnabled: Object.values(productConfig.sandbox.modes).some(Boolean),
       agentRuntimeEnabled: true,
       retention: productConfig.retention,
       memoryCompaction: {
@@ -332,9 +365,11 @@ export function assertExecutionConfig(config: AppConfig): asserts config is AppC
   assertTaskCallbackConfig(config);
   const missing: string[] = [];
   if (!config.openRouter.apiKey) missing.push("OPENROUTER_API_KEY");
-  if (!hasGitHubTaskCredential(config)) missing.push("GITHUB_TOKEN or GitHub App credentials");
+  const repositoryModesEnabled = SANDBOX_TASK_MODES.some((mode) =>
+    config.execution.sandbox.modes[mode] && sandboxProfileRequires(taskTypeForSandboxMode(mode), "github"));
+  if (repositoryModesEnabled && !hasGitHubTaskCredential(config)) missing.push("GITHUB_TOKEN or GitHub App credentials");
   if (missing.length > 0) throw new Error(`Missing required sandbox execution secret/config values: ${missing.join(", ")}`);
-  parseGitHubRepository(config.github.repository);
+  if (repositoryModesEnabled) parseGitHubRepository(config.github.repository);
 }
 
 export function hasGitHubTaskCredential(config: AppConfig) {

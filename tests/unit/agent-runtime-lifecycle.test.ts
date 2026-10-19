@@ -212,7 +212,7 @@ describe("agent runtime lifecycle", () => {
         parts: [
           expect.objectContaining({
             type: "tool_result",
-            toolName: "runCodingAgent",
+            toolName: "runSandboxAgent",
             taskId: "task-runtime-first",
             status: "queued",
             targetBranch: "ai/reuse-existing-pr-branch-follow-up-7ad0",
@@ -228,7 +228,7 @@ describe("agent runtime lifecycle", () => {
         sessionId: "agent-session-1",
         taskId: "task-runtime-first",
         status: "queued",
-        harness: "runCodingAgent",
+        harness: "runSandboxAgent",
         model: "openai/gpt-6-luna",
         reasoningEffort: "max",
         metadata: expect.objectContaining({

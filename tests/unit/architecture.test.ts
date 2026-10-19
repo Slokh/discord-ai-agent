@@ -325,7 +325,7 @@ describe("architecture guardrails", () => {
       "drawRandom",
       "generateImage",
       "inspectDiscordImages",
-      "runCodingAgent",
+      "runSandboxAgent",
       "setAgentModel",
       "settleRandomWager",
       "Spotify",

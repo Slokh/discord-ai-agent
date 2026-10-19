@@ -69,10 +69,11 @@ export class DeliveryObligationsRepository {
     return this.markState({ executionId: input.executionId, state: "abandoned", lastError: input.error ?? null, metadata: input.metadata });
   }
 
-  async listPendingOlderThan(input: { olderThanMs: number; limit?: number }): Promise<DiscordDeliveryObligationRecord[]> {
+  /** `kind` narrows to obligations whose producer recorded `metadata.kind`, such as `agent_task_result`. */
+  async listPendingOlderThan(input: { olderThanMs: number; limit?: number; kind?: string }): Promise<DiscordDeliveryObligationRecord[]> {
     const result = await this.pool.query(
-      `SELECT * FROM discord_delivery_obligations WHERE state = 'pending' AND updated_at <= now() - ($1::int * interval '1 millisecond') ORDER BY updated_at ASC LIMIT $2`,
-      [Math.max(0, Math.trunc(input.olderThanMs)), Math.max(1, Math.min(100, Math.trunc(input.limit ?? 25)))]
+      `SELECT * FROM discord_delivery_obligations WHERE state = 'pending' AND updated_at <= now() - ($1::int * interval '1 millisecond') AND ($3::text IS NULL OR metadata->>'kind' = $3) ORDER BY updated_at ASC LIMIT $2`,
+      [Math.max(0, Math.trunc(input.olderThanMs)), Math.max(1, Math.min(100, Math.trunc(input.limit ?? 25))), input.kind ?? null]
     );
     return result.rows.map(rowToObligation);
   }

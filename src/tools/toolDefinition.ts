@@ -15,7 +15,7 @@ export const TOOL_NAMES_BY_CAPABILITY = {
   generatedData: ["readGeneratedFile", "queryGeneratedCsv", "queryGeneratedTable"],
   operations: ["getDeploymentStatus", "getSpendSummary", "reportStatus", "setAgentModel"],
   improvements: ["reportImprovementSignal"],
-  codeUpdates: ["runCodingAgent", "getAgentTaskStatus", "listAgentTasks", "retryAgentTask", "cancelAgentTask"],
+  sandboxTasks: ["runSandboxAgent", "getAgentTaskStatus", "listAgentTasks", "retryAgentTask", "cancelAgentTask"],
   discordActions: ["undoConversationTurns", "addDiscordReaction", "createDiscordPoll", "createDiscordEmoji", "updateBotAvatar"],
   randomGames: ["drawRandom", "awaitRandomWagerAction", "settleRandomWager", "revealRandomness"],
   wallets: [
@@ -35,7 +35,7 @@ export const MUTATING_TOOL_NAMES = [
   "setMyTimezone",
   "setReminder",
   "setAgentModel",
-  "runCodingAgent",
+  "runSandboxAgent",
   "retryAgentTask",
   "cancelAgentTask",
   "undoConversationTurns",

@@ -33,7 +33,7 @@ describe("agent task runtime write", () => {
         request: "make code-update tasks visible in the agent runtime session",
         requestedBy: "Kartik (user)",
         status: "queued",
-        harness: "runCodingAgent",
+        harness: "runSandboxAgent",
         metadata: expect.objectContaining({
           taskId: "task-1",
           pgbossJobId: "pgboss-job-1",
@@ -61,7 +61,7 @@ describe("agent task runtime write", () => {
         parts: [
           expect.objectContaining({
             type: "tool_result",
-            toolName: "runCodingAgent",
+            toolName: "runSandboxAgent",
             taskId: "task-1",
             status: "queued",
             jobId: "pgboss-job-1"
@@ -76,7 +76,7 @@ describe("agent task runtime write", () => {
         taskId: "task-1",
         traceId: "prompt-message-1",
         status: "queued",
-        harness: "runCodingAgent",
+        harness: "runSandboxAgent",
         reasoningEffort: "max",
         metadata: expect.objectContaining({
           backend: "kubernetes-sandbox",

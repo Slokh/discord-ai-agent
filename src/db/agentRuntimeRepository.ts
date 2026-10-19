@@ -589,6 +589,10 @@ export class AgentRuntimeRepository {
     return this.artifacts.storeBinaryArtifact(input);
   }
 
+  listArtifactsForExecution(input: { executionId: string; kind: string; limit?: number }): Promise<AgentRuntimeArtifactRecord[]> {
+    return this.artifacts.listArtifactsForExecution(input);
+  }
+
   getBinaryArtifact(input: { artifactId: string }): Promise<AgentRuntimeBinaryArtifactContent | undefined> {
     return this.artifacts.getBinaryArtifact(input);
   }

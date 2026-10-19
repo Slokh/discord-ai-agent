@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { defineCapability, installedCapabilities, installedToolContracts, installedToolHandlers } from "../../src/capabilities/catalog.js";
 import { TOOL_NAMES } from "../../src/tools/toolDefinition.js";
+import { availableSandboxModes, missingSandboxModeConfig } from "../../src/capabilities/codeUpdates.js";
+import type { AppConfig } from "../../src/config/env.js";
 
 describe("installed capability catalog", () => {
   it("provides one validated declaration template for capability authors", () => {
@@ -33,11 +35,31 @@ describe("installed capability catalog", () => {
     }
     expect(installedCapabilities.find((capability) => capability.id === "randomGames")?.prepareTurn).toBeTypeOf("function");
     expect(installedCapabilities.map((capability) => capability.id)).not.toEqual(
-      expect.arrayContaining(["reminders", "operations", "improvements", "codeUpdates", "spotify"]),
+      expect.arrayContaining(["reminders", "operations", "improvements", "spotify"]),
     );
     expect(installedToolContracts.map((tool) => tool.name)).not.toEqual(expect.arrayContaining([
       "composeDiscordResponse", "undoConversationTurns", "createDiscordEmoji", "updateBotAvatar",
       "adminTransferWalletFunds", "adminSetWalletStarterAmount", "reconcileWalletTransfers",
     ]));
   });
+
+  it("keeps every sandbox mode dormant until its product switch and credentials exist", () => {
+    const sandbox = installedCapabilities.find((capability) => capability.id === "sandboxTasks");
+    expect(sandbox?.tools.map((tool) => tool.name)).toContain("runSandboxAgent");
+    const dormant = sandboxConfig({ code_change: false, diagnosis: false, computer: false }, { github: true });
+    expect(availableSandboxModes(dormant)).toEqual([]);
+    expect(sandbox?.tools.every((tool) => tool.available?.(dormant) === false)).toBe(true);
+
+    const computerOnly = sandboxConfig({ code_change: true, diagnosis: false, computer: true }, { github: false });
+    expect(availableSandboxModes(computerOnly)).toEqual(["computer"]);
+    expect(missingSandboxModeConfig(computerOnly, "code_change")).toEqual([expect.stringContaining("GITHUB_TOKEN")]);
+    expect(sandbox?.tools.every((tool) => tool.available?.(computerOnly) !== false)).toBe(true);
+  });
 });
+
+function sandboxConfig(modes: Record<"code_change" | "diagnosis" | "computer", boolean>, input: { github: boolean }) {
+  return {
+    github: { token: input.github ? "ghp_test" : undefined },
+    execution: { taskSigningSecret: "secret", sandbox: { modes } },
+  } as unknown as AppConfig;
+}

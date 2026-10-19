@@ -330,10 +330,10 @@ export async function markAgentTaskSucceeded(pool: DbPool, input: {
           UPDATE agent_tasks
           SET status = 'succeeded',
               current_step = 'done',
-              status_message = 'Opened pull request.',
-              branch_name = $2,
-              pr_url = $3,
-              pull_request_state = 'open',
+              status_message = CASE WHEN nullif($3, '') IS NULL THEN 'Completed.' ELSE 'Opened pull request.' END,
+              branch_name = nullif($2, ''),
+              pr_url = nullif($3, ''),
+              pull_request_state = CASE WHEN nullif($3, '') IS NULL THEN NULL ELSE 'open' END,
               pull_request_head_revision = $6,
               pull_request_merge_revision = NULL,
               pull_request_merged_at = NULL,
@@ -363,8 +363,8 @@ export async function markAgentTaskSucceeded(pool: DbPool, input: {
             UPDATE agent_runtime_executions
             SET status = 'succeeded',
                 event_sequence = event_sequence + 1,
-                branch_name = $2,
-                pr_url = $3,
+                branch_name = nullif($2, ''),
+                pr_url = nullif($3, ''),
                 draft = $4,
                 verify_passed = $5,
                 error = NULL,
@@ -390,7 +390,7 @@ export async function markAgentTaskSucceeded(pool: DbPool, input: {
             'git',
             'info',
             'agent.task.completed',
-            'Opened pull request.',
+            CASE WHEN nullif($3, '') IS NULL THEN 'Completed sandbox task.' ELSE 'Opened pull request.' END,
             jsonb_build_object('taskId', $1, 'status', 'succeeded') || $6::jsonb
           FROM updated_execution
         `,

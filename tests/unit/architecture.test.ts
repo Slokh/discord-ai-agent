@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { gzipSync } from "node:zlib";
 import { describe, expect, it } from "vitest";
 
 const SOURCE_LINE_LIMIT = 752;
@@ -265,6 +266,18 @@ describe("architecture guardrails", () => {
     // The server role already describes instances; the sandbox role must not.
     expect(terraform.match(/"ec2:DescribeInstances"/g)).toHaveLength(1);
     expect(terraform.slice(terraform.indexOf('resource "aws_iam_role" "k3s_sandbox"'))).not.toContain("ec2:");
+  });
+
+  it("keeps launch-template user data under the EC2 16 KiB raw limit", async () => {
+    const terraform = await fs.readFile(path.join(process.cwd(), "deploy/terraform/aws/k3s.tf"), "utf8");
+    const server = await fs.readFile(path.join(process.cwd(), "deploy/terraform/aws/templates/k3s-user-data.sh.tftpl"));
+    const agent = await fs.readFile(path.join(process.cwd(), "deploy/terraform/aws/templates/k3s-sandbox-agent-user-data.sh.tftpl"));
+    // The server script outgrew 16 KiB, so it ships gzip-compressed. Interpolated
+    // ARNs and IDs add well under the remaining headroom.
+    expect(terraform).toContain('user_data = base64gzip(templatefile("${path.module}/templates/k3s-user-data.sh.tftpl"');
+    expect(gzipSync(server, { level: 9 }).length).toBeLessThan(12_288);
+    expect(terraform).toContain('user_data = base64encode(templatefile("${path.module}/templates/k3s-sandbox-agent-user-data.sh.tftpl"');
+    expect(agent.length).toBeLessThan(12_288);
   });
 
   it("scales the sandbox pool on demand without touching K3s or other groups", async () => {

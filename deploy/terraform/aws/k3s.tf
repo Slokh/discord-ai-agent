@@ -276,7 +276,9 @@ resource "aws_launch_template" "k3s" {
     }
   }
 
-  user_data = base64encode(templatefile("${path.module}/templates/k3s-user-data.sh.tftpl", {
+  # EC2 caps raw user data at 16 KiB and the server script outgrew it, so it
+  # ships gzip-compressed; cloud-init on AL2023 decompresses it before running.
+  user_data = base64gzip(templatefile("${path.module}/templates/k3s-user-data.sh.tftpl", {
     agent_join_secret_arn  = aws_secretsmanager_secret.k3s_agent_join.arn
     application_secret_arn = aws_secretsmanager_secret.application_kubernetes.arn
     aws_region             = var.aws_region

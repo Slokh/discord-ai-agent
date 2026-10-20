@@ -20,7 +20,7 @@ The model selects `runSandboxAgent` with `mode=computer` when a member wants som
 - `operators`: open only to `BOT_OWNER_USER_ID` and `OPS_ALLOWLIST_USER_IDS`, so a new mode can be proven against production before members can start it.
 - `everyone`: open to every guild member.
 
-The tool is hidden while every mode is off. A disabled mode or missing credential returns a not-configured result, and a member who is not an operator gets a clear operators-only reply at the `operators` stage. Computer tasks are currently at `operators`. Repository modes additionally require GitHub credentials; the computer mode does not. Enable a mode only after the isolated sandbox pool described below is deployed.
+The tool is hidden while every mode is off. A disabled mode or missing credential returns a not-configured result, and a member who is not an operator gets a clear operators-only reply at the `operators` stage. Every mode is currently `off`: computer tasks were paused after their first production run until their latency and cost are reviewed, so the tool is hidden. Repository modes additionally require GitHub credentials; the computer mode does not. Enable a mode only after the isolated sandbox pool described below is deployed.
 
 Sandbox admission is available to all guild members. Safety comes from isolated execution, scoped credentials, branch protection, required verification, and release scanning—not from trying to classify privileged language in chat.
 

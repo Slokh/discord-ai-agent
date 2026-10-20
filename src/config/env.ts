@@ -60,9 +60,9 @@ export const productConfig = {
     // Who may start each sandbox task mode: "off", "operators" (the bot owner
     // and ops allowlist), or "everyone". Every mode shares one sandbox
     // implementation. The execution subsystem stays dormant while every mode
-    // is off. Computer tasks are open to operators while they are proven on
-    // the isolated sandbox pool.
-    modes: { code_change: "off", diagnosis: "off", computer: "operators" } satisfies Record<SandboxTaskMode, SandboxModeRollout> as Record<SandboxTaskMode, SandboxModeRollout>,
+    // is off. Computer tasks are paused until their latency and cost are
+    // reviewed; the sandbox pool stays installed and scales to zero.
+    modes: { code_change: "off", diagnosis: "off", computer: "off" } satisfies Record<SandboxTaskMode, SandboxModeRollout> as Record<SandboxTaskMode, SandboxModeRollout>,
     // Every sandbox Job runs on the dedicated tainted pool under gVisor, never
     // beside production Postgres. Names match the Helm chart and Terraform.
     isolation: {

@@ -167,6 +167,31 @@ describe("model-led mutating tools", () => {
     expect(response.status).toBe("error");
     expect(enqueueAgentTask).not.toHaveBeenCalled();
   });
+
+  it("keeps an operators-stage computer task closed to other members", async () => {
+    const enqueueAgentTask = vi.fn();
+    const ctx = {
+      config: {
+        github: {},
+        allowlists: { ownerUserId: "owner", opsUserIds: [] },
+        execution: { taskSigningSecret: "secret", sandbox: { modes: { code_change: "off", diagnosis: "off", computer: "operators" } } },
+      },
+      repo: { auditTool: vi.fn(async () => undefined) },
+      jobs: { enqueueAgentTask },
+      guildId: "guild",
+      channelId: "channel",
+      userId: "member",
+      userDisplayName: "Member",
+      visibleChannelIds: ["channel"],
+      threadKey: "discord:guild:channel"
+    } as unknown as ToolContext;
+
+    const response = await createAgentUpdateFromRequest(ctx, "try the linked game", "Try the game", { taskType: "computer_task" });
+
+    expect(response.content).toContain("only open to the bot's operators");
+    expect(response.status).toBe("error");
+    expect(enqueueAgentTask).not.toHaveBeenCalled();
+  });
 });
 
 describe("formatAgentTaskResult", () => {

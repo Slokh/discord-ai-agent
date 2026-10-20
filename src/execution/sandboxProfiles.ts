@@ -115,6 +115,15 @@ export const SANDBOX_TASK_MODES = ["code_change", "diagnosis", "computer"] as co
 
 export type SandboxTaskMode = (typeof SANDBOX_TASK_MODES)[number];
 
+/**
+ * Staged rollout for each mode: dormant, open only to the configured bot
+ * owner and ops allowlist while it is proven in production, then open to
+ * every guild member.
+ */
+export const SANDBOX_MODE_ROLLOUTS = ["off", "operators", "everyone"] as const;
+
+export type SandboxModeRollout = (typeof SANDBOX_MODE_ROLLOUTS)[number];
+
 export function taskTypeForSandboxMode(mode: SandboxTaskMode): Extract<AgentTaskType, "code_update" | "diagnosis" | "computer_task"> {
   if (mode === "diagnosis") return "diagnosis";
   if (mode === "computer") return "computer_task";

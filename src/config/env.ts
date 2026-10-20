@@ -4,7 +4,7 @@ import { z } from "zod";
 import { parseGitHubRepository } from "../github/repository.js";
 import { assertNoRetiredEnvironmentVariables, environmentVariableNames } from "./environment.js";
 import { CONSOLE_PUBLIC_URL } from "../console/constants.js";
-import { SANDBOX_TASK_MODES, sandboxProfileRequires, taskTypeForSandboxMode } from "../execution/sandboxProfiles.js";
+import { SANDBOX_TASK_MODES, sandboxProfileRequires, taskTypeForSandboxMode, type SandboxModeRollout, type SandboxTaskMode } from "../execution/sandboxProfiles.js";
 
 type ProcessRole = "all" | "api" | "bot" | "worker" | "console";
 const PUBLIC_REPOSITORY_URL = "https://github.com/Slokh/discord-ai-agent";
@@ -57,11 +57,12 @@ export const productConfig = {
     maxConcurrentTasks: 1,
     taskTimeoutSeconds: 1_800,
     ttlSecondsAfterFinished: 3_600,
-    // Which sandbox task modes members may start. Every mode shares one
-    // sandbox implementation; enable a mode only once the isolated sandbox
-    // node, gVisor runtime, and credential proxy below are deployed. The
-    // execution subsystem stays dormant while every mode is off.
-    modes: { code_change: false, diagnosis: false, computer: false },
+    // Who may start each sandbox task mode: "off", "operators" (the bot owner
+    // and ops allowlist), or "everyone". Every mode shares one sandbox
+    // implementation. The execution subsystem stays dormant while every mode
+    // is off. Computer tasks are open to operators while they are proven on
+    // the isolated sandbox pool.
+    modes: { code_change: "off", diagnosis: "off", computer: "operators" } satisfies Record<SandboxTaskMode, SandboxModeRollout> as Record<SandboxTaskMode, SandboxModeRollout>,
     // Every sandbox Job runs on the dedicated tainted pool under gVisor, never
     // beside production Postgres. Names match the Helm chart and Terraform.
     isolation: {
@@ -246,7 +247,7 @@ export function loadConfig(argv = process.argv) {
       // explicit, bounded backfill.
       embeddingEnabled: false,
       // The sandbox task worker runs only when some sandbox mode is enabled.
-      taskEnabled: Object.values(productConfig.sandbox.modes).some(Boolean),
+      taskEnabled: Object.values(productConfig.sandbox.modes).some((rollout) => rollout !== "off"),
       agentRuntimeEnabled: true,
       retention: productConfig.retention,
       memoryCompaction: {
@@ -366,7 +367,7 @@ export function assertExecutionConfig(config: AppConfig): asserts config is AppC
   const missing: string[] = [];
   if (!config.openRouter.apiKey) missing.push("OPENROUTER_API_KEY");
   const repositoryModesEnabled = SANDBOX_TASK_MODES.some((mode) =>
-    config.execution.sandbox.modes[mode] && sandboxProfileRequires(taskTypeForSandboxMode(mode), "github"));
+    config.execution.sandbox.modes[mode] !== "off" && sandboxProfileRequires(taskTypeForSandboxMode(mode), "github"));
   if (repositoryModesEnabled && !hasGitHubTaskCredential(config)) missing.push("GITHUB_TOKEN or GitHub App credentials");
   if (missing.length > 0) throw new Error(`Missing required sandbox execution secret/config values: ${missing.join(", ")}`);
   if (repositoryModesEnabled) parseGitHubRepository(config.github.repository);

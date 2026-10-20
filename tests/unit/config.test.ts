@@ -31,10 +31,12 @@ describe("config", () => {
       }));
       expect(config.execution).not.toHaveProperty("codegenBackend");
       expect(config.execution).not.toHaveProperty("codegenLease");
+      // Computer tasks are being proven with operators; repository modes stay dormant.
+      expect(config.execution.sandbox.modes).toEqual({ code_change: "off", diagnosis: "off", computer: "operators" });
       expect(config.worker).toEqual(expect.objectContaining({
         crawlEnabled: true,
         embeddingEnabled: false,
-        taskEnabled: false,
+        taskEnabled: true,
         agentRuntimeEnabled: true
       }));
       expect(config.payments).toEqual({

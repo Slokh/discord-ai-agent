@@ -15,7 +15,12 @@ Code must branch on a profile property, never on a task-type literal. Adding a w
 
 ## Admission and authority
 
-The model selects `runSandboxAgent` with `mode=computer` when a member wants something run or used, `mode=code_change` for an explicit repository change, and `mode=diagnosis` for explicitly read-only repository, PR, CI, or deployment investigation. Each mode is enabled independently by `productConfig.sandbox.modes`. The tool is hidden while every mode is off, and a disabled mode or missing credential returns a not-configured result. Repository modes additionally require GitHub credentials; the computer mode does not. Enable a mode only after the isolated sandbox pool described below is deployed.
+The model selects `runSandboxAgent` with `mode=computer` when a member wants something run or used, `mode=code_change` for an explicit repository change, and `mode=diagnosis` for explicitly read-only repository, PR, CI, or deployment investigation. Each mode has its own rollout stage in `productConfig.sandbox.modes`:
+- `off`: dormant.
+- `operators`: open only to `BOT_OWNER_USER_ID` and `OPS_ALLOWLIST_USER_IDS`, so a new mode can be proven against production before members can start it.
+- `everyone`: open to every guild member.
+
+The tool is hidden while every mode is off. A disabled mode or missing credential returns a not-configured result, and a member who is not an operator gets a clear operators-only reply at the `operators` stage. Computer tasks are currently at `operators`. Repository modes additionally require GitHub credentials; the computer mode does not. Enable a mode only after the isolated sandbox pool described below is deployed.
 
 Sandbox admission is available to all guild members. Safety comes from isolated execution, scoped credentials, branch protection, required verification, and release scanning—not from trying to classify privileged language in chat.
 

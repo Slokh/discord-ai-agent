@@ -3,7 +3,7 @@ import { resolveGitHubTaskToken } from "../github/appToken.js";
 import { parseGitHubRepository } from "../github/repository.js";
 import { summarizeForAudit, truncateForDiscord } from "../util/text.js";
 import type { AgentTaskRecord, AgentTaskStatus, SandboxCommandEvent, TaskEvent } from "../db/repositories.js";
-import { missingSandboxModeConfig } from "../capabilities/codeUpdates.js";
+import { missingSandboxModeConfig, sandboxModeAllowsRequester } from "../capabilities/codeUpdates.js";
 import { sandboxModeForTaskType, taskTypeForSandboxMode, type SandboxTaskMode } from "../execution/sandboxProfiles.js";
 import type { AgentTaskJob } from "../execution/types.js";
 import type { AgentResponse, ToolContext } from "./types.js";
@@ -549,8 +549,12 @@ export function formatSandboxCommandEvents(events: SandboxCommandEvent[]) {
 
 function sandboxModeNotConfiguredMessage(ctx: ToolContext, mode: SandboxTaskMode): string | null {
   const missing = missingSandboxModeConfig(ctx.config, mode);
-  if (missing.length === 0) return null;
   const label = mode === "computer" ? "Isolated computer tasks" : mode === "diagnosis" ? "Repository diagnosis tasks" : "Code-change tasks";
+  if (missing.length === 0) {
+    return sandboxModeAllowsRequester(ctx.config, mode, ctx.userId)
+      ? null
+      : `${label} are only open to the bot's operators while they're being tested, so I can't start one for you yet.`;
+  }
   return [
     `${label} are not enabled on this bot, so I can't start one.`,
     `Missing configuration: ${missing.join(", ")}.`,

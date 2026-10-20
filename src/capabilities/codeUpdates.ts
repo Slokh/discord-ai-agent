@@ -4,7 +4,7 @@ import { hasGitHubTaskCredential } from "../config/env.js";
 import type { AgentRuntimeRepository, AgentRuntimeSessionRecord } from "../db/agentRuntimeRepository.js";
 import type { DiscordAiAgentRepository } from "../db/repositories.js";
 import { codegenExecutionSelection } from "../execution/codegenSelection.js";
-import { SANDBOX_TASK_MODES, sandboxProfileRequires, taskTypeForSandboxMode, type SandboxTaskMode } from "../execution/sandboxProfiles.js";
+import { SANDBOX_TASK_MODES, sandboxProfileRequires, taskTypeForSandboxMode, type SandboxModeRollout, type SandboxTaskMode } from "../execution/sandboxProfiles.js";
 import type { AgentTaskJob } from "../execution/types.js";
 import type { JobRuntime } from "../jobs/queue.js";
 
@@ -16,12 +16,25 @@ export type AgentRuntimeCodeUpdateEnqueueResult = {
 /** What keeps one sandbox mode from starting: its product switch, then the credentials its profile needs. */
 export function missingSandboxModeConfig(config: AppConfig, mode: SandboxTaskMode): string[] {
   const missing: string[] = [];
-  if (!config.execution?.sandbox?.modes?.[mode]) missing.push(`productConfig.sandbox.modes.${mode}`);
+  if (sandboxModeRollout(config, mode) === "off") missing.push(`productConfig.sandbox.modes.${mode}`);
   if (sandboxProfileRequires(taskTypeForSandboxMode(mode), "github") && !hasGitHubTaskCredential(config)) {
     missing.push("GITHUB_TOKEN (or GITHUB_APP_ID + GITHUB_APP_PRIVATE_KEY + GITHUB_APP_INSTALLATION_ID)");
   }
   if (!config.execution?.taskSigningSecret) missing.push("TASK_SIGNING_SECRET");
   return missing;
+}
+
+export function sandboxModeRollout(config: AppConfig, mode: SandboxTaskMode): SandboxModeRollout {
+  return config.execution?.sandbox?.modes?.[mode] ?? "off";
+}
+
+/** Whether this requester may start the mode at its current rollout stage. */
+export function sandboxModeAllowsRequester(config: AppConfig, mode: SandboxTaskMode, userId: string) {
+  const rollout = sandboxModeRollout(config, mode);
+  if (rollout === "everyone") return true;
+  if (rollout === "off") return false;
+  const owner = config.allowlists?.ownerUserId;
+  return Boolean((owner && owner === userId) || config.allowlists?.opsUserIds?.includes(userId));
 }
 
 export function availableSandboxModes(config: AppConfig): SandboxTaskMode[] {

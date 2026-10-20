@@ -167,6 +167,43 @@ created_id=""
 EOF
 chmod 0755 /usr/local/sbin/discord-ai-agent-refresh-agent-join
 
+# Sandbox agents are disposable spot instances, and nothing deregisters one on
+# scale-in or interruption. This removes a sandbox-pool Node, and the K3s
+# node-password Secret that would reject the next instance with its hostname,
+# once it has been NotReady for ten minutes and no live EC2 instance launched
+# before it registered still holds its address. It never selects the server
+# node. The operator installer copies this block verbatim, so it must not use
+# template interpolation.
+cat >/usr/local/sbin/discord-ai-agent-clean-sandbox-nodes <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+source /etc/discord-ai-agent/runtime.env
+/usr/local/bin/k3s kubectl get nodes --selector discord-ai-agent.dev/pool=sandbox -o json \
+  | jq -r '.items[]
+    | select(.metadata.name != "discord-ai-agent-production")
+    | select(.metadata.labels["node-role.kubernetes.io/control-plane"] == null)
+    | ((.status.conditions // []) | map(select(.type == "Ready")) | first) as $ready
+    | select(($ready.status // "Unknown") != "True")
+    | select(now - (($ready.lastTransitionTime // .metadata.creationTimestamp) | fromdateiso8601) > 600)
+    | [.metadata.name, .metadata.creationTimestamp, ((.status.addresses // []) | map(select(.type == "InternalIP")) | first | .address // "")]
+    | @tsv' \
+  | while IFS=$'\t' read -r node created address; do
+    [[ "$address" =~ ^10\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || continue
+    # Any AWS or date-parsing failure aborts the run before a deletion. An
+    # instance that launched after the Node registered reused its address and
+    # cannot own it; K3s rejects that instance until the old record is gone.
+    owners="$(aws ec2 describe-instances --region "$AWS_REGION" \
+      --filters "Name=private-ip-address,Values=$address" 'Name=instance-state-name,Values=pending,running,shutting-down,stopping,stopped' \
+      --query 'Reservations[].Instances[].LaunchTime' --output json \
+      | jq --arg created "$created" '[.[] | sub("\\.[0-9]+"; "") | sub("\\+00:00$"; "Z") | fromdateiso8601 | select(. <= ($created | fromdateiso8601))] | length')"
+    [ "$owners" = 0 ] || continue
+    /usr/local/bin/k3s kubectl delete node "$node" --ignore-not-found >/dev/null
+    /usr/local/bin/k3s kubectl --namespace kube-system delete secret "$node.node-password.k3s" --ignore-not-found >/dev/null
+    echo "Removed stale sandbox node $node."
+  done
+EOF
+chmod 0755 /usr/local/sbin/discord-ai-agent-clean-sandbox-nodes
+
 cat >/etc/systemd/system/discord-ai-agent-storage.service <<'EOF'
 [Unit]
 Description=Attach and mount Discord AI Agent production state
@@ -281,8 +318,34 @@ Unit=discord-ai-agent-agent-join-refresh.service
 WantedBy=timers.target
 EOF
 
+cat >/etc/systemd/system/discord-ai-agent-sandbox-node-cleanup.service <<'EOF'
+[Unit]
+Description=Remove sandbox agent Nodes whose EC2 instance is gone
+# Requisite, not Requires: a cleanup run must never start a stopped K3s server.
+Requisite=k3s.service
+After=k3s.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/discord-ai-agent-clean-sandbox-nodes
+EOF
+
+cat >/etc/systemd/system/discord-ai-agent-sandbox-node-cleanup.timer <<'EOF'
+[Unit]
+Description=Remove stale sandbox agent Nodes every five minutes
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=5min
+Unit=discord-ai-agent-sandbox-node-cleanup.service
+
+[Install]
+WantedBy=timers.target
+EOF
+
 systemctl daemon-reload
-systemctl enable discord-ai-agent-storage.service k3s.service discord-ai-agent-bootstrap.service discord-ai-agent-ecr-refresh.timer discord-ai-agent-agent-join-refresh.timer
+systemctl enable discord-ai-agent-storage.service k3s.service discord-ai-agent-bootstrap.service discord-ai-agent-ecr-refresh.timer discord-ai-agent-agent-join-refresh.timer discord-ai-agent-sandbox-node-cleanup.timer
 systemctl start --no-block k3s.service
 systemctl start discord-ai-agent-ecr-refresh.timer
 systemctl start discord-ai-agent-agent-join-refresh.timer
+systemctl start discord-ai-agent-sandbox-node-cleanup.timer

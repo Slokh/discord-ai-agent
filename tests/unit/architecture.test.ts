@@ -206,7 +206,7 @@ describe("architecture guardrails", () => {
   it("never changes K3s server token flags and joins sandbox agents with expiring bootstrap tokens", async () => {
     const server = await fs.readFile(path.join(process.cwd(), "deploy/terraform/aws/templates/k3s-user-data.sh.tftpl"), "utf8");
     const agent = await fs.readFile(path.join(process.cwd(), "deploy/terraform/aws/templates/k3s-sandbox-agent-user-data.sh.tftpl"), "utf8");
-    const installer = await fs.readFile(path.join(process.cwd(), "scripts/installK3sAgentJoinRefresh.sh"), "utf8");
+    const installer = await fs.readFile(path.join(process.cwd(), "scripts/installK3sSandboxServerUnits.sh"), "utf8");
     // Adding a token flag to the existing cluster rewrote cred/passwd, after
     // which K3s refused to start because the file was newer than the datastore.
     const serverUnit = heredoc(server, "/etc/systemd/system/k3s.service");
@@ -235,6 +235,36 @@ describe("architecture guardrails", () => {
     expect(installer).not.toMatch(/>\s*"?\$unit"?|>\s*\/etc\/systemd\/system\/k3s\.service|sed -i|systemctl (?:restart|stop) k3s/);
     expect(agent).toContain("grep -Eq '^K10[0-9a-f]{64}::[a-z0-9]{6}\\.[a-z0-9]{16}$'");
     expect(heredoc(agent, "/etc/systemd/system/k3s-agent.service")).toContain("ExecStartPre=/usr/local/sbin/discord-ai-agent-agent-join");
+  });
+
+  it("removes only stale sandbox Nodes whose EC2 instance is gone", async () => {
+    const server = await fs.readFile(path.join(process.cwd(), "deploy/terraform/aws/templates/k3s-user-data.sh.tftpl"), "utf8");
+    const installer = await fs.readFile(path.join(process.cwd(), "scripts/installK3sSandboxServerUnits.sh"), "utf8");
+    const terraform = await fs.readFile(path.join(process.cwd(), "deploy/terraform/aws/k3s.tf"), "utf8");
+    const cleanup = heredoc(server, "/usr/local/sbin/discord-ai-agent-clean-sandbox-nodes");
+    expect(cleanup).toContain("get nodes --selector discord-ai-agent.dev/pool=sandbox -o json");
+    expect(cleanup).toContain('select(.metadata.name != "discord-ai-agent-production")');
+    expect(cleanup).toContain('select(.metadata.labels["node-role.kubernetes.io/control-plane"] == null)');
+    expect(cleanup).toContain('select(($ready.status // "Unknown") != "True")');
+    expect(cleanup).toContain("fromdateiso8601) > 600)");
+    // Only an instance that launched before the Node registered can own it.
+    expect(cleanup).toContain("Name=instance-state-name,Values=pending,running,shutting-down,stopping,stopped");
+    expect(cleanup).toContain('select(. <= ($created | fromdateiso8601))');
+    expect(cleanup).toMatch(/owners="\$\(aws ec2 describe-instances [\s\S]*?\)"\n\s+\[ "\$owners" = 0 \] \|\| continue\n\s+[^\n]*kubectl delete node "\$node"/);
+    expect(cleanup).toContain('delete secret "$node.node-password.k3s" --ignore-not-found');
+    expect(cleanup).not.toMatch(/k3s\.service|systemctl|--all\b|delete nodes?\s+--selector/);
+    const service = heredoc(server, "/etc/systemd/system/discord-ai-agent-sandbox-node-cleanup.service");
+    expect(service).toContain("Requisite=k3s.service");
+    expect(service).not.toContain("Requires=");
+    expect(heredoc(server, "/etc/systemd/system/discord-ai-agent-sandbox-node-cleanup.timer")).toContain("OnUnitActiveSec=5min");
+    expect(server).toMatch(/systemctl enable [^\n]*discord-ai-agent-sandbox-node-cleanup\.timer/);
+    for (const target of ["/usr/local/sbin/discord-ai-agent-clean-sandbox-nodes", "/etc/systemd/system/discord-ai-agent-sandbox-node-cleanup.service", "/etc/systemd/system/discord-ai-agent-sandbox-node-cleanup.timer"]) {
+      expect(heredoc(server, target)).not.toMatch(/\$\{|%\{/);
+      expect(installer).toContain(`block ${target}`);
+    }
+    // The server role already describes instances; the sandbox role must not.
+    expect(terraform.match(/"ec2:DescribeInstances"/g)).toHaveLength(1);
+    expect(terraform.slice(terraform.indexOf('resource "aws_iam_role" "k3s_sandbox"'))).not.toContain("ec2:");
   });
 
   it("gives only the worker the sandbox-launcher identity", async () => {

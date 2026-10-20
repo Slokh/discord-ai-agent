@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# One-time, idempotent install of the sandbox agent join-token refresher on the
-# already-running production K3s host, so the host need not be replaced to
-# publish a join record. It copies the refresher blocks verbatim from the server
-# user data, retires the earlier agent-token publisher, and never modifies
-# k3s.service. Pass --print to review the remote script without running it.
+# Idempotent install of the server-side sandbox units (the agent join-token
+# refresher and the stale sandbox Node cleanup) on the already-running
+# production K3s host, so the host need not be replaced to adopt them. It copies
+# their blocks verbatim from the server user data, retires the earlier
+# agent-token publisher, and never modifies k3s.service. Pass --print to review
+# the remote script without running it.
 
 root="$(cd "$(dirname "$0")/.." && pwd)"
 template="$root/deploy/terraform/aws/templates/k3s-user-data.sh.tftpl"
@@ -54,16 +55,30 @@ PREAMBLE
   block /etc/systemd/system/discord-ai-agent-agent-join-refresh.service
   echo
   block /etc/systemd/system/discord-ai-agent-agent-join-refresh.timer
+  echo
+  block /usr/local/sbin/discord-ai-agent-clean-sandbox-nodes
+  echo 'chmod 0755 /usr/local/sbin/discord-ai-agent-clean-sandbox-nodes'
+  echo
+  block /etc/systemd/system/discord-ai-agent-sandbox-node-cleanup.service
+  echo
+  block /etc/systemd/system/discord-ai-agent-sandbox-node-cleanup.timer
   cat <<'POSTAMBLE'
 
 systemctl daemon-reload
 systemctl start discord-ai-agent-agent-join-refresh.service
 systemctl enable --now discord-ai-agent-agent-join-refresh.timer >/dev/null 2>&1
+cleanup_started="$(date -u '+%Y-%m-%d %H:%M:%S')"
+systemctl start discord-ai-agent-sandbox-node-cleanup.service
+systemctl enable --now discord-ai-agent-sandbox-node-cleanup.timer >/dev/null 2>&1
 test "$(sha256sum "$unit")" = "$unit_digest"
 
 printf 'k3s=%s\n' "$(systemctl is-active k3s.service)"
 printf 'refresh=%s\n' "$(systemctl show -p Result --value discord-ai-agent-agent-join-refresh.service)"
 printf 'timer=%s\n' "$(systemctl is-active discord-ai-agent-agent-join-refresh.timer)"
+printf 'cleanup=%s\n' "$(systemctl show -p Result --value discord-ai-agent-sandbox-node-cleanup.service)"
+printf 'cleanup_timer=%s\n' "$(systemctl is-active discord-ai-agent-sandbox-node-cleanup.timer)"
+journalctl --utc --since "$cleanup_started" -u discord-ai-agent-sandbox-node-cleanup.service -o cat | grep '^Removed stale sandbox node ' || true
+printf 'sandbox_nodes=%s\n' "$(/usr/local/bin/k3s kubectl get nodes --selector discord-ai-agent.dev/pool=sandbox --no-headers | wc -l)"
 /usr/local/bin/k3s kubectl --namespace kube-system get secrets \
   --field-selector type=bootstrap.kubernetes.io/token -o json \
   | jq -r '[.items[] | select((.data.description // "" | @base64d) == "sandbox-agent") | .data.expiration | @base64d]
@@ -76,7 +91,7 @@ if [ "${1:-}" = "--print" ]; then
   exit 0
 fi
 if [ "$#" -ne 0 ]; then
-  echo "usage: installK3sAgentJoinRefresh.sh [--print]" >&2
+  echo "usage: installK3sSandboxServerUnits.sh [--print]" >&2
   exit 64
 fi
 

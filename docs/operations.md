@@ -249,6 +249,8 @@ AWS_PROFILE=production-operator aws autoscaling set-desired-capacity \
 
 Spot interruption terminates any running sandbox; the launcher's single infrastructure retry and `sandbox_disappeared` diagnosis cover it.
 
+Scale-in and spot interruption leave the agent's Node object `NotReady`, with its `<hostname>.node-password.k3s` Secret in `kube-system`. K3s would also reject a later instance that reused that hostname. Every five minutes the server's `discord-ai-agent-sandbox-node-cleanup` timer deletes both for each `discord-ai-agent.dev/pool=sandbox` Node that has been `NotReady` for more than ten minutes, but only when EC2 reports no pending, running, stopping, or stopped instance at its private IP that launched before the Node registered. It never selects `discord-ai-agent-production`. Any AWS or Kubernetes error ends the run before it deletes anything, and each deletion is logged as `Removed stale sandbox node <name>.` in the unit's journal.
+
 The 30 GiB root disk is disposable. The retained 20 GiB encrypted Postgres disk and separate 8 GiB encrypted K3s-state disk are pinned to the same availability zone and backed up daily for 14 days. The Auto Scaling group replaces a failed host; bootstrap attaches both exact volumes before starting K3s. Secrets Manager retains the two Kubernetes Secret manifests without putting their values in Terraform state. See [Single-node K3s production](architecture/single-node-k3s.md) for the complete decision and recovery contract.
 
 GitHub Actions deploys the exact CI-published image by sending `scripts/deployK3s.sh` to the host through Systems Manager. The script verifies its own SHA, downloads the chart from the exact commit, refreshes the namespace-local ECR credential, upgrades Postgres and the application with Helm, and promotes the release only after content-free checks pass. The chart runs migrations as a hook; application pods never run migrations on startup.
@@ -277,16 +279,16 @@ terraform show k3s-join.tfplan
 terraform apply k3s-join.tfplan
 ```
 
-Apply only if the plan updates `user_data` (and the derived `latest_version`) on those two templates and changes nothing else. Both Auto Scaling groups follow `$Latest` without an instance refresh, so the apply replaces no instance. The next launch, including self-healing, boots the fixed user data.
+Apply only if the plan updates `user_data` (and the derived `latest_version`) on one or both of those templates and changes nothing else. Both Auto Scaling groups follow `$Latest` without an instance refresh, so the apply replaces no instance. The next launch, including self-healing, boots the fixed user data.
 
-The running server does not need replacement. Install the refresher on it once with the idempotent installer, which copies the refresher, service, and timer blocks verbatim from the server template. It retires the earlier boot-time publisher and refuses to run if `k3s.service` still carries a token flag. It never modifies `k3s.service`, and it prints only unit states and token expiry. Review the script it sends with `--print`:
+The running server does not need replacement. Install the server-side sandbox units on it with the idempotent installer. It copies the join refresher and the stale Node cleanup (script, service, and timer each) verbatim from the server template, and it refuses any block that uses template interpolation. It retires the earlier boot-time publisher and refuses to run if `k3s.service` still carries a token flag. It never modifies `k3s.service` and checks that the unit's digest is unchanged. It prints only unit states, removed sandbox Node names, the remaining sandbox Node count, and token expiry. Review the script it sends with `--print`:
 
 ```bash
-scripts/installK3sAgentJoinRefresh.sh --print
-AWS_PROFILE=production-operator scripts/installK3sAgentJoinRefresh.sh
+scripts/installK3sSandboxServerUnits.sh --print
+AWS_PROFILE=production-operator scripts/installK3sSandboxServerUnits.sh
 ```
 
-Expect `k3s=active`, `refresh=success`, `timer=active`, and `sandbox_agent_tokens=1`. Confirm a new secret version without reading its value, then test a join by scaling the pool to 1, listing sandbox nodes, and scaling back to 0:
+Expect `k3s=active`, `refresh=success`, `timer=active`, `cleanup=success`, `cleanup_timer=active`, and `sandbox_agent_tokens=1`. With the pool at zero, expect `sandbox_nodes=0` and a `Removed stale sandbox node` line for each leftover agent, such as the join test's `ip-10-0-102-112.ec2.internal`. Rerunning the installer is safe: it mints a fresh join token and runs one cleanup pass. Confirm a new secret version without reading its value, then test a join by scaling the pool to 1, listing sandbox nodes, and scaling back to 0:
 
 ```bash
 AWS_PROFILE=production-operator aws secretsmanager list-secret-version-ids \

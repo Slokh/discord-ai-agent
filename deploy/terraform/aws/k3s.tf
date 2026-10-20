@@ -125,6 +125,8 @@ data "aws_iam_policy_document" "k3s_runtime" {
     ]
   }
 
+  # DescribeInstances also lets the stale sandbox Node cleanup confirm that an
+  # agent's instance is gone. Describe actions do not support resource scoping.
   statement {
     sid = "DescribeStorage"
     actions = [

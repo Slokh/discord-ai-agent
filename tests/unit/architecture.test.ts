@@ -301,6 +301,17 @@ describe("architecture guardrails", () => {
     expect(terraform.slice(terraform.indexOf('resource "aws_iam_role" "k3s_sandbox"'))).not.toContain("autoscaling:");
   });
 
+  it("rolls out server sandbox units only from main through a checked, confirmed plan", async () => {
+    const rollout = await fs.readFile(path.join(process.cwd(), "scripts/rolloutK3sSandboxServerUnits.sh"), "utf8");
+    expect(rollout).toContain('[ "$(git -C "$root" rev-parse HEAD)" != "$(git -C "$root" rev-parse origin/main)" ]');
+    expect(rollout).toContain("-target=aws_launch_template.k3s -target=aws_launch_template.k3s_sandbox \\\n  -target=aws_iam_role_policy.k3s_runtime -out=");
+    expect(rollout).toContain('elif .change.actions != ["update"] then');
+    expect(rollout).toContain('terraform -chdir="$terraform_dir" apply -input=false "$work/k3s-join.tfplan"');
+    expect(rollout).toMatch(/confirm "Apply this plan\?[^\n]*" apply\n\s+terraform -chdir/);
+    expect(rollout).toMatch(/confirm "Run the installer[^\n]*" install\n"\$root\/scripts\/installK3sSandboxServerUnits\.sh" \|/);
+    expect(rollout).not.toMatch(/auto-approve|sed -i|systemctl/);
+  });
+
   it("gives only the worker the sandbox-launcher identity", async () => {
     const worker = await fs.readFile(path.join(process.cwd(), "deploy/helm/discord-ai-agent/templates/worker.yaml"), "utf8");
     const proxy = await fs.readFile(path.join(process.cwd(), "deploy/helm/discord-ai-agent/templates/egress-proxy.yaml"), "utf8");

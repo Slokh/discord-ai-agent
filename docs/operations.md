@@ -272,6 +272,15 @@ Never add, remove, or change token flags (`--token`, `--token-file`, `--agent-to
 
 Join changes live in the launch-template user data. Apply them from a clean `main` as a targeted, reviewed plan of only the two launch templates. Production's variables were rebuilt at `~/.config/<prefix>/production.tfvars`.
 
+`scripts/rolloutK3sSandboxServerUnits.sh` runs the whole sequence below. It refuses to run unless HEAD is a clean, current `origin/main`, and it lists the sandbox nodes. It writes the installer's remote script for review, plans only the two launch templates and the server runtime policy, and rejects any plan that is not an in-place update of their `user_data` (with `latest_version`/`default_version`) or `policy`. It applies that saved plan, then runs the installer and checks every expected status line. It asks you to type `apply` and then `install` before each production change. Use `--plan-only` to stop after the checked plan:
+
+```bash
+scripts/rolloutK3sSandboxServerUnits.sh --var-file "$HOME/.config/<prefix>/production.tfvars" --plan-only
+scripts/rolloutK3sSandboxServerUnits.sh --var-file "$HOME/.config/<prefix>/production.tfvars"
+```
+
+The manual equivalent:
+
 ```bash
 cd deploy/terraform/aws
 eval "$(aws configure export-credentials --profile production-operator --format env)"

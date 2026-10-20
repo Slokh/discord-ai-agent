@@ -206,7 +206,7 @@ describe("architecture guardrails", () => {
   it("never changes K3s server token flags and joins sandbox agents with expiring bootstrap tokens", async () => {
     const server = await fs.readFile(path.join(process.cwd(), "deploy/terraform/aws/templates/k3s-user-data.sh.tftpl"), "utf8");
     const agent = await fs.readFile(path.join(process.cwd(), "deploy/terraform/aws/templates/k3s-sandbox-agent-user-data.sh.tftpl"), "utf8");
-    const installer = await fs.readFile(path.join(process.cwd(), "scripts/installK3sAgentJoinRefresh.sh"), "utf8");
+    const installer = await fs.readFile(path.join(process.cwd(), "scripts/installK3sSandboxServerUnits.sh"), "utf8");
     // Adding a token flag to the existing cluster rewrote cred/passwd, after
     // which K3s refused to start because the file was newer than the datastore.
     const serverUnit = heredoc(server, "/etc/systemd/system/k3s.service");
@@ -235,6 +235,81 @@ describe("architecture guardrails", () => {
     expect(installer).not.toMatch(/>\s*"?\$unit"?|>\s*\/etc\/systemd\/system\/k3s\.service|sed -i|systemctl (?:restart|stop) k3s/);
     expect(agent).toContain("grep -Eq '^K10[0-9a-f]{64}::[a-z0-9]{6}\\.[a-z0-9]{16}$'");
     expect(heredoc(agent, "/etc/systemd/system/k3s-agent.service")).toContain("ExecStartPre=/usr/local/sbin/discord-ai-agent-agent-join");
+  });
+
+  it("removes only stale sandbox Nodes whose EC2 instance is gone", async () => {
+    const server = await fs.readFile(path.join(process.cwd(), "deploy/terraform/aws/templates/k3s-user-data.sh.tftpl"), "utf8");
+    const installer = await fs.readFile(path.join(process.cwd(), "scripts/installK3sSandboxServerUnits.sh"), "utf8");
+    const terraform = await fs.readFile(path.join(process.cwd(), "deploy/terraform/aws/k3s.tf"), "utf8");
+    const cleanup = heredoc(server, "/usr/local/sbin/discord-ai-agent-clean-sandbox-nodes");
+    expect(cleanup).toContain("get nodes --selector discord-ai-agent.dev/pool=sandbox -o json");
+    expect(cleanup).toContain('select(.metadata.name != "discord-ai-agent-production")');
+    expect(cleanup).toContain('select(.metadata.labels["node-role.kubernetes.io/control-plane"] == null)');
+    expect(cleanup).toContain('select(($ready.status // "Unknown") != "True")');
+    expect(cleanup).toContain("fromdateiso8601) > 600)");
+    // Only an instance that launched before the Node registered can own it.
+    expect(cleanup).toContain("Name=instance-state-name,Values=pending,running,shutting-down,stopping,stopped");
+    expect(cleanup).toContain('select(. <= ($created | fromdateiso8601))');
+    expect(cleanup).toMatch(/owners="\$\(aws ec2 describe-instances [\s\S]*?\)"\n\s+\[ "\$owners" = 0 \] \|\| continue\n\s+[^\n]*kubectl delete node "\$node"/);
+    expect(cleanup).toContain('delete secret "$node.node-password.k3s" --ignore-not-found');
+    expect(cleanup).not.toMatch(/k3s\.service|systemctl|--all\b|delete nodes?\s+--selector/);
+    const service = heredoc(server, "/etc/systemd/system/discord-ai-agent-sandbox-node-cleanup.service");
+    expect(service).toContain("Requisite=k3s.service");
+    expect(service).not.toContain("Requires=");
+    expect(heredoc(server, "/etc/systemd/system/discord-ai-agent-sandbox-node-cleanup.timer")).toContain("OnUnitActiveSec=5min");
+    expect(server).toMatch(/systemctl enable [^\n]*discord-ai-agent-sandbox-node-cleanup\.timer/);
+    for (const target of ["/usr/local/sbin/discord-ai-agent-clean-sandbox-nodes", "/etc/systemd/system/discord-ai-agent-sandbox-node-cleanup.service", "/etc/systemd/system/discord-ai-agent-sandbox-node-cleanup.timer"]) {
+      expect(heredoc(server, target)).not.toMatch(/\$\{|%\{/);
+      expect(installer).toContain(`block ${target}`);
+    }
+    // The server role already describes instances; the sandbox role must not.
+    expect(terraform.match(/"ec2:DescribeInstances"/g)).toHaveLength(1);
+    expect(terraform.slice(terraform.indexOf('resource "aws_iam_role" "k3s_sandbox"'))).not.toContain("ec2:");
+  });
+
+  it("scales the sandbox pool on demand without touching K3s or other groups", async () => {
+    const server = await fs.readFile(path.join(process.cwd(), "deploy/terraform/aws/templates/k3s-user-data.sh.tftpl"), "utf8");
+    const installer = await fs.readFile(path.join(process.cwd(), "scripts/installK3sSandboxServerUnits.sh"), "utf8");
+    const terraform = await fs.readFile(path.join(process.cwd(), "deploy/terraform/aws/k3s.tf"), "utf8");
+    const scaler = heredoc(server, "/usr/local/sbin/discord-ai-agent-scale-sandbox");
+    expect(heredoc(server, "/etc/discord-ai-agent/runtime.env")).toContain("SANDBOX_AUTOSCALING_GROUP=${sandbox_autoscaling_group}");
+    expect(terraform).toContain("sandbox_autoscaling_group = aws_autoscaling_group.k3s_sandbox.name");
+    expect(scaler).toContain('[[ "$SANDBOX_AUTOSCALING_GROUP" =~ ^[A-Za-z0-9_-]+-k3s-sandbox$ ]] || exit 1');
+    expect(scaler).toContain("selector=app.kubernetes.io/name=discord-ai-agent,app.kubernetes.io/component=sandbox");
+    expect(scaler).toContain('select(.status.phase != "Succeeded" and .status.phase != "Failed")');
+    expect(scaler).toContain('(.type == "Complete" or .type == "Failed") and .status == "True"');
+    // Every read is parsed before any capacity change, and demand always wins.
+    expect(scaler).toMatch(/\]\] \|\| exit 1\n\nset_desired\(\) \{[\s\S]*?\}\n\nif \[ "\$jobs" -gt 0 \] \|\| \[ "\$pods" -gt 0 \]; then\n\s+rm -f "\$idle_file"\n\s+if \[ "\$desired" -eq 0 \]; then\n\s+set_desired 1\n/);
+    expect(scaler).toContain("idle_seconds=600");
+    expect(scaler).toContain("idle_file=/var/lib/discord-ai-agent/sandbox-idle-since");
+    expect(scaler).toContain("--no-honor-cooldown");
+    expect(scaler).not.toMatch(/k3s\.service|systemctl|--desired-capacity [2-9]/);
+    const service = heredoc(server, "/etc/systemd/system/discord-ai-agent-sandbox-scaler.service");
+    expect(service).toContain("After=k3s.service");
+    expect(service).not.toMatch(/Requires=|Requisite=|BindsTo=|Wants=/);
+    expect(service).toContain("do /usr/local/sbin/discord-ai-agent-scale-sandbox || echo");
+    expect(server).toMatch(/systemctl enable [^\n]*discord-ai-agent-sandbox-scaler\.service/);
+    for (const target of ["/usr/local/sbin/discord-ai-agent-scale-sandbox", "/etc/systemd/system/discord-ai-agent-sandbox-scaler.service"]) {
+      expect(heredoc(server, target)).not.toMatch(/\$\{|%\{/);
+      expect(installer).toContain(`block ${target}`);
+    }
+    expect(installer).toContain("printf 'SANDBOX_AUTOSCALING_GROUP=%s-k3s-sandbox\\n' \"$prefix\" >>/etc/discord-ai-agent/runtime.env");
+    // The server may change only the sandbox group's capacity; Terraform never reverts it.
+    expect(terraform).toMatch(/actions\s+= \["autoscaling:SetDesiredCapacity"\]\n\s+resources = \[aws_autoscaling_group\.k3s_sandbox\.arn\]/);
+    expect(terraform.match(/autoscaling:SetDesiredCapacity/g)).toHaveLength(1);
+    expect(terraform).toMatch(/resource "aws_autoscaling_group" "k3s_sandbox" \{[\s\S]*?ignore_changes = \[desired_capacity\]/);
+    expect(terraform.slice(terraform.indexOf('resource "aws_iam_role" "k3s_sandbox"'))).not.toContain("autoscaling:");
+  });
+
+  it("rolls out server sandbox units only from main through a checked, confirmed plan", async () => {
+    const rollout = await fs.readFile(path.join(process.cwd(), "scripts/rolloutK3sSandboxServerUnits.sh"), "utf8");
+    expect(rollout).toContain('[ "$(git -C "$root" rev-parse HEAD)" != "$(git -C "$root" rev-parse origin/main)" ]');
+    expect(rollout).toContain("-target=aws_launch_template.k3s -target=aws_launch_template.k3s_sandbox \\\n  -target=aws_iam_role_policy.k3s_runtime -out=");
+    expect(rollout).toContain('elif .change.actions != ["update"] then');
+    expect(rollout).toContain('terraform -chdir="$terraform_dir" apply -input=false "$work/k3s-join.tfplan"');
+    expect(rollout).toMatch(/confirm "Apply this plan\?[^\n]*" apply\n\s+terraform -chdir/);
+    expect(rollout).toMatch(/confirm "Run the installer[^\n]*" install\n"\$root\/scripts\/installK3sSandboxServerUnits\.sh" \|/);
+    expect(rollout).not.toMatch(/auto-approve|sed -i|systemctl/);
   });
 
   it("gives only the worker the sandbox-launcher identity", async () => {

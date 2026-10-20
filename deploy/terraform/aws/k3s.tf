@@ -125,6 +125,8 @@ data "aws_iam_policy_document" "k3s_runtime" {
     ]
   }
 
+  # DescribeInstances also lets the stale sandbox Node cleanup confirm that an
+  # agent's instance is gone. Describe actions do not support resource scoping.
   statement {
     sid = "DescribeStorage"
     actions = [
@@ -151,6 +153,19 @@ data "aws_iam_policy_document" "k3s_runtime" {
       "secretsmanager:PutSecretValue",
     ]
     resources = [aws_secretsmanager_secret.k3s_agent_join.arn]
+  }
+
+  # The sandbox scaler may change only the sandbox pool's desired capacity.
+  statement {
+    sid       = "ScaleSandboxPool"
+    actions   = ["autoscaling:SetDesiredCapacity"]
+    resources = [aws_autoscaling_group.k3s_sandbox.arn]
+  }
+
+  statement {
+    sid       = "DescribeSandboxPool"
+    actions   = ["autoscaling:DescribeAutoScalingGroups"]
+    resources = ["*"]
   }
 }
 
@@ -274,6 +289,8 @@ resource "aws_launch_template" "k3s" {
     kubernetes_namespace   = var.kubernetes_namespace
     postgres_secret_arn    = aws_secretsmanager_secret.postgres_kubernetes.arn
     postgres_volume_id     = var.postgres_volume_id
+    # The sandbox scaler reads this; the group ignores desired_capacity drift.
+    sandbox_autoscaling_group = aws_autoscaling_group.k3s_sandbox.name
   }))
 }
 
@@ -535,7 +552,8 @@ resource "aws_autoscaling_group" "k3s_sandbox" {
   }
 
   lifecycle {
-    # Operators scale the pool between zero and one; Terraform must not undo it.
+    # The server's sandbox scaler moves the pool between zero and one;
+    # Terraform must not undo it.
     ignore_changes = [desired_capacity]
   }
 }

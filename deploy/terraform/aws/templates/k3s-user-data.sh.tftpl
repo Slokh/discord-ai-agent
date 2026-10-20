@@ -27,6 +27,7 @@ POSTGRES_VOLUME_ID=${postgres_volume_id}
 APPLICATION_SECRET_ARN=${application_secret_arn}
 POSTGRES_SECRET_ARN=${postgres_secret_arn}
 AGENT_JOIN_SECRET_ARN=${agent_join_secret_arn}
+SANDBOX_AUTOSCALING_GROUP=${sandbox_autoscaling_group}
 EOF
 chmod 0600 /etc/discord-ai-agent/runtime.env
 
@@ -167,6 +168,99 @@ created_id=""
 EOF
 chmod 0755 /usr/local/sbin/discord-ai-agent-refresh-agent-join
 
+# Sandbox agents are disposable spot instances, and nothing deregisters one on
+# scale-in or interruption. This removes a sandbox-pool Node, and the K3s
+# node-password Secret that would reject the next instance with its hostname,
+# once it has been NotReady for ten minutes and no live EC2 instance launched
+# before it registered still holds its address. It never selects the server
+# node. The operator installer copies this block verbatim, so it must not use
+# template interpolation.
+cat >/usr/local/sbin/discord-ai-agent-clean-sandbox-nodes <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+source /etc/discord-ai-agent/runtime.env
+/usr/local/bin/k3s kubectl get nodes --selector discord-ai-agent.dev/pool=sandbox -o json \
+  | jq -r '.items[]
+    | select(.metadata.name != "discord-ai-agent-production")
+    | select(.metadata.labels["node-role.kubernetes.io/control-plane"] == null)
+    | ((.status.conditions // []) | map(select(.type == "Ready")) | first) as $ready
+    | select(($ready.status // "Unknown") != "True")
+    | select(now - (($ready.lastTransitionTime // .metadata.creationTimestamp) | fromdateiso8601) > 600)
+    | [.metadata.name, .metadata.creationTimestamp, ((.status.addresses // []) | map(select(.type == "InternalIP")) | first | .address // "")]
+    | @tsv' \
+  | while IFS=$'\t' read -r node created address; do
+    [[ "$address" =~ ^10\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || continue
+    # Any AWS or date-parsing failure aborts the run before a deletion. An
+    # instance that launched after the Node registered reused its address and
+    # cannot own it; K3s rejects that instance until the old record is gone.
+    owners="$(aws ec2 describe-instances --region "$AWS_REGION" \
+      --filters "Name=private-ip-address,Values=$address" 'Name=instance-state-name,Values=pending,running,shutting-down,stopping,stopped' \
+      --query 'Reservations[].Instances[].LaunchTime' --output json \
+      | jq --arg created "$created" '[.[] | sub("\\.[0-9]+"; "") | sub("\\+00:00$"; "Z") | fromdateiso8601 | select(. <= ($created | fromdateiso8601))] | length')"
+    [ "$owners" = 0 ] || continue
+    /usr/local/bin/k3s kubectl delete node "$node" --ignore-not-found >/dev/null
+    /usr/local/bin/k3s kubectl --namespace kube-system delete secret "$node.node-password.k3s" --ignore-not-found >/dev/null
+    echo "Removed stale sandbox node $node."
+  done
+EOF
+chmod 0755 /usr/local/sbin/discord-ai-agent-clean-sandbox-nodes
+
+# The sandbox pool scales to zero. One pass raises it to one agent while any
+# sandbox Job is unfinished or any sandbox pod is not terminal, and lowers it to
+# zero after ten minutes with neither. Any Kubernetes or AWS error ends the pass
+# before it changes capacity. The operator installer copies this block
+# verbatim, so it must not use template interpolation.
+cat >/usr/local/sbin/discord-ai-agent-scale-sandbox <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+source /etc/discord-ai-agent/runtime.env
+[[ "$SANDBOX_AUTOSCALING_GROUP" =~ ^[A-Za-z0-9_-]+-k3s-sandbox$ ]] || exit 1
+idle_file=/var/lib/discord-ai-agent/sandbox-idle-since
+idle_seconds=600
+selector=app.kubernetes.io/name=discord-ai-agent,app.kubernetes.io/component=sandbox
+
+jobs="$(/usr/local/bin/k3s kubectl get jobs --all-namespaces --selector "$selector" -o json \
+  | jq '[.items[] | select([.status.conditions[]? | select((.type == "Complete" or .type == "Failed") and .status == "True")] | length == 0)] | length')"
+pods="$(/usr/local/bin/k3s kubectl get pods --all-namespaces --selector "$selector" -o json \
+  | jq '[.items[] | select(.status.phase != "Succeeded" and .status.phase != "Failed")] | length')"
+desired="$(aws autoscaling describe-auto-scaling-groups --region "$AWS_REGION" \
+  --auto-scaling-group-names "$SANDBOX_AUTOSCALING_GROUP" \
+  --query 'AutoScalingGroups[0].DesiredCapacity' --output text)"
+[[ "$jobs" =~ ^[0-9]+$ && "$pods" =~ ^[0-9]+$ && "$desired" =~ ^[0-9]+$ ]] || exit 1
+
+set_desired() {
+  aws autoscaling set-desired-capacity --region "$AWS_REGION" \
+    --auto-scaling-group-name "$SANDBOX_AUTOSCALING_GROUP" --desired-capacity "$1" --no-honor-cooldown
+}
+
+if [ "$jobs" -gt 0 ] || [ "$pods" -gt 0 ]; then
+  rm -f "$idle_file"
+  if [ "$desired" -eq 0 ]; then
+    set_desired 1
+    echo "Scaled the sandbox pool to 1 for $jobs unfinished sandbox Jobs and $pods active sandbox pods."
+  fi
+  exit 0
+fi
+if [ "$desired" -eq 0 ]; then
+  rm -f "$idle_file"
+  exit 0
+fi
+
+now="$(date +%s)"
+since="$(cat "$idle_file" 2>/dev/null || true)"
+if ! [[ "$since" =~ ^[0-9]+$ ]]; then
+  printf '%s\n' "$now" >"$idle_file"
+  echo "The sandbox pool is idle; it scales to 0 after 10 idle minutes."
+  exit 0
+fi
+if [ $((now - since)) -ge "$idle_seconds" ]; then
+  set_desired 0
+  rm -f "$idle_file"
+  echo "Scaled the sandbox pool to 0 after $(((now - since) / 60)) idle minutes."
+fi
+EOF
+chmod 0755 /usr/local/sbin/discord-ai-agent-scale-sandbox
+
 cat >/etc/systemd/system/discord-ai-agent-storage.service <<'EOF'
 [Unit]
 Description=Attach and mount Discord AI Agent production state
@@ -281,8 +375,52 @@ Unit=discord-ai-agent-agent-join-refresh.service
 WantedBy=timers.target
 EOF
 
+cat >/etc/systemd/system/discord-ai-agent-sandbox-node-cleanup.service <<'EOF'
+[Unit]
+Description=Remove sandbox agent Nodes whose EC2 instance is gone
+# Requisite, not Requires: a cleanup run must never start a stopped K3s server.
+Requisite=k3s.service
+After=k3s.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/discord-ai-agent-clean-sandbox-nodes
+EOF
+
+cat >/etc/systemd/system/discord-ai-agent-sandbox-node-cleanup.timer <<'EOF'
+[Unit]
+Description=Remove stale sandbox agent Nodes every five minutes
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=5min
+Unit=discord-ai-agent-sandbox-node-cleanup.service
+
+[Install]
+WantedBy=timers.target
+EOF
+
+cat >/etc/systemd/system/discord-ai-agent-sandbox-scaler.service <<'EOF'
+[Unit]
+Description=Scale the sandbox agent pool with sandbox Job demand
+# Ordering only: the scaler never starts or stops K3s, and a pass simply fails
+# while the API is unavailable.
+After=k3s.service
+
+[Service]
+Type=simple
+ExecStart=/bin/bash -c 'while true; do /usr/local/sbin/discord-ai-agent-scale-sandbox || echo "Sandbox scaler pass failed; it changes capacity only after every check succeeds." >&2; sleep 20; done'
+Restart=always
+RestartSec=10s
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
 systemctl daemon-reload
-systemctl enable discord-ai-agent-storage.service k3s.service discord-ai-agent-bootstrap.service discord-ai-agent-ecr-refresh.timer discord-ai-agent-agent-join-refresh.timer
+systemctl enable discord-ai-agent-storage.service k3s.service discord-ai-agent-bootstrap.service discord-ai-agent-ecr-refresh.timer discord-ai-agent-agent-join-refresh.timer discord-ai-agent-sandbox-node-cleanup.timer discord-ai-agent-sandbox-scaler.service
 systemctl start --no-block k3s.service
 systemctl start discord-ai-agent-ecr-refresh.timer
 systemctl start discord-ai-agent-agent-join-refresh.timer
+systemctl start discord-ai-agent-sandbox-node-cleanup.timer
+systemctl start --no-block discord-ai-agent-sandbox-scaler.service

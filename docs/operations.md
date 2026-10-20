@@ -240,14 +240,18 @@ The production deployment is the Helm chart in `deploy/helm/discord-ai-agent/`; 
 
 Sandbox Jobs never run on that host. A separate spot Auto Scaling group (`<prefix>-k3s-sandbox`, minimum 0, maximum 1, desired 0) runs disposable K3s agents. They join with `discord-ai-agent.dev/pool=sandbox` and the taint `discord-ai-agent.dev/sandbox=true:NoSchedule`, and they install the pinned gVisor `runsc` and `containerd-shim-runsc-v1`. Their IAM role may only register with Systems Manager, pull the sandbox ECR repository, and read the agent join record. Their security group may reach the server only on 6443/tcp, 8472/udp, and 10250/tcp, and accepts only flannel VXLAN (8472/udp) back from the server. Every six hours the server mints a 24-hour K3s bootstrap token (`k3s token create --description sandbox-agent`, agent-only, stored as a `kube-system` Secret). It writes that token and its private API URL to the `<prefix>/k3s/agent-join` secret and deletes superseded tokens. A resource policy denies every other principal `GetSecretValue`, and the token cannot join a server. Agents re-read the record before every K3s start.
 
-The pool scales to zero and nothing scales it up automatically yet. A sandbox Job stays `Pending` until an agent joins. Scale up before code-update or computer-profile work, and back to zero afterwards; Terraform ignores `desired_capacity` so it never undoes this:
+The pool scales to zero, and the server's `discord-ai-agent-sandbox-scaler` service sizes it from sandbox demand every 20 seconds. Demand means any unfinished Job or any pod that is not `Succeeded` or `Failed` and carries `app.kubernetes.io/name=discord-ai-agent,app.kubernetes.io/component=sandbox`. When there is demand and desired capacity is 0, the scaler sets it to 1. After ten continuous minutes without demand it sets it back to 0, so it never scales down while a sandbox pod is pending or running. Each pass changes capacity only after every Kubernetes and AWS read succeeds. The service logs one journal line per scale change or idle-window start. Terraform ignores `desired_capacity`, so it never fights the scaler, and the server role may set desired capacity on this group only.
+
+The first task after an idle period waits in `Pending` through a cold start of a few minutes: spot launch, bootstrap downloads, K3s join, and the sandbox image pull. The 30-minute Job deadline includes that wait. A task that arrives within ten minutes of the previous one reuses the warm agent. With no sandbox work the pool costs nothing beyond ECR storage. Each burst of work bills one spot agent (a `.large` type from `sandbox_instance_types` plus its 40 GiB gp3 root) for the cold start, the work itself, and the ten-minute idle tail. Continuous work keeps at most one agent running. A manual scale-up still works for testing, but the scaler returns an idle pool to 0 after ten minutes. Review recent decisions with:
 
 ```bash
-AWS_PROFILE=production-operator aws autoscaling set-desired-capacity \
-  --auto-scaling-group-name <prefix>-k3s-sandbox --desired-capacity 1
+AWS_PROFILE=production-operator scripts/runProductionCommand.sh \
+  'journalctl -u discord-ai-agent-sandbox-scaler.service --since -2h -o cat'
 ```
 
 Spot interruption terminates any running sandbox; the launcher's single infrastructure retry and `sandbox_disappeared` diagnosis cover it.
+
+Scale-in and spot interruption leave the agent's Node object `NotReady`, with its `<hostname>.node-password.k3s` Secret in `kube-system`. K3s would also reject a later instance that reused that hostname. Every five minutes the server's `discord-ai-agent-sandbox-node-cleanup` timer deletes both for each `discord-ai-agent.dev/pool=sandbox` Node that has been `NotReady` for more than ten minutes, but only when EC2 reports no pending, running, stopping, or stopped instance at its private IP that launched before the Node registered. It never selects `discord-ai-agent-production`. Any AWS or Kubernetes error ends the run before it deletes anything, and each deletion is logged as `Removed stale sandbox node <name>.` in the unit's journal.
 
 The 30 GiB root disk is disposable. The retained 20 GiB encrypted Postgres disk and separate 8 GiB encrypted K3s-state disk are pinned to the same availability zone and backed up daily for 14 days. The Auto Scaling group replaces a failed host; bootstrap attaches both exact volumes before starting K3s. Secrets Manager retains the two Kubernetes Secret manifests without putting their values in Terraform state. See [Single-node K3s production](architecture/single-node-k3s.md) for the complete decision and recovery contract.
 
@@ -268,25 +272,35 @@ Never add, remove, or change token flags (`--token`, `--token-file`, `--agent-to
 
 Join changes live in the launch-template user data. Apply them from a clean `main` as a targeted, reviewed plan of only the two launch templates. Production's variables were rebuilt at `~/.config/<prefix>/production.tfvars`.
 
+`scripts/rolloutK3sSandboxServerUnits.sh` runs the whole sequence below. It refuses to run unless HEAD is a clean, current `origin/main`, and it lists the sandbox nodes. It writes the installer's remote script for review, plans only the two launch templates and the server runtime policy, and rejects any plan that is not an in-place update of their `user_data` (with `latest_version`/`default_version`) or `policy`. It applies that saved plan, then runs the installer and checks every expected status line. It asks you to type `apply` and then `install` before each production change. Use `--plan-only` to stop after the checked plan:
+
+```bash
+scripts/rolloutK3sSandboxServerUnits.sh --var-file "$HOME/.config/<prefix>/production.tfvars" --plan-only
+scripts/rolloutK3sSandboxServerUnits.sh --var-file "$HOME/.config/<prefix>/production.tfvars"
+```
+
+The manual equivalent:
+
 ```bash
 cd deploy/terraform/aws
 eval "$(aws configure export-credentials --profile production-operator --format env)"
 terraform plan -var-file="$HOME/.config/<prefix>/production.tfvars" \
-  -target=aws_launch_template.k3s -target=aws_launch_template.k3s_sandbox -out=k3s-join.tfplan
+  -target=aws_launch_template.k3s -target=aws_launch_template.k3s_sandbox \
+  -target=aws_iam_role_policy.k3s_runtime -out=k3s-join.tfplan
 terraform show k3s-join.tfplan
 terraform apply k3s-join.tfplan
 ```
 
-Apply only if the plan updates `user_data` (and the derived `latest_version`) on those two templates and changes nothing else. Both Auto Scaling groups follow `$Latest` without an instance refresh, so the apply replaces no instance. The next launch, including self-healing, boots the fixed user data.
+Apply only if the plan updates `user_data` (and the derived `latest_version`) on one or both of those templates and the server's `k3s_runtime` inline policy, and changes nothing else. Both Auto Scaling groups follow `$Latest` without an instance refresh, so the apply replaces no instance. The next launch, including self-healing, boots the fixed user data.
 
-The running server does not need replacement. Install the refresher on it once with the idempotent installer, which copies the refresher, service, and timer blocks verbatim from the server template. It retires the earlier boot-time publisher and refuses to run if `k3s.service` still carries a token flag. It never modifies `k3s.service`, and it prints only unit states and token expiry. Review the script it sends with `--print`:
+The running server does not need replacement. Install the server-side sandbox units on it with the idempotent installer. It copies the join refresher, the stale Node cleanup, and the sandbox scaler (each script and its units) verbatim from the server template, and it refuses any block that uses template interpolation. On a host booted before the scaler, it adds `SANDBOX_AUTOSCALING_GROUP=<prefix>-k3s-sandbox` to `runtime.env`, deriving the prefix from the join secret's ARN. It runs one scaler pass directly, so a missing IAM grant fails the install. Apply the policy first. It retires the earlier boot-time publisher and refuses to run if `k3s.service` still carries a token flag. It never modifies `k3s.service` and checks that the unit's digest is unchanged. It prints only unit states, scaler and cleanup decisions, the remaining sandbox Node count, and token expiry. Review the script it sends with `--print`:
 
 ```bash
-scripts/installK3sAgentJoinRefresh.sh --print
-AWS_PROFILE=production-operator scripts/installK3sAgentJoinRefresh.sh
+scripts/installK3sSandboxServerUnits.sh --print
+AWS_PROFILE=production-operator scripts/installK3sSandboxServerUnits.sh
 ```
 
-Expect `k3s=active`, `refresh=success`, `timer=active`, and `sandbox_agent_tokens=1`. Confirm a new secret version without reading its value, then test a join by scaling the pool to 1, listing sandbox nodes, and scaling back to 0:
+Expect `k3s=active`, `refresh=success`, `timer=active`, `cleanup=success`, `cleanup_timer=active`, `scaler=active`, and `sandbox_agent_tokens=1`. With the pool at zero, expect `sandbox_nodes=0` and a `Removed stale sandbox node` line for each leftover agent, such as the join test's `ip-10-0-102-112.ec2.internal`. Rerunning the installer is safe: it mints a fresh join token and runs one cleanup pass and one scaler pass. Confirm a new secret version without reading its value. Then test a join by starting a computer task: watch the scaler raise the pool, the sandbox node become `Ready`, and the pool return to 0 ten minutes after the task ends.
 
 ```bash
 AWS_PROFILE=production-operator aws secretsmanager list-secret-version-ids \

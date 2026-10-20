@@ -117,43 +117,55 @@ chmod 0600 "$temporary/config.json"
 EOF
 chmod 0755 /usr/local/sbin/discord-ai-agent-refresh-ecr
 
-# Sandbox agents join with a separate agent-only token kept on the encrypted
-# K3s-state volume, so a leaked agent credential cannot join a server.
-cat >/usr/local/sbin/discord-ai-agent-agent-token <<'EOF'
-#!/usr/bin/env bash
-set -euo pipefail
-install -d -m 0700 /var/lib/rancher/k3s/discord-ai-agent
-token_file=/var/lib/rancher/k3s/discord-ai-agent/agent-token
-if [ ! -s "$token_file" ]; then
-  (umask 077 && head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n' >"$token_file.tmp")
-  mv "$token_file.tmp" "$token_file"
-fi
-chmod 0600 "$token_file"
-EOF
-chmod 0755 /usr/local/sbin/discord-ai-agent-agent-token
-
-cat >/usr/local/sbin/discord-ai-agent-publish-agent-join <<'EOF'
+# Sandbox agents join with a short-lived K3s bootstrap token: an agent-only,
+# kubeadm-style credential stored as a kube-system Secret. Minting one never
+# touches server bootstrap files, so it is safe on the existing cluster; never
+# add --token or --agent-token flags to the server unit. The operator installer
+# copies this block verbatim, so it must not use template interpolation.
+cat >/usr/local/sbin/discord-ai-agent-refresh-agent-join <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
 source /etc/discord-ai-agent/runtime.env
 for _ in $(seq 1 60); do
-  [ -s /var/lib/rancher/k3s/server/agent-token ] && break
+  /usr/local/bin/k3s kubectl get --raw=/readyz >/dev/null 2>&1 && break
   sleep 2
 done
-token="$(cat /var/lib/rancher/k3s/server/agent-token)"
-[[ "$token" == K10* ]]
+/usr/local/bin/k3s kubectl get --raw=/readyz >/dev/null
+
+temporary="$(mktemp -d)"
+created_id=""
+cleanup() {
+  rm -rf "$temporary"
+  if [ -n "$created_id" ]; then
+    /usr/local/bin/k3s token delete "$created_id" >/dev/null || true
+  fi
+}
+trap cleanup EXIT
+chmod 0700 "$temporary"
+
+token="$(/usr/local/bin/k3s token create --ttl 24h --usages authentication --description sandbox-agent)"
+[[ "$token" =~ ^K10[0-9a-f]{64}::[a-z0-9]{6}\.[a-z0-9]{16}$ ]]
+created_id="$(printf '%s' "$token" | cut -d: -f3 | cut -d. -f1)"
 imds="$(curl -fsS -X PUT -H 'X-aws-ec2-metadata-token-ttl-seconds: 300' http://169.254.169.254/latest/api/token)"
 private_ip="$(curl -fsS -H "X-aws-ec2-metadata-token: $imds" http://169.254.169.254/latest/meta-data/local-ipv4)"
-temporary="$(mktemp -d)"
-trap 'rm -rf "$temporary"' EXIT
-chmod 0700 "$temporary"
-jq -n --arg url "https://$private_ip:6443" --arg token "$token" '{server_url:$url,token:$token}' >"$temporary/join.json"
+(umask 077 && AGENT_JOIN_TOKEN="$token" jq -n --arg url "https://$private_ip:6443" '{server_url:$url,token:env.AGENT_JOIN_TOKEN}' >"$temporary/join.json")
 unset token
-chmod 0600 "$temporary/join.json"
 aws secretsmanager put-secret-value --region "$AWS_REGION" --secret-id "$AGENT_JOIN_SECRET_ARN" \
   --secret-string "file://$temporary/join.json" >/dev/null
+published_id="$created_id"
+created_id=""
+
+# Agents re-read the record before every start, so superseded tokens go now;
+# the K3s token cleaner also removes any that expire unpublished.
+/usr/local/bin/k3s kubectl --namespace kube-system get secrets \
+  --field-selector type=bootstrap.kubernetes.io/token -o json \
+  | jq -r --arg keep "$published_id" \
+    '.items[] | select((.data.description // "" | @base64d) == "sandbox-agent") | .data["token-id"] | @base64d | select(. != $keep)' \
+  | while read -r superseded_id; do
+    /usr/local/bin/k3s token delete "$superseded_id" >/dev/null
+  done
 EOF
-chmod 0755 /usr/local/sbin/discord-ai-agent-publish-agent-join
+chmod 0755 /usr/local/sbin/discord-ai-agent-refresh-agent-join
 
 cat >/etc/systemd/system/discord-ai-agent-storage.service <<'EOF'
 [Unit]
@@ -191,7 +203,6 @@ TasksMax=infinity
 TimeoutStartSec=0
 Restart=always
 RestartSec=5s
-ExecStartPre=/usr/local/sbin/discord-ai-agent-agent-token
 ExecStart=/usr/local/bin/k3s server \
   --node-name=discord-ai-agent-production \
   --node-label=discord-ai-agent.dev/storage=local \
@@ -200,7 +211,6 @@ ExecStart=/usr/local/bin/k3s server \
   --disable=local-storage \
   --disable=metrics-server \
   --secrets-encryption \
-  --agent-token-file=/var/lib/rancher/k3s/discord-ai-agent/agent-token \
   --write-kubeconfig-mode=0600
 
 [Install]
@@ -216,21 +226,6 @@ After=k3s.service
 [Service]
 Type=oneshot
 ExecStart=/usr/local/sbin/discord-ai-agent-bootstrap-secrets
-RemainAfterExit=yes
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
-cat >/etc/systemd/system/discord-ai-agent-agent-join.service <<'EOF'
-[Unit]
-Description=Publish the K3s agent-only join record for sandbox nodes
-Requires=k3s.service
-After=k3s.service
-
-[Service]
-Type=oneshot
-ExecStart=/usr/local/sbin/discord-ai-agent-publish-agent-join
 RemainAfterExit=yes
 
 [Install]
@@ -262,7 +257,32 @@ Unit=discord-ai-agent-ecr-refresh.service
 WantedBy=timers.target
 EOF
 
+cat >/etc/systemd/system/discord-ai-agent-agent-join-refresh.service <<'EOF'
+[Unit]
+Description=Mint and publish the short-lived K3s join record for sandbox agents
+Requires=k3s.service
+After=k3s.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/discord-ai-agent-refresh-agent-join
+EOF
+
+cat >/etc/systemd/system/discord-ai-agent-agent-join-refresh.timer <<'EOF'
+[Unit]
+Description=Refresh the 24-hour sandbox agent join token every six hours
+
+[Timer]
+OnBootSec=1min
+OnUnitActiveSec=6h
+Unit=discord-ai-agent-agent-join-refresh.service
+
+[Install]
+WantedBy=timers.target
+EOF
+
 systemctl daemon-reload
-systemctl enable discord-ai-agent-storage.service k3s.service discord-ai-agent-bootstrap.service discord-ai-agent-agent-join.service discord-ai-agent-ecr-refresh.timer
+systemctl enable discord-ai-agent-storage.service k3s.service discord-ai-agent-bootstrap.service discord-ai-agent-ecr-refresh.timer discord-ai-agent-agent-join-refresh.timer
 systemctl start --no-block k3s.service
 systemctl start discord-ai-agent-ecr-refresh.timer
+systemctl start discord-ai-agent-agent-join-refresh.timer

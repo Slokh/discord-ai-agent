@@ -52,8 +52,9 @@ resource "aws_secretsmanager_secret" "postgres_kubernetes" {
   recovery_window_in_days = 30
 }
 
-# The server writes its agent-only join token and private API URL here on every
-# boot. The token cannot join a server, and only sandbox nodes may read it.
+# The server writes a 24-hour K3s bootstrap token and its private API URL here
+# every six hours. The token cannot join a server, and only sandbox nodes may
+# read it.
 resource "aws_secretsmanager_secret" "k3s_agent_join" {
   name                    = "${var.aws_resource_prefix}/k3s/agent-join"
   description             = "K3s agent-only join token and server URL; written by the server, read only by sandbox nodes."

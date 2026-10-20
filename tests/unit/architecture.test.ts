@@ -203,6 +203,40 @@ describe("architecture guardrails", () => {
     expect(sandboxRole).not.toMatch(/AttachVolume|application_kubernetes|postgres_kubernetes|AmazonEC2ContainerRegistryReadOnly/);
   });
 
+  it("never changes K3s server token flags and joins sandbox agents with expiring bootstrap tokens", async () => {
+    const server = await fs.readFile(path.join(process.cwd(), "deploy/terraform/aws/templates/k3s-user-data.sh.tftpl"), "utf8");
+    const agent = await fs.readFile(path.join(process.cwd(), "deploy/terraform/aws/templates/k3s-sandbox-agent-user-data.sh.tftpl"), "utf8");
+    const installer = await fs.readFile(path.join(process.cwd(), "scripts/installK3sAgentJoinRefresh.sh"), "utf8");
+    // Adding a token flag to the existing cluster rewrote cred/passwd, after
+    // which K3s refused to start because the file was newer than the datastore.
+    const serverUnit = heredoc(server, "/etc/systemd/system/k3s.service");
+    expect(serverUnit).not.toMatch(/--(?:agent-)?token/);
+    expect(serverUnit).not.toContain("ExecStartPre");
+    expect(serverUnit.match(/^\s+--\S+/gm)?.map((flag) => flag.trim())).toEqual([
+      "--node-name=discord-ai-agent-production",
+      "--node-label=discord-ai-agent.dev/storage=local",
+      "--disable=traefik",
+      "--disable=servicelb",
+      "--disable=local-storage",
+      "--disable=metrics-server",
+      "--secrets-encryption",
+      "--write-kubeconfig-mode=0600",
+    ]);
+    const refresh = heredoc(server, "/usr/local/sbin/discord-ai-agent-refresh-agent-join");
+    expect(refresh).toContain("k3s token create --ttl 24h --usages authentication --description sandbox-agent");
+    expect(refresh).toContain("k3s token delete");
+    expect(refresh).toContain("{server_url:$url,token:env.AGENT_JOIN_TOKEN}");
+    expect(heredoc(server, "/etc/systemd/system/discord-ai-agent-agent-join-refresh.timer")).toContain("OnUnitActiveSec=6h");
+    // The operator installer copies these blocks verbatim from the template.
+    for (const target of ["/usr/local/sbin/discord-ai-agent-refresh-agent-join", "/etc/systemd/system/discord-ai-agent-agent-join-refresh.service", "/etc/systemd/system/discord-ai-agent-agent-join-refresh.timer"]) {
+      expect(heredoc(server, target)).not.toMatch(/\$\{|%\{/);
+      expect(installer).toContain(`block ${target}`);
+    }
+    expect(installer).not.toMatch(/>\s*"?\$unit"?|>\s*\/etc\/systemd\/system\/k3s\.service|sed -i|systemctl (?:restart|stop) k3s/);
+    expect(agent).toContain("grep -Eq '^K10[0-9a-f]{64}::[a-z0-9]{6}\\.[a-z0-9]{16}$'");
+    expect(heredoc(agent, "/etc/systemd/system/k3s-agent.service")).toContain("ExecStartPre=/usr/local/sbin/discord-ai-agent-agent-join");
+  });
+
   it("gives only the worker the sandbox-launcher identity", async () => {
     const worker = await fs.readFile(path.join(process.cwd(), "deploy/helm/discord-ai-agent/templates/worker.yaml"), "utf8");
     const proxy = await fs.readFile(path.join(process.cwd(), "deploy/helm/discord-ai-agent/templates/egress-proxy.yaml"), "utf8");
@@ -489,4 +523,11 @@ async function listSourceFiles(root: string): Promise<string[]> {
 
 function normalizePath(value: string) {
   return value.split(path.sep).join("/");
+}
+
+function heredoc(script: string, target: string) {
+  const start = script.indexOf(`cat >${target} <<'EOF'\n`);
+  if (start < 0) throw new Error(`missing heredoc for ${target}`);
+  const end = script.indexOf("\nEOF\n", start);
+  return script.slice(start, end);
 }

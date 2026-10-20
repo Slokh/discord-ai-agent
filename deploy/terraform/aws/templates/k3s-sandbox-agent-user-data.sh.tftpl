@@ -67,41 +67,26 @@ for _ in $(seq 1 90); do
 done
 server_url="$(jq -r '.server_url' "$temporary/join.json")"
 [[ "$server_url" =~ ^https://10\.[0-9.]+:6443$ ]]
-jq -r '.token' "$temporary/join.json" | grep -q '^K10'
+# The server publishes only a 24-hour agent-only bootstrap token.
+jq -r '.token' "$temporary/join.json" | grep -Eq '^K10[0-9a-f]{64}::[a-z0-9]{6}\.[a-z0-9]{16}$'
 umask 077
 {
   printf 'K3S_URL=%s\n' "$server_url"
   printf 'K3S_TOKEN=%s\n' "$(jq -r '.token' "$temporary/join.json")"
-} >/etc/discord-ai-agent/k3s-agent.env
+} >/etc/discord-ai-agent/k3s-agent.env.tmp
+mv /etc/discord-ai-agent/k3s-agent.env.tmp /etc/discord-ai-agent/k3s-agent.env
 EOF
 chmod 0755 /usr/local/sbin/discord-ai-agent-agent-join
-
-cat >/etc/systemd/system/discord-ai-agent-agent-join.service <<'EOF'
-[Unit]
-Description=Read the K3s agent-only join record
-Wants=network-online.target
-After=network-online.target
-Before=k3s-agent.service
-
-[Service]
-Type=oneshot
-ExecStart=/usr/local/sbin/discord-ai-agent-agent-join
-RemainAfterExit=yes
-TimeoutStartSec=20min
-
-[Install]
-WantedBy=multi-user.target
-EOF
 
 cat >/etc/systemd/system/k3s-agent.service <<'EOF'
 [Unit]
 Description=Lightweight Kubernetes sandbox agent
-Requires=discord-ai-agent-agent-join.service
-After=discord-ai-agent-agent-join.service network-online.target
+Wants=network-online.target
+After=network-online.target
 
 [Service]
 Type=notify
-EnvironmentFile=/etc/discord-ai-agent/k3s-agent.env
+EnvironmentFile=-/etc/discord-ai-agent/k3s-agent.env
 KillMode=process
 Delegate=yes
 LimitNOFILE=1048576
@@ -111,6 +96,9 @@ TasksMax=infinity
 TimeoutStartSec=0
 Restart=always
 RestartSec=5s
+# The join token expires after 24 hours and the agent presents it on every
+# start, so each start re-reads the current record before launching K3s.
+ExecStartPre=/usr/local/sbin/discord-ai-agent-agent-join
 ExecStart=/usr/local/bin/k3s agent \
   --node-label=discord-ai-agent.dev/pool=sandbox \
   --node-taint=discord-ai-agent.dev/sandbox=true:NoSchedule
@@ -120,5 +108,5 @@ WantedBy=multi-user.target
 EOF
 
 systemctl daemon-reload
-systemctl enable discord-ai-agent-agent-join.service k3s-agent.service
+systemctl enable k3s-agent.service
 systemctl start --no-block k3s-agent.service

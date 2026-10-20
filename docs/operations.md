@@ -238,7 +238,7 @@ Run the deterministic failure suite with `npm run test:reliability`. It covers s
 
 The production deployment is the Helm chart in `deploy/helm/discord-ai-agent/`; `deploy/terraform/aws/` is its authoritative AWS stack. One `t3a.medium` EC2 host runs the K3s server, Postgres, the bot, the worker, the callback API, and the sandbox egress proxy. Its security group admits only the sandbox node pool (below), and it accepts deployment and operator commands only through Systems Manager.
 
-Sandbox Jobs never run on that host. A separate spot Auto Scaling group (`<prefix>-k3s-sandbox`, minimum 0, maximum 1, desired 0) runs disposable K3s agents. They join with `discord-ai-agent.dev/pool=sandbox` and the taint `discord-ai-agent.dev/sandbox=true:NoSchedule`, and they install the pinned gVisor `runsc` and `containerd-shim-runsc-v1`. Their IAM role may only register with Systems Manager, pull the sandbox ECR repository, and read the agent join record. Their security group may reach the server only on 6443/tcp, 8472/udp, and 10250/tcp, and accepts only flannel VXLAN (8472/udp) back from the server. The server writes an agent-only join token and its private API URL to the `<prefix>/k3s/agent-join` secret on every boot. A resource policy denies every other principal `GetSecretValue`, and the token cannot join another server.
+Sandbox Jobs never run on that host. A separate spot Auto Scaling group (`<prefix>-k3s-sandbox`, minimum 0, maximum 1, desired 0) runs disposable K3s agents. They join with `discord-ai-agent.dev/pool=sandbox` and the taint `discord-ai-agent.dev/sandbox=true:NoSchedule`, and they install the pinned gVisor `runsc` and `containerd-shim-runsc-v1`. Their IAM role may only register with Systems Manager, pull the sandbox ECR repository, and read the agent join record. Their security group may reach the server only on 6443/tcp, 8472/udp, and 10250/tcp, and accepts only flannel VXLAN (8472/udp) back from the server. Every six hours the server mints a 24-hour K3s bootstrap token (`k3s token create --description sandbox-agent`, agent-only, stored as a `kube-system` Secret). It writes that token and its private API URL to the `<prefix>/k3s/agent-join` secret and deletes superseded tokens. A resource policy denies every other principal `GetSecretValue`, and the token cannot join a server. Agents re-read the record before every K3s start.
 
 The pool scales to zero and nothing scales it up automatically yet. A sandbox Job stays `Pending` until an agent joins. Scale up before code-update or computer-profile work, and back to zero afterwards; Terraform ignores `desired_capacity` so it never undoes this:
 
@@ -261,6 +261,39 @@ AWS_PROFILE=production-operator scripts/runProductionCommand.sh \
 ```
 
 Use Helm—not `kubectl rollout undo`—for recovery so one field manager continues to own application revisions. Run Helm and Kubernetes commands through `scripts/runProductionCommand.sh`; select an explicit known-good revision and never guess a rollback target.
+
+### Sandbox agent join
+
+Never add, remove, or change token flags (`--token`, `--token-file`, `--agent-token`, `--agent-token-file`) on the production K3s server. They rewrite `server/cred/passwd` on the persistent state volume. K3s with SQLite never writes that change back to the datastore, so the next start refuses to run because the file is "newer than datastore". This crash-looped production for about six minutes on 2026-10-20. The server unit stays at the flags it was created with, and sandbox agents join with bootstrap tokens instead. See [the incident lesson](architecture/single-node-k3s.md#lesson-never-change-server-token-flags-on-an-existing-cluster).
+
+Join changes live in the launch-template user data. Apply them from a clean `main` as a targeted, reviewed plan of only the two launch templates. Production's variables were rebuilt at `~/.config/<prefix>/production.tfvars`.
+
+```bash
+cd deploy/terraform/aws
+eval "$(aws configure export-credentials --profile production-operator --format env)"
+terraform plan -var-file="$HOME/.config/<prefix>/production.tfvars" \
+  -target=aws_launch_template.k3s -target=aws_launch_template.k3s_sandbox -out=k3s-join.tfplan
+terraform show k3s-join.tfplan
+terraform apply k3s-join.tfplan
+```
+
+Apply only if the plan updates `user_data` (and the derived `latest_version`) on those two templates and changes nothing else. Both Auto Scaling groups follow `$Latest` without an instance refresh, so the apply replaces no instance. The next launch, including self-healing, boots the fixed user data.
+
+The running server does not need replacement. Install the refresher on it once with the idempotent installer, which copies the refresher, service, and timer blocks verbatim from the server template. It retires the earlier boot-time publisher and refuses to run if `k3s.service` still carries a token flag. It never modifies `k3s.service`, and it prints only unit states and token expiry. Review the script it sends with `--print`:
+
+```bash
+scripts/installK3sAgentJoinRefresh.sh --print
+AWS_PROFILE=production-operator scripts/installK3sAgentJoinRefresh.sh
+```
+
+Expect `k3s=active`, `refresh=success`, `timer=active`, and `sandbox_agent_tokens=1`. Confirm a new secret version without reading its value, then test a join by scaling the pool to 1, listing sandbox nodes, and scaling back to 0:
+
+```bash
+AWS_PROFILE=production-operator aws secretsmanager list-secret-version-ids \
+  --secret-id <prefix>/k3s/agent-join --query 'Versions[].{created:CreatedDate,stages:VersionStages}' --output table
+AWS_PROFILE=production-operator scripts/runProductionCommand.sh \
+  'k3s kubectl get nodes -l discord-ai-agent.dev/pool=sandbox'
+```
 
 ## Sandbox and network posture
 

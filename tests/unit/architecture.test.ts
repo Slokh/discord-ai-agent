@@ -267,6 +267,40 @@ describe("architecture guardrails", () => {
     expect(terraform.slice(terraform.indexOf('resource "aws_iam_role" "k3s_sandbox"'))).not.toContain("ec2:");
   });
 
+  it("scales the sandbox pool on demand without touching K3s or other groups", async () => {
+    const server = await fs.readFile(path.join(process.cwd(), "deploy/terraform/aws/templates/k3s-user-data.sh.tftpl"), "utf8");
+    const installer = await fs.readFile(path.join(process.cwd(), "scripts/installK3sSandboxServerUnits.sh"), "utf8");
+    const terraform = await fs.readFile(path.join(process.cwd(), "deploy/terraform/aws/k3s.tf"), "utf8");
+    const scaler = heredoc(server, "/usr/local/sbin/discord-ai-agent-scale-sandbox");
+    expect(heredoc(server, "/etc/discord-ai-agent/runtime.env")).toContain("SANDBOX_AUTOSCALING_GROUP=${sandbox_autoscaling_group}");
+    expect(terraform).toContain("sandbox_autoscaling_group = aws_autoscaling_group.k3s_sandbox.name");
+    expect(scaler).toContain('[[ "$SANDBOX_AUTOSCALING_GROUP" =~ ^[A-Za-z0-9_-]+-k3s-sandbox$ ]] || exit 1');
+    expect(scaler).toContain("selector=app.kubernetes.io/name=discord-ai-agent,app.kubernetes.io/component=sandbox");
+    expect(scaler).toContain('select(.status.phase != "Succeeded" and .status.phase != "Failed")');
+    expect(scaler).toContain('(.type == "Complete" or .type == "Failed") and .status == "True"');
+    // Every read is parsed before any capacity change, and demand always wins.
+    expect(scaler).toMatch(/\]\] \|\| exit 1\n\nset_desired\(\) \{[\s\S]*?\}\n\nif \[ "\$jobs" -gt 0 \] \|\| \[ "\$pods" -gt 0 \]; then\n\s+rm -f "\$idle_file"\n\s+if \[ "\$desired" -eq 0 \]; then\n\s+set_desired 1\n/);
+    expect(scaler).toContain("idle_seconds=600");
+    expect(scaler).toContain("idle_file=/var/lib/discord-ai-agent/sandbox-idle-since");
+    expect(scaler).toContain("--no-honor-cooldown");
+    expect(scaler).not.toMatch(/k3s\.service|systemctl|--desired-capacity [2-9]/);
+    const service = heredoc(server, "/etc/systemd/system/discord-ai-agent-sandbox-scaler.service");
+    expect(service).toContain("After=k3s.service");
+    expect(service).not.toMatch(/Requires=|Requisite=|BindsTo=|Wants=/);
+    expect(service).toContain("do /usr/local/sbin/discord-ai-agent-scale-sandbox || echo");
+    expect(server).toMatch(/systemctl enable [^\n]*discord-ai-agent-sandbox-scaler\.service/);
+    for (const target of ["/usr/local/sbin/discord-ai-agent-scale-sandbox", "/etc/systemd/system/discord-ai-agent-sandbox-scaler.service"]) {
+      expect(heredoc(server, target)).not.toMatch(/\$\{|%\{/);
+      expect(installer).toContain(`block ${target}`);
+    }
+    expect(installer).toContain("printf 'SANDBOX_AUTOSCALING_GROUP=%s-k3s-sandbox\\n' \"$prefix\" >>/etc/discord-ai-agent/runtime.env");
+    // The server may change only the sandbox group's capacity; Terraform never reverts it.
+    expect(terraform).toMatch(/actions\s+= \["autoscaling:SetDesiredCapacity"\]\n\s+resources = \[aws_autoscaling_group\.k3s_sandbox\.arn\]/);
+    expect(terraform.match(/autoscaling:SetDesiredCapacity/g)).toHaveLength(1);
+    expect(terraform).toMatch(/resource "aws_autoscaling_group" "k3s_sandbox" \{[\s\S]*?ignore_changes = \[desired_capacity\]/);
+    expect(terraform.slice(terraform.indexOf('resource "aws_iam_role" "k3s_sandbox"'))).not.toContain("autoscaling:");
+  });
+
   it("gives only the worker the sandbox-launcher identity", async () => {
     const worker = await fs.readFile(path.join(process.cwd(), "deploy/helm/discord-ai-agent/templates/worker.yaml"), "utf8");
     const proxy = await fs.readFile(path.join(process.cwd(), "deploy/helm/discord-ai-agent/templates/egress-proxy.yaml"), "utf8");

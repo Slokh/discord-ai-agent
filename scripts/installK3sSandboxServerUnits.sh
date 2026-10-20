@@ -2,11 +2,11 @@
 set -euo pipefail
 
 # Idempotent install of the server-side sandbox units (the agent join-token
-# refresher and the stale sandbox Node cleanup) on the already-running
-# production K3s host, so the host need not be replaced to adopt them. It copies
-# their blocks verbatim from the server user data, retires the earlier
-# agent-token publisher, and never modifies k3s.service. Pass --print to review
-# the remote script without running it.
+# refresher, the stale sandbox Node cleanup, and the sandbox scaler) on the
+# already-running production K3s host, so the host need not be replaced to adopt
+# them. It copies their blocks verbatim from the server user data, retires the
+# earlier agent-token publisher, and never modifies k3s.service. Pass --print to
+# review the remote script without running it.
 
 root="$(cd "$(dirname "$0")/.." && pwd)"
 template="$root/deploy/terraform/aws/templates/k3s-user-data.sh.tftpl"
@@ -41,6 +41,14 @@ grep -q '^AGENT_JOIN_SECRET_ARN=arn:' /etc/discord-ai-agent/runtime.env
 systemctl is-active --quiet k3s.service
 unit_digest="$(sha256sum "$unit")"
 
+# Hosts booted before the scaler lack its runtime.env entry. Terraform names
+# the pool <prefix>-k3s-sandbox and the join secret <prefix>/k3s/agent-join.
+if ! grep -q '^SANDBOX_AUTOSCALING_GROUP=' /etc/discord-ai-agent/runtime.env; then
+  prefix="$(sed -n 's|^AGENT_JOIN_SECRET_ARN=arn:aws:secretsmanager:[a-z0-9-]*:[0-9]*:secret:\([A-Za-z0-9_-]*\)/k3s/agent-join-[A-Za-z0-9]\{6\}$|\1|p' /etc/discord-ai-agent/runtime.env)"
+  [ -n "$prefix" ]
+  printf 'SANDBOX_AUTOSCALING_GROUP=%s-k3s-sandbox\n' "$prefix" >>/etc/discord-ai-agent/runtime.env
+fi
+
 # Retire the boot-time publisher and token generator from the agent-token design.
 if [ -e /etc/systemd/system/discord-ai-agent-agent-join.service ]; then
   systemctl disable --now discord-ai-agent-agent-join.service >/dev/null 2>&1 || true
@@ -62,6 +70,11 @@ PREAMBLE
   block /etc/systemd/system/discord-ai-agent-sandbox-node-cleanup.service
   echo
   block /etc/systemd/system/discord-ai-agent-sandbox-node-cleanup.timer
+  echo
+  block /usr/local/sbin/discord-ai-agent-scale-sandbox
+  echo 'chmod 0755 /usr/local/sbin/discord-ai-agent-scale-sandbox'
+  echo
+  block /etc/systemd/system/discord-ai-agent-sandbox-scaler.service
   cat <<'POSTAMBLE'
 
 systemctl daemon-reload
@@ -70,6 +83,10 @@ systemctl enable --now discord-ai-agent-agent-join-refresh.timer >/dev/null 2>&1
 cleanup_started="$(date -u '+%Y-%m-%d %H:%M:%S')"
 systemctl start discord-ai-agent-sandbox-node-cleanup.service
 systemctl enable --now discord-ai-agent-sandbox-node-cleanup.timer >/dev/null 2>&1
+# One direct pass first, so a missing grant or runtime.env entry fails here.
+/usr/local/sbin/discord-ai-agent-scale-sandbox
+systemctl enable discord-ai-agent-sandbox-scaler.service >/dev/null 2>&1
+systemctl restart discord-ai-agent-sandbox-scaler.service
 test "$(sha256sum "$unit")" = "$unit_digest"
 
 printf 'k3s=%s\n' "$(systemctl is-active k3s.service)"
@@ -78,6 +95,7 @@ printf 'timer=%s\n' "$(systemctl is-active discord-ai-agent-agent-join-refresh.t
 printf 'cleanup=%s\n' "$(systemctl show -p Result --value discord-ai-agent-sandbox-node-cleanup.service)"
 printf 'cleanup_timer=%s\n' "$(systemctl is-active discord-ai-agent-sandbox-node-cleanup.timer)"
 journalctl --utc --since "$cleanup_started" -u discord-ai-agent-sandbox-node-cleanup.service -o cat | grep '^Removed stale sandbox node ' || true
+printf 'scaler=%s\n' "$(systemctl is-active discord-ai-agent-sandbox-scaler.service)"
 printf 'sandbox_nodes=%s\n' "$(/usr/local/bin/k3s kubectl get nodes --selector discord-ai-agent.dev/pool=sandbox --no-headers | wc -l)"
 /usr/local/bin/k3s kubectl --namespace kube-system get secrets \
   --field-selector type=bootstrap.kubernetes.io/token -o json \

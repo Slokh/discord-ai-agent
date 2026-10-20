@@ -56,6 +56,8 @@ fi
 echo "main at $(git -C "$root" rev-parse --short HEAD)"
 
 export AWS_PROFILE="$profile"
+# The AWS CLI pager would stop the rollout at its first interactive output.
+export AWS_PAGER=""
 step "Current sandbox nodes"
 "$root/scripts/runProductionCommand.sh" 'k3s kubectl get nodes -l discord-ai-agent.dev/pool=sandbox -o wide'
 

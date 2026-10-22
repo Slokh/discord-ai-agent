@@ -110,7 +110,7 @@
     "tsx": "^4.23.5",
     "typescript": "^6.0.3",
     "typescript-eslint": "^8.65.0",
-    "vitest": "^4.1.10"
+    "vitest": "^5.0.5"
   },
   "overrides": {
     "js-yaml": "4.3.1",

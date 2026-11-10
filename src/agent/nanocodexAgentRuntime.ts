@@ -281,6 +281,7 @@ async function runSessionTurn(input: {
   const runWithModel = async (model: string, attemptRequestId: string) => {
     const sessionKey = sessionKeyFor(ctx, prompt.instructions, toolDefinitions, model);
     const sessionId = nanocodeSessionId(sessionKey);
+    const contract = sessionKey.slice(sessionKey.lastIndexOf(":") + 1);
     // Privacy deletion and retention find sessions through this mapping.
     if (typeof ctx.repo.recordNanocodeSession === "function") {
       await ctx.repo.recordNanocodeSession({
@@ -294,6 +295,9 @@ async function runSessionTurn(input: {
     try {
     return {
       model,
+      sessionId,
+      requestId: attemptRequestId,
+      contract,
       result: await host.runTurn({
         requestId: attemptRequestId,
         sessionId,
@@ -375,6 +379,43 @@ async function runSessionTurn(input: {
     };
   }
 
+  // A turn that ends without reply text gets one repair turn in the same
+  // session: the model keeps everything it found and only has to answer.
+  let repaired = false;
+  if (!outcome.result.finalMessage.trim() && !ctx.abortSignal?.aborted) {
+    await recordAgentEvent(ctx, {
+      eventName: "agent.nanocodex.repair_started",
+      level: "warn",
+      summary: "The turn ended without a reply; asking the model to answer from what it found.",
+      metadata: { model: outcome.model, toolCalls: executedToolCount },
+    });
+    try {
+      const repair = await host.runTurn({
+        requestId: `${outcome.requestId}:repair`,
+        sessionId: outcome.sessionId,
+        model: nanocodeModel(outcome.model),
+        thinking: PRIMARY_AGENT_REASONING,
+        instructions: prompt.instructions,
+        prompt: { text: REPAIR_PROMPT, images: [] },
+        executeTool,
+        abortSignal: ctx.abortSignal,
+        onProgress: ctx.noteProgress,
+        onEvent: async (event) => recordHostEvent(ctx, `${outcome.requestId}:repair`, event),
+      });
+      if (repair.finalMessage.trim()) {
+        outcome = { ...outcome, result: { ...outcome.result, finalMessage: repair.finalMessage } };
+        repaired = true;
+      }
+    } catch (error) {
+      await recordAgentEvent(ctx, {
+        eventName: "agent.nanocodex.repair_failed",
+        level: "warn",
+        summary: "The repair turn failed; delivering the original result.",
+        metadata: { ...runtimeErrorDimensions(error), error: previewText(errorMessage(error), 300) },
+      });
+    }
+  }
+
   const output = turnOutput.snapshot();
   await recordAgentEvent(ctx, {
     eventName: "agent.nanocodex.complete",
@@ -388,6 +429,8 @@ async function runSessionTurn(input: {
       toolAttempts: toolSequence,
       reusedToolCalls: reusedToolCount,
       resumed: outcome.result.resumed,
+      repaired,
+      contract: outcome.contract,
     },
   });
   return {
@@ -471,6 +514,9 @@ export async function buildSessionPrompt(
     ].join("\n\n"),
   };
 }
+
+const REPAIR_PROMPT =
+  "Your last turn ended without a reply to the requester. Reply to them now, using what you already found. Do not call more tools unless the answer depends on one.";
 
 const SESSION_CONVENTIONS =
   "Each turn arrives as context blocks followed by the requester's message wrapped in <message from=\"name\" user_id=\"id\">. " +

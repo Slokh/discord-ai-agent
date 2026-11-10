@@ -73,7 +73,9 @@
     "smoke:post-deploy": "tsx scripts/postDeployCanary.ts",
     "scan:release": "tsx scripts/scanRelease.ts",
     "clear-commands": "tsx src/discord/registerCommands.ts",
-    "typecheck": "tsc -p tsconfig.json --noEmit"
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "eval:export-replays": "tsx scripts/exportReplayCases.ts",
+    "eval:replay": "npm run eval -- --private-only --repeat 3"
   },
   "engines": {
     "node": ">=22.19.0"

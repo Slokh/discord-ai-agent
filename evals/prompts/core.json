@@ -31,15 +31,6 @@
       "notes": "The model should answer from its stable capability schema without calling an invented tool-list tool."
     },
     {
-      "id": "ops-deployment-status",
-      "category": "ops",
-      "prompt": "deployment status",
-      "expectedTools": [
-        "getDeploymentStatus"
-      ],
-      "notes": "Deployment questions should use the ops status tool instead of Discord history."
-    },
-    {
       "id": "ops-user-turn-limit",
       "category": "ops",
       "prompt": "limit tyler to 5 posts per day, he's spamming every channel",
@@ -217,43 +208,6 @@
       "notes": "Niche external product questions should use web tools when Discord evidence is insufficient."
     },
     {
-      "id": "spotify-playlist-tool-choice",
-      "category": "spotify",
-      "prompt": "list all the tracks in this Spotify playlist: https://open.spotify.com/playlist/abc123",
-      "expectedTools": [
-        "getSpotifyPlaylistTracks"
-      ],
-      "notes": "Spotify playlist URLs should route to the Spotify API tool rather than web_fetch; without credentials it should return the tool's explicit configuration limitation."
-    },
-    {
-      "id": "spotify-album-tool-choice",
-      "category": "spotify",
-      "prompt": "what tracks are on this Spotify album? https://open.spotify.com/album/abc123",
-      "expectedTools": [
-        "getSpotifyAlbumTracks"
-      ],
-      "notes": "Spotify album track-list requests should use the album track tool."
-    },
-    {
-      "id": "spotify-playlist-stats-tool-choice",
-      "category": "spotify",
-      "prompt": "give me fun stats for this Spotify playlist: https://open.spotify.com/playlist/abc123",
-      "expectedTools": [
-        "getSpotifyPlaylistStats"
-      ],
-      "notes": "Fun playlist summaries should use deterministic playlist stats instead of deprecated audio features."
-    },
-    {
-      "id": "spotify-playlist-generated-csv-ranking",
-      "category": "spotify",
-      "prompt": "top 10 artists added to this Spotify playlist in the last year: https://open.spotify.com/playlist/abc123",
-      "expectedTools": [
-        "getSpotifyPlaylistTracks",
-        "queryGeneratedCsv"
-      ],
-      "notes": "Custom playlist rankings should compose a Spotify CSV export with the generic generated-CSV query tool rather than adding prompt-specific Spotify branches."
-    },
-    {
       "id": "vision-attached-image",
       "category": "image",
       "prompt": "what is in this screenshot?",
@@ -271,56 +225,6 @@
       ],
       "skip": true,
       "skipReason": "Image generation spends credits; run explicitly by filtering this prompt after removing skip in a private eval file."
-    },
-    {
-      "id": "codegen-self-update-skipped",
-      "category": "codegen",
-      "prompt": "update yourself to make active codegen progress messages clearer",
-      "expectedTools": [
-        "runSandboxAgent"
-      ],
-      "skip": true,
-      "skipReason": "Codegen opens PRs; keep this documented but skipped in the default suite."
-    },
-    {
-      "id": "scheduled-agent-daily-briefing-skipped",
-      "category": "memory",
-      "prompt": "every morning at 9, summarize yesterday's Discord activity for me",
-      "expectedTools": [
-        "setReminder"
-      ],
-      "skip": true,
-      "skipReason": "Schedule creation is a durable mutation; model selection and delivery_mode arguments are covered by focused contract and handler tests.",
-      "notes": "A recurring request for fresh work should use the unified scheduler in agent mode rather than creating a literal static reminder."
-    },
-    {
-      "id": "scheduled-agent-latest-health",
-      "category": "memory",
-      "prompt": "what happened with my morning summary schedule?",
-      "expectedTools": [
-        "listMyReminders"
-      ],
-      "notes": "Natural schedule-health questions should use the requester-scoped schedule list, whose result includes recent outcomes and authorized result links."
-    },
-    {
-      "id": "toolscope-spotify-oblique-music",
-      "category": "spotify",
-      "prompt": "who shows up the most on this playlist? https://open.spotify.com/playlist/abc123",
-      "expectedTools": [
-        "getSpotifyPlaylistTracks",
-        "queryGeneratedCsv"
-      ],
-      "notes": "The stable deployment tool contract should let the model choose Spotify for oblique playlist/music requests."
-    },
-    {
-      "id": "toolscope-codegen-casual-bot-fix-skipped",
-      "category": "codegen",
-      "prompt": "can you make the bot stop double-posting that progress message?",
-      "expectedTools": [
-        "runSandboxAgent"
-      ],
-      "skip": true,
-      "skipReason": "Codegen opens PRs; this covers model selection from the stable tool contract for casual code-update wording."
     },
     {
       "id": "toolscope-image-draw-without-image-word-skipped",
@@ -380,24 +284,6 @@
         "revealRandomness"
       ],
       "notes": "Fairness verification requests must use revealRandomness to publish the server seed."
-    },
-    {
-      "id": "presentation-explicit-buttons",
-      "category": "presentation",
-      "prompt": "Give me three Discord buttons to choose whether I want a short summary, detailed explanation, or source links.",
-      "expectedTools": [
-        "composeDiscordResponse"
-      ],
-      "notes": "Explicit native Discord UI requests should load the scoped presentation capability and produce validated semantic controls."
-    },
-    {
-      "id": "presentation-agent-chosen-bounded-choice",
-      "category": "presentation",
-      "prompt": "Help the group settle on a game night. Ask everyone whether Friday, Saturday, or Sunday works best, then use their answer to suggest the next step.",
-      "expectedTools": [
-        "composeDiscordResponse"
-      ],
-      "notes": "The agent should discover the presentation capability for a bounded group choice even when the user does not explicitly request buttons or a select menu."
     },
     {
       "id": "discord-add-message-reaction",

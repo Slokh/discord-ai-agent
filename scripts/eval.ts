@@ -4,6 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
 import { extractPromptJson, type PromptJsonOutput } from "./promptJson.js";
+import type { JudgeVerdict } from "./evalJudge.js";
 
 export { extractPromptJson } from "./promptJson.js";
 import { openRouterServerToolRegistry, toolRegistry } from "../src/tools/registry.js";
@@ -55,7 +56,11 @@ const evalPromptSchema = z.object({
   useDiscordMemory: z.boolean().default(false),
   timeoutMs: z.number().int().positive().optional(),
   skip: z.boolean().default(false),
-  skipReason: z.string().optional()
+  skipReason: z.string().optional(),
+  /** Quality a judge model grades after the code checks pass. */
+  rubric: z.string().min(1).optional(),
+  /** A known-good answer the judge compares against (production replays). */
+  referenceAnswer: z.string().optional(),
 });
 
 const evalSuiteSchema = z.object({
@@ -82,6 +87,9 @@ export type EvalArgs = {
   json: boolean;
   safeSummary: boolean;
   promptTimeoutMs: number;
+  /** Runs per case; reports pass@1 and pass^k over them. */
+  repeat: number;
+  judge?: (input: { prompt: string; answer: string; rubric: string; referenceAnswer?: string }) => Promise<JudgeVerdict>;
 };
 
 export type EvalTraceEvidence = {
@@ -97,6 +105,8 @@ export type EvalTraceEvidence = {
 
 export type EvalCaseResult = {
   id: string;
+  /** 1-based run number when a case runs more than once. */
+  attempt?: number;
   category: string;
   sourceRevision?: string;
   prompt: string;
@@ -123,6 +133,8 @@ export type EvalRunReport = {
     total: number;
   };
   results: EvalCaseResult[];
+  /** Over non-skipped cases: mean single-run pass rate, and the share passing every run. */
+  consistency?: { repeat: number; cases: number; passAt1: number; passHatK: number };
 };
 
 export type EvalComparisonStatus = "improved" | "regressed" | "changed" | "unchanged" | "new" | "removed";
@@ -177,6 +189,7 @@ async function main() {
     return;
   }
 
+  if (selectedPrompts.some((prompt) => prompt.rubric && !prompt.skip)) args.judge = await createJudge();
   const report = await runEvalPrompts(selectedPrompts, args);
   const comparison = args.comparePath ? compareEvalReports(await loadEvalReport(args.comparePath), report, args.comparePath) : null;
   const outputPath = await writeEvalReport(report, args.outputDir, comparison);
@@ -206,7 +219,8 @@ export function parseEvalArgs(argv: string[]): EvalArgs {
     list: false,
     json: false,
     safeSummary: false,
-    promptTimeoutMs: DEFAULT_TIMEOUT_MS
+    promptTimeoutMs: DEFAULT_TIMEOUT_MS,
+    repeat: 1
   };
 
   for (let index = 0; index < argv.length; index += 1) {
@@ -251,6 +265,10 @@ export function parseEvalArgs(argv: string[]): EvalArgs {
       args.json = true;
     } else if (arg === "--safe-summary") {
       args.safeSummary = true;
+    } else if (arg === "--repeat") {
+      args.repeat = positiveInteger(requiredNext(argv, ++index, arg), arg);
+    } else if (arg.startsWith("--repeat=")) {
+      args.repeat = positiveInteger(valueAfterEquals(arg), "--repeat");
     } else if (arg === "--prompt-timeout-ms") {
       args.promptTimeoutMs = positiveInteger(requiredNext(argv, ++index, arg), arg);
     } else if (arg.startsWith("--prompt-timeout-ms=")) {
@@ -316,10 +334,13 @@ export async function runEvalPrompts(prompts: EvalPrompt[], args: EvalArgs): Pro
   const traceReader = await createTraceReader().catch(() => null);
 
   try {
+    const repeat = Math.max(1, args.repeat ?? 1);
     for (const prompt of prompts) {
-      results.push({
-        ...await runEvalPrompt(prompt, args, traceReader),
-      });
+      for (let attempt = 1; attempt <= repeat; attempt += 1) {
+        const result = await runEvalPrompt(prompt, args, traceReader);
+        results.push(repeat > 1 ? { ...result, attempt } : result);
+        if (result.status === "skipped") break;
+      }
     }
   } finally {
     await traceReader?.close().catch(() => undefined);
@@ -329,8 +350,30 @@ export async function runEvalPrompts(prompts: EvalPrompt[], args: EvalArgs): Pro
     generatedAt: new Date().toISOString(),
     durationMs: Date.now() - startedAt,
     totals: countTotals(results),
-    results
+    results,
+    consistency: consistency(results, Math.max(1, args.repeat ?? 1)),
   };
+}
+
+/** pass@1 is the mean per-case pass rate; pass^k is the share of cases that passed every run. */
+export function consistency(results: EvalCaseResult[], repeat: number): EvalRunReport["consistency"] {
+  const byCase = new Map<string, EvalCaseResult[]>();
+  for (const result of results) {
+    if (result.status === "skipped") continue;
+    byCase.set(result.id, [...(byCase.get(result.id) ?? []), result]);
+  }
+  const rates = [...byCase.values()].map((runs) => runs.filter((run) => run.status === "passed").length / runs.length);
+  if (rates.length === 0) return { repeat, cases: 0, passAt1: 0, passHatK: 0 };
+  return {
+    repeat,
+    cases: rates.length,
+    passAt1: round(rates.reduce((sum, rate) => sum + rate, 0) / rates.length),
+    passHatK: round(rates.filter((rate) => rate === 1).length / rates.length),
+  };
+}
+
+function round(value: number) {
+  return Math.round(value * 1000) / 1000;
 }
 
 async function runEvalPrompt(
@@ -411,6 +454,20 @@ async function runEvalPrompt(
     durationMs: output.durationMs ?? durationMs,
     evidence
   });
+  // Code checks first; the judge grades only what code cannot.
+  if (prompt.rubric && failures.length === 0) {
+    if (!args.judge) {
+      failures.push("judge: unavailable (set OPENROUTER_API_KEY to grade rubric cases)");
+    } else {
+      const verdict = await args.judge({
+        prompt: prompt.prompt,
+        answer: output.content,
+        rubric: prompt.rubric,
+        referenceAnswer: prompt.referenceAnswer,
+      }).catch((error: unknown): JudgeVerdict => ({ pass: false, reason: `judge failed: ${error instanceof Error ? error.message : String(error)}` }));
+      if (!verdict.pass) failures.push(`judge: ${verdict.reason}`);
+    }
+  }
 
   return {
     id: prompt.id,
@@ -548,6 +605,9 @@ export function formatEvalSummary(report: EvalRunReport, outputPath: string, com
   const lines = [
     `Eval results: ${report.totals.passed}/${report.totals.total} passed (${report.totals.failed} failed, ${report.totals.error} errors)`,
     `Duration: ${(report.durationMs / 1000).toFixed(3)}s`,
+    ...(report.consistency && report.consistency.repeat > 1
+      ? [`Consistency over ${report.consistency.repeat} runs: pass@1 ${report.consistency.passAt1}, pass^${report.consistency.repeat} ${report.consistency.passHatK}`]
+      : []),
     `Output: ${outputPath}`,
     ""
   ];
@@ -606,6 +666,7 @@ export function safeEvalSummary(report: EvalRunReport) {
     generatedAt: report.generatedAt,
     durationMs: report.durationMs,
     totals: report.totals,
+    ...(report.consistency ? { consistency: report.consistency } : {}),
     groups: [...groups.values()].sort((left, right) =>
       left.revision.localeCompare(right.revision)
       || left.category.localeCompare(right.category)),
@@ -613,8 +674,8 @@ export function safeEvalSummary(report: EvalRunReport) {
 }
 
 export function compareEvalReports(baseline: EvalRunReport, current: EvalRunReport, baselinePath: string): EvalComparisonReport {
-  const beforeById = new Map(baseline.results.map((result) => [result.id, result]));
-  const afterById = new Map(current.results.map((result) => [result.id, result]));
+  const beforeById = caseOutcomes(baseline.results);
+  const afterById = caseOutcomes(current.results);
   const ids = [...new Set([...beforeById.keys(), ...afterById.keys()])].sort();
   const totals: Record<EvalComparisonStatus, number> = {
     improved: 0,
@@ -645,6 +706,31 @@ export function compareEvalReports(baseline: EvalRunReport, current: EvalRunRepo
     };
   });
   return { baselinePath, totals, cases };
+}
+
+/**
+ * One outcome per case across repeated runs: the case counts as passed only
+ * when every run passed, and the first non-passing run explains why.
+ */
+function caseOutcomes(results: EvalCaseResult[]): Map<string, EvalCaseResult> {
+  const outcomes = new Map<string, EvalCaseResult>();
+  for (const result of results) {
+    const current = outcomes.get(result.id);
+    if (!current || (current.status === "passed" && result.status !== "passed")) outcomes.set(result.id, result);
+  }
+  return outcomes;
+}
+
+async function createJudge(): Promise<EvalArgs["judge"]> {
+  const [{ loadConfig }, { OpenRouterClient }, { judgeAnswer }] = await Promise.all([
+    import("../src/config/env.js"),
+    import("../src/models/openrouter.js"),
+    import("./evalJudge.js"),
+  ]);
+  const config = loadConfig();
+  if (!config.openRouter.apiKey) return undefined;
+  const openRouter = new OpenRouterClient(config.openRouter);
+  return (input) => judgeAnswer({ openRouter, model: config.openRouter.utilityModel, ...input });
 }
 
 function comparisonStatus(before: EvalCaseResult["status"] | null, after: EvalCaseResult["status"] | null): EvalComparisonStatus {

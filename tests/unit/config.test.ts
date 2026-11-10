@@ -54,12 +54,11 @@ describe("config", () => {
     withEnv({
       APP_REVISION: "abc123",
       RELEASE_VERIFICATION_ID: "run-1",
-      PREVIOUS_APP_REVISION: "def456",
       PRIVY_APP_ID: "privy-app",
       PRIVY_APP_SECRET: "privy-secret"
     }, () => {
       const config = loadConfig();
-      expect(config.releaseNotes).toEqual({ verificationId: "run-1", previousRevision: "def456" });
+      expect(config.releaseNotes).toEqual({ verificationId: "run-1" });
       expect(config.payments).toEqual(expect.objectContaining({ walletEnabled: true, userWalletsEnabled: true }));
       expect(() => assertPaymentConfig(config)).not.toThrow();
     });
@@ -122,7 +121,6 @@ describe("config", () => {
 function withCleanEnv(callback: () => void) {
   withEnv({
     APP_REVISION: "",
-    PREVIOUS_APP_REVISION: "",
     DISCORD_CLIENT_SECRET: "",
     CONSOLE_SESSION_SECRET: "",
     PRIVY_APP_ID: "",

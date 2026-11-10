@@ -26,10 +26,6 @@ helm.sh/chart: {{ .Chart.Name }}-{{ .Chart.Version | replace "+" "_" }}
 - name: RELEASE_VERIFICATION_ID
   value: {{ .Values.config.releaseVerificationId | quote }}
 {{- end }}
-{{- if .Values.config.previousAppRevision }}
-- name: PREVIOUS_APP_REVISION
-  value: {{ .Values.config.previousAppRevision | quote }}
-{{- end }}
 - name: BOT_OWNER_USER_ID
   valueFrom: { secretKeyRef: { name: {{ .Values.secret.existingSecretName }}, key: BOT_OWNER_USER_ID, optional: true } }
 - name: OPS_ALLOWLIST_USER_IDS

@@ -26,8 +26,6 @@ export type ReleaseStatus = {
   rolloutReady: boolean;
   deploymentHealth: DeploymentHealth | null;
   deploymentRun: Record<string, unknown> | null;
-  quality: Record<string, unknown> | null;
-  tasks: Record<string, unknown> | null;
   warnings: string[];
 };
 
@@ -83,14 +81,6 @@ export function collectReleaseStatus(input: {
         "--limit", "5", "--json", "databaseId,status,conclusion,url,headSha,createdAt",
       ]), warnings, "deployment workflow"))
     : null;
-  const workerName = deployments.find((deployment) => deployment.name === `${release}-worker`)?.name;
-  const quality = deployedRevision && workerName
-    ? jsonResult(runner("kubectl", [
-        "--namespace", namespace, "exec", `deployment/${workerName}`, "--",
-        "node", "dist/scripts/revisionQuality.js", "--revision", deployedRevision,
-        "--hours", "48", "--compare",
-      ]), warnings, "revision quality")
-    : null;
   return {
     generatedAt: new Date().toISOString(),
     branch,
@@ -103,8 +93,6 @@ export function collectReleaseStatus(input: {
     rolloutReady,
     deploymentHealth,
     deploymentRun,
-    quality,
-    tasks: null,
     warnings,
   };
 }
@@ -133,8 +121,7 @@ export function releaseStatusExitCode(status: ReleaseStatus) {
   const checksFailed = status.checks.some((check) =>
     ["FAILURE", "CANCELLED", "TIMED_OUT", "ACTION_REQUIRED"].includes(String(check.conclusion ?? check.state ?? "").toUpperCase()));
   const deploymentFailed = String(status.deploymentRun?.conclusion ?? "").toLowerCase() === "failure";
-  const qualityFailed = (status.quality?.assessment as any)?.status === "fail";
-  return checksFailed || deploymentFailed || qualityFailed
+  return checksFailed || deploymentFailed
     || !status.revisionsAligned || !status.rolloutReady ? 1 : 0;
 }
 

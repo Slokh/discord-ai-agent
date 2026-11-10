@@ -29,7 +29,6 @@ export const environmentVariables = [
   { name: "NODE_ENV", group: "deployment", description: "Node runtime mode.", requiredFor: "runtime platform", example: "production" },
   { name: "APP_REVISION", group: "deployment", description: "Immutable deployed git revision.", requiredFor: "release workflow" },
   { name: "RELEASE_VERIFICATION_ID", group: "deployment", description: "Unique public identifier for this rollout's post-deploy promotion.", requiredFor: "release workflow" },
-  { name: "PREVIOUS_APP_REVISION", group: "deployment", description: "Previously deployed git revision.", requiredFor: "release announcements" },
 ] as const satisfies readonly EnvironmentVariableDefinition[];
 
 export const environmentVariableNames = new Set<string>(environmentVariables.map((definition) => definition.name));
@@ -49,7 +48,7 @@ export const retiredEnvironmentVariableNames = new Set([
   // Removed with code updates, Spotify, Components V2, and deployment announcements.
   "TASK_SIGNING_SECRET", "GITHUB_TOKEN", "GITHUB_APP_ID", "GITHUB_APP_PRIVATE_KEY", "GITHUB_APP_INSTALLATION_ID",
   "DISCORD_PREMIUM_SKU_IDS", "SPOTIFY_CLIENT_ID", "SPOTIFY_CLIENT_SECRET", "DISCORD_BOT_CHANNEL_ID",
-  "POD_NAMESPACE", "SANDBOX_IMAGE",
+  "POD_NAMESPACE", "SANDBOX_IMAGE", "PREVIOUS_APP_REVISION",
 ]);
 
 export function assertNoRetiredEnvironmentVariables(env: NodeJS.ProcessEnv): void {

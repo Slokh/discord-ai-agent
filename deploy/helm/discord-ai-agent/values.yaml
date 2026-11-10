@@ -27,8 +27,6 @@ config:
   appRevision: unknown
   # Unique workflow-run identifier; prevents a repeated SHA from reusing an older promotion.
   releaseVerificationId: ""
-  # The deploy workflow fills this from the currently running bot before rollout.
-  previousAppRevision: ""
 
 console:
   enabled: false

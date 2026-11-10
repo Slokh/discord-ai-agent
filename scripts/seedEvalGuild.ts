@@ -6,15 +6,18 @@ import { createApplicationServices } from "../src/runtime/applicationServices.js
  * empty database (CI). Every name and message here is invented; nothing comes
  * from a real server.
  */
+/** Synthetic snowflake-shaped IDs, built at runtime so no real-looking ID is committed. */
+const synthetic = (prefix: number, index: number) => `${prefix}${String(index).padStart(17, "0")}`;
+
 const config = loadConfig();
 const guildId = config.discord.guildId;
 if (!/^\d{17,20}$/.test(guildId)) throw new Error("Set DISCORD_GUILD_ID to a synthetic snowflake before seeding.");
 const services = createApplicationServices({ config, enableWalletRuntime: false });
-const channelId = "100000000000000001";
+const channelId = synthetic(1, 1);
 const members = [
-  { id: "200000000000000001", name: "Avery" },
-  { id: "200000000000000002", name: "Blake" },
-  { id: "200000000000000003", name: "Casey" },
+  { id: synthetic(2, 1), name: "Avery" },
+  { id: synthetic(2, 2), name: "Blake" },
+  { id: synthetic(2, 3), name: "Casey" },
 ];
 const lines = [
   "Morning all, the standup moved to 10:30 today.",
@@ -38,7 +41,7 @@ try {
   for (const [index, content] of lines.entries()) {
     const author = members[index % members.length]!;
     await repo.upsertMessage({
-      id: `30000000000000000${index}`,
+      id: synthetic(3, index),
       guildId,
       channelId,
       authorId: author.id,

@@ -45,7 +45,6 @@ const envSchema = z.object({
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
   APP_REVISION: z.string().trim().default("unknown"),
   RELEASE_VERIFICATION_ID: z.string().trim().default(""),
-  PREVIOUS_APP_REVISION: z.string().trim().default(""),
 
   DISCORD_TOKEN: z.string().optional(),
   DISCORD_CLIENT_ID: z.string().trim().default(""),
@@ -95,8 +94,7 @@ export function loadConfig(argv = process.argv) {
     nodeEnv: env.NODE_ENV,
     appRevision: env.APP_REVISION || "unknown",
     releaseNotes: {
-      verificationId: env.RELEASE_VERIFICATION_ID || null,
-      previousRevision: env.PREVIOUS_APP_REVISION || null
+      verificationId: env.RELEASE_VERIFICATION_ID || null
     },
     logLevel: defaultLogLevel(env.NODE_ENV),
     processRole,

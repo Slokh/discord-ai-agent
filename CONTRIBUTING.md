@@ -4,13 +4,14 @@
 
 ```bash
 npm install
+cargo install --locked --path native/nanocodex-runtime
 docker compose up -d postgres
 cp .env.example .env
 npm run migrate
 npm run dev
 ```
 
-Use Node.js 22+. The compose Postgres listens on port 5433 for local and DB-backed test flows.
+Use Node.js 22.19+ and Rust 1.97 (`rust-toolchain.toml`). The worker (`npm run worker`) starts the nanocode host from `PATH`. The compose Postgres listens on port 5433 for local and DB-backed test flows.
 
 ## Navigation
 
@@ -27,7 +28,7 @@ npm run verify
 npm run scan:release
 ```
 
-`npm run verify` runs lint, typecheck, tests, and `npm audit`. `npm run scan:release` checks for private content and secret leaks and must pass before release.
+`npm run verify` runs lint, typecheck, tests, `npm audit`, docs and generated-config checks, and the release scan. `npm run scan:release` checks for private content and secret leaks and must pass before release.
 
 For DB-backed repository and queue tests, start the compose Postgres on port 5433 and run:
 
@@ -35,11 +36,19 @@ For DB-backed repository and queue tests, start the compose Postgres on port 543
 npm run verify:db
 ```
 
-For eval schema checks without live model/database-backed regression runs:
+For eval schema checks without model calls:
 
 ```bash
 npm run eval -- --dry-run
 ```
+
+For prompt, tool, or model changes, run the public suite three times and compare with the base revision (see `docs/development.md`):
+
+```bash
+npm run eval -- --repeat 3
+```
+
+For changes under `native/nanocodex-runtime/`, run the cargo checks and `npx vitest run tests/native` listed in `docs/development.md`.
 
 ## Pull Requests
 

@@ -14,7 +14,6 @@ const requiredArchitectureGuides = [
   "docs/agent-system.md",
   "docs/data.md",
   "docs/payments.md",
-  "docs/code-updates.md",
   "docs/operations.md",
   "docs/development.md",
 ];

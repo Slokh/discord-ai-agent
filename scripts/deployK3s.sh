@@ -39,12 +39,8 @@ tar -xzf "$workspace/source.tar.gz" --strip-components=1 -C "$workspace/source"
 cd "$workspace/source"
 
 previous_helm_revision=""
-previous_app_revision=""
 if helm status "$release" --namespace "$namespace" --output json >"$workspace/previous.json" 2>/dev/null; then
   previous_helm_revision="$(jq -r '.version // empty' "$workspace/previous.json")"
-fi
-if kubectl --namespace "$namespace" get deployment "$release-bot" >/dev/null 2>&1; then
-  previous_app_revision="$(kubectl --namespace "$namespace" get deployment "$release-bot" -o jsonpath='{.spec.template.spec.containers[?(@.name=="bot")].env[?(@.name=="APP_REVISION")].value}')"
 fi
 
 rollback_on_error() {
@@ -76,9 +72,6 @@ helm_args=(
   --set-string "config.appRevision=$image_tag"
   --set-string "config.releaseVerificationId=$deployment_id"
 )
-if [ -n "$previous_app_revision" ]; then
-  helm_args+=(--set-string "config.previousAppRevision=$previous_app_revision")
-fi
 
 helm upgrade --install "$release" deploy/helm/discord-ai-agent \
   --rollback-on-failure \

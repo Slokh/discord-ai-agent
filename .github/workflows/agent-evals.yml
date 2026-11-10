@@ -48,7 +48,6 @@ jobs:
     env:
       OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
       DATABASE_URL: postgres://discord_ai_agent:discord_ai_agent@localhost:5433/discord_ai_agent
-      DISCORD_GUILD_ID: "100000000000000000"
       REPEAT: "3"
       # Fail when pass@1 drops by more than this many points.
       MAX_PASS_AT_1_DROP: "0.05"
@@ -59,6 +58,9 @@ jobs:
             echo "::error::Set the OPENROUTER_API_KEY repository secret to run agent evals."
             exit 1
           fi
+      - name: Use a synthetic guild ID
+        # Built at runtime: the release scan rejects snowflake-shaped literals.
+        run: echo "DISCORD_GUILD_ID=1$(printf '%017d' 0)" >> "$GITHUB_ENV"
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0

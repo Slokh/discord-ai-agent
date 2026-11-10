@@ -29,22 +29,6 @@ services:
       - ./.discord-ai-agent:/app/.discord-ai-agent
     command: ["node", "dist/src/index.js", "bot"]
 
-  api:
-    build:
-      context: .
-      target: final
-    depends_on:
-      postgres:
-        condition: service_healthy
-    env_file:
-      - path: .env
-        required: false
-    ports:
-      - "8080:8080"
-    volumes:
-      - ./.discord-ai-agent:/app/.discord-ai-agent
-    command: ["node", "dist/src/index.js", "api"]
-
   bot:
     build:
       context: .

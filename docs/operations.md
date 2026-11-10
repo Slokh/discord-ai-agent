@@ -1,15 +1,16 @@
 # Operations
 
-This guide covers installation, configuration, process roles, indexing, observability, production debugging, deployment, and recovery.
+This guide covers local setup, configuration, process roles, indexing, the operator Console, production debugging, build and release, and recovery.
 
 ## Requirements
 
-- Node.js 22+
+- Node.js 22.19 or later
 - Postgres with pgvector
-- Discord application and bot token
-- OpenRouter API key
+- Rust 1.97 (pinned in `rust-toolchain.toml`) to build the nanocode host
+- A Discord application and bot token
+- An OpenRouter API key
 
-GitHub credentials and a task-signing secret are optional unless code-update PRs are enabled. Privy credentials are optional unless wallets are enabled. Spotify credentials are optional and only expose Spotify tools when complete.
+Privy credentials are needed only for wallets.
 
 ## Local setup
 
@@ -23,15 +24,19 @@ npm run preflight
 
 Set at least `DISCORD_TOKEN`, `DISCORD_CLIENT_ID`, `DISCORD_GUILD_ID`, `OPENROUTER_API_KEY`, and `DATABASE_URL`. The example database URL uses the Compose Postgres on local port 5433.
 
+The worker spawns `discord-agent-nanocodex-runtime` from `PATH`. Install it once, and again after changing `native/nanocodex-runtime/`:
+
+```bash
+cargo install --locked --path native/nanocodex-runtime
+```
+
 Generate the least-privilege Discord invite:
 
 ```bash
 npm run invite-url
 ```
 
-The generated role includes Create Public Threads and Send Messages in Threads so `🐛` reports can keep their visible follow-up beside the reported message. Existing installations may need to re-authorize the generated invite or grant those permissions to the bot role; delivery falls back to DM when either permission is unavailable.
-
-For a minimal split runtime, start the bot and chat worker in separate terminals:
+Start the bot and the worker in separate terminals:
 
 ```bash
 npm run dev
@@ -41,167 +46,90 @@ npm run dev
 npm run worker
 ```
 
-The bot handles gateway ingress and delivery. The worker executes queued chat requests. Start `npm run api` only to receive signed callbacks from isolated code-update sandboxes. `npm run start:all` is intended only for a fully configured built environment.
+The bot handles gateway ingress and delivery; the worker runs queued turns and maintenance. `npm run start:all` runs every role in one built process. Outside production, each process applies migrations at startup.
 
-Start the read-only operator dashboard against local data only when intentionally working on its data projection or fixtures:
-
-```bash
-npm run console:local
-```
-
-It listens on port 8081 and needs only the database. Its overview includes bounded private prompt previews, so treat it as an operator surface rather than a public application endpoint.
+Run one prompt through the full runtime without Discord delivery with `npm run prompt`. The host keeps sessions in Postgres when `DATABASE_URL` is set; `NANOCODE_STORE=memory` keeps them in the host process instead.
 
 ## Configuration ownership
 
-`.env.example` and [Configuration](configuration.md) are generated from the accepted manifest in `src/config/environment.ts`. `src/config/env.ts` separates those deployment inputs from versioned `productConfig`. Environment variables are reserved for credentials, private Discord identity/policy, release metadata, Kubernetes namespace, and the immutable sandbox image. Model choices, limits, repository target, queue topology, callback URL, and payment rail change through reviewed source. Production startup rejects retired variables; run `npm run config:check` whenever the manifest changes.
-
-Important feature gates:
+`.env.example` and [Configuration](configuration.md) are generated from the manifest in `src/config/environment.ts`; run `npm run config:check` whenever it changes. `src/config/env.ts` separates those deployment inputs from versioned `productConfig`. Environment variables hold credentials, private Discord identity and access policy, and release metadata. Models, limits, retention windows, timeouts, and the payment rail change through reviewed source. Production startup rejects retired variables.
 
 | Capability | Required configuration |
 | --- | --- |
-| Chat | Discord token/client/guild, OpenRouter key, database |
-| Code updates | GitHub PAT or App credentials, task-signing secret, worker, and internal callback receiver |
-| Spotify | Client ID and client secret |
+| Chat | Discord token, client ID, and guild ID; OpenRouter key; database |
 | Wallets, transfers, and wagers | Both Privy credentials |
+| Hosted Console sign-in | `DISCORD_CLIENT_SECRET` and `CONSOLE_SESSION_SECRET` |
 
-Administrative mutations use `BOT_OWNER_USER_ID` and `OPS_ALLOWLIST_USER_IDS`. Code-update requests remain available to members when the feature is deployed.
+`BOT_OWNER_USER_ID` and `OPS_ALLOWLIST_USER_IDS` gate `strict_ops` tools.
 
 ## Indexing and memory
 
-The gateway stores live message changes. Run an initial or repair crawl for historical coverage:
+The gateway stores live message changes. Run an initial or repair crawl for historical coverage, then fill embeddings:
 
 ```bash
 npm run crawl
 npm run embeddings:backfill
 ```
 
-The worker drains embedding jobs. Use `npm run reindex` only when cursors must be reset and the guild intentionally recrawled. Lexical search is available before embeddings complete.
+The worker runs a daily reconciliation crawl. It does not consume the embedding queue; run `npm run embeddings:worker` to drain it continuously. Use `npm run reindex` only when cursors must be reset and the guild recrawled. Lexical search works without embeddings.
 
-Useful maintenance scripts include `aliases`, `blocked-users`, `embeddings:reprioritize`, and the retention/reconciliation work built into the worker. Run scripts against production only through their explicit production-aware path; do not point local experiments at the production database accidentally.
+Other maintenance scripts include `aliases`, `blocked-users`, `embeddings:reprioritize`, and `discord-text:backfill`. Run scripts against production only through their explicit production-aware path; never point a local experiment at the production database by accident.
+
+## Operator Console
+
+The Console is an optional read-only role. Its Helm deployment is off by default (`console.enabled`), and the standard deployment does not enable it. When enabled it listens on port 8081, writes a heartbeat, and serves:
+
+- `/healthz`, unauthenticated, for Kubernetes and load-balancer probes;
+- `/api/overview`: environment, revision, service heartbeats, and verified deployments;
+- `/api/activity`: a complete, bounded index of the last three days for the selected types — prompts and replies (`conversation`, the default), retained Discord messages, verified releases, and system jobs;
+- `/api/activity/<kind>/<story-id>`: lazy detail for one story, with one chronological trace of retained Discord context, model and tool execution, typed events, and delivery.
+
+All, Running, Waiting, Issues, and Done filter the loaded index locally. Command-K (Control-K) searches it, and arrow keys or J/K move between stories. The projection exposes only allowlisted operational metadata such as model, reasoning level, token usage, cost, tool outcome, and latency; it never exposes private reasoning, raw tool arguments, secrets, or artifact contents. It has no mutation endpoints.
+
+In production every page and data endpoint except `/healthz` requires a signed session that `/auth/login` and `/auth/callback` create only after Discord OAuth confirms membership in the configured guild. An optional public service (`console.publicService.enabled`) puts a TLS load balancer in front of it. Local loopback runs skip authentication.
+
+| Command | Use |
+| --- | --- |
+| `npm run console` | Tunnel to the deployed Console service on loopback (`http://127.0.0.1:8081`). Requires the Console to be enabled in production. |
+| `npm run console:dev` | Run the branch's Console UI and projection locally against production through a read-only database relay. Requires `CONSOLE_DATABASE_URL`. |
+| `npm run console:dev:ui` | Run only the branch's UI against the deployed Console API. |
+| `npm run console:local` | Run the Console against the local database. |
+| `npm run console:provision` | Create or rotate the read-only `CONSOLE_DATABASE_URL` login role from a trusted workstation. |
+| `npm run console:health -- --revision <sha> --internal-url <url>` | Content-free health check of the overview, activity index, revision, projection freshness, and a sampled detail. |
+
+`console:dev` forces `default_transaction_read_only=on` and a statement timeout on every connection, verifies the session is read-only before serving, and never starts migrations, heartbeats, jobs, or Discord clients. The manual `Production Observation` workflow runs `console:health` against a deployed Console, including the public boundary.
 
 ## Production-first inspection
 
-The runtime ledger is canonical Postgres data, not an HTTP operator API. Investigate it only from a trusted, configured application pod or an explicitly selected production database; never fall back to a local default while diagnosing production behavior.
+The runtime ledger is Postgres data, not an HTTP operator API. Investigate it from a configured application pod or an explicitly selected production database; never fall back to a local default while diagnosing production.
 
-`release:status` remains the deployment-health command:
-
-```bash
-npm run release:status -- --pr <number>
-```
-
-Improvement cases are the single operator stream for member reports, model-detected impediments, developer friction, and automated runtime/deployment/CI/eval detections:
+Run a bounded command on the production host through Systems Manager:
 
 ```bash
-npm run improve -- --target local inbox
-npm run improve -- --target local health --hours 720
-npm run improve -- --target local show <case-id>
-npm run improve -- --target local triage <case-id>
-npm run improve -- --target local verify <case-id> --revision <sha>
-npm run improve -- --target local verify <case-id> --revision <sha> --apply
-npm run improve -- --target local reconcile
-npm run improve:watchdog
-npm run improve -- --target local suggest <case-id>
-npm run improve -- --target local evidence <case-id> --kind runtime_trace --disposition supports --summary "..."
-npm run improve -- --target local contract <case-id> --expected "..." --check '{"kind":"test","reference":"release-verify"}'
+AWS_PROFILE=production-operator scripts/runProductionCommand.sh \
+  'k3s kubectl -n discord-ai-agent get pods,statefulsets,deployments -o wide'
 ```
 
-Production access is explicit and requires confirmation. The production image omits npm, so use the compiled CLI in a configured pod:
-
-```bash
-kubectl -n discord-ai-agent exec deploy/discord-ai-agent-worker -- node dist/scripts/improve.js --target production --confirm-production inbox
-kubectl -n discord-ai-agent exec deploy/discord-ai-agent-worker -- node dist/scripts/improve.js --target production --confirm-production health --hours 720
-kubectl -n discord-ai-agent exec deploy/discord-ai-agent-worker -- node dist/scripts/improve.js --target production --confirm-production show <case-id>
-kubectl -n discord-ai-agent exec deploy/discord-ai-agent-worker -- node dist/scripts/improve.js --target production --confirm-production triage <case-id>
-kubectl -n discord-ai-agent exec deploy/discord-ai-agent-worker -- node dist/scripts/improve.js --target production --confirm-production reconcile
-kubectl -n discord-ai-agent exec deploy/discord-ai-agent-worker -- node dist/scripts/improvementWatchdog.js --revision <sha> --record-detection --enforce
-kubectl -n discord-ai-agent exec deploy/discord-ai-agent-worker -- node dist/scripts/improve.js --target production --confirm-production verify <case-id> --revision <sha> --apply
-```
-
-The API role is an internal-only signed callback receiver. It exposes only `/healthz` and task-scoped callback writes from isolated code-update sandboxes; it has no operator reads, metrics, browser UI, public service, or password configuration.
-
-The Console deployment has a two-minute Kubernetes startup-probe budget before liveness enforcement begins, so normal cold projection initialization does not create a restart loop. Message activity uses durable Discord delivery obligations and recent non-background, non-synthetic member execution traces to identify agent interactions—direct mentions, role mentions, and replies—without depending on local bot configuration. An agent source message belongs only to its Prompt or Reply story, whose overview title uses the retained raw Discord content with known mention labels resolved. Background embedding sessions may share a message trace ID but never take Activity ownership; those messages remain standalone Message stories.
-
-Activity type filtering is an accessible multi-select. The default relevant set includes prompts and replies, improvements, and code changes; messages, releases, and system activity are opt-in. Custom non-empty selections persist through the `types` query parameter and apply to status counts and keyboard traversal as one view.
-
-`npm run console:health -- --revision <sha> --internal-url <url>` is the reusable content-free health contract. From the Console pod it checks only the loopback overview and activity resources, requires production schema markers, the exact deployed revision, a projection timestamp no older than two minutes, and a sampled lazy detail when activity exists. When the public AWS service is enabled, the deployment runner separately requires a healthy public probe, a page redirect into Discord login, and an unauthenticated API rejection; the external check must not hairpin through the NLB from a target pod. The runner retries the bounded public checks long enough for recursive DNS to converge after an initial load-balancer replacement. Normal checks use an eight-second timeout and a four-second latency budget. Release verification retries both boundaries as one `console_health` stage before promotion; repeated failure rolls back and creates the normal post-deploy detection.
-
-The fifteen-minute production-observation job runs the same check and records a `console_health` proof-producer receipt through the worker's write-capable database identity. The Console pod performs only reads. Two consecutive failures, a stuck run, or a missed hourly freshness budget creates one content-free improvement case through reconciliation; a later successful receipt proves recovery. The top-bar producer summary therefore distinguishes Console route/projection health from pod heartbeats without adding a parallel status store.
-
-Console issue identity is derived only from durable links. Improvement cases sharing a source execution are projected as one issue; linked failed executions and repository tasks are folded into its evidence, and lazy detail reads the timelines for every case in that group. Repository tasks form logical stories rather than one row per attempt: case-linked work groups by exact case ID and direct retries group by their durable retry root. Unlinked failures remain separate, so the projection never guesses from titles or semantic similarity. Terminal tasks older than the unified improvement migration and lacking a case link are retained as historical ledger evidence but omitted from Console Activity; standalone repository work created after that cutover remains visible.
-
-The separate Console role leaves only `/healthz` unauthenticated for Kubernetes and load-balancer probes. Production pages, same-origin assets, `/api/overview`, cursor-paginated `/api/activity`, and lazy `/api/activity/<kind>/<story-id>` details require a signed Console session; `/auth/login` and `/auth/callback` establish that session only after Discord OAuth confirms membership in the configured guild. The read surface remains GET-only, has no mutation endpoint, and ships a restrictive content-security policy. A dedicated AWS load balancer terminates TLS and forwards only to the Console service; it does not expose the callback API or any other application role.
-
-Every application component writes a 15-second Postgres heartbeat, and the Console derives its views from the canonical runtime, task, improvement, proof-producer, deployment, message, and embedding tables. One compact top bar summarizes identity, health, proof producers, and release detail. The master-detail workspace keeps an independently scrollable Activity sidebar visible while the selected story loads in place. All, Running, Waiting, Issues, and Done describe lifecycle; an independent type selector narrows prompts and replies, messages, improvements, code changes, releases, or system activity. Command-K or Control-K performs server-backed search over the eligible three-day window, while arrows or J/K traverse visible stories. Current work stays pinned, open improvements remain regardless of age, linked repair work folds into its issue, successful background runs collapse only after complete projection, and synthetic canaries and CLI prompts stay out of member Activity without leaving the canonical ledger.
-
-The current Console contract replaces `/api/snapshot` with schema-versioned `/api/overview` and `/api/activity` resources. Overview skips terminal activity, message, and detail queries. Activity requests select only the requested story families before semantic folding, so the default view does not scan messages, releases, or system jobs; the browser receives one bounded complete index for the selected types across the uniform three-day window. Lifecycle tabs and counts are local and instant, while type changes and Command-K remain server-backed. The browser coalesces an identical scheduled refresh with the user request, ignores superseded results, retains cursoring only as a safety boundary above 2,000 summaries, and moves an excluded detail selection to the first matching story. Lazy detail queries only the selected story family and never rebuilds the complete projection. JSON responses use Brotli or gzip when accepted, and content-free completion logs record endpoint, status, duration, and serialized response bytes. The client bounds reads to eight seconds and marks an already rendered view stale while retrying rather than silently presenting old data.
-
-```bash
-npm run console
-```
-
-Then visit `http://127.0.0.1:8081`. The launcher verifies that the production service exists, establishes a loopback-only Kubernetes tunnel, and rejects snapshots that are not explicitly marked production with the supported schema version. Do not expose the ClusterIP through a public load balancer: active request previews are intentionally private operator data. Full transcripts and artifacts remain available only through the existing authorized production-debug workflow.
-
-Every detail type contributes its explanatory records to one chronological Trace instead of adding a type-specific history panel. Member-report titles are projected only in the private Console from the retained source message as a cleaned, 140-character `Reported prompt`, `Reported reply`, or `Reported message` preview; the durable case title and fingerprint remain unchanged. Message overview and detail resolve Discord user mentions through archived guild display names, so the sidebar and Trace render the same `@name` without rewriting canonical content. Message content precedes its embedding outcome; releases combine the prior baseline, proof-producer checks, announcement delivery, improvement receipts, and final verification; code changes combine aggregate attempt/runtime facts with bounded runtime events across every task in the logical story plus typed pull-request and deployment transitions timestamped at the verified release rather than later reconciliation; one-off system executions load their bounded event history; and system rollups retain their constituent runs. The projection continues to expose only allowlisted metadata, including retry attempt and content-free revision identity, and never raw prompts, tool arguments, artifacts, or model reasoning.
-
-`npm run console:dev` instead runs the checked-out Console UI and projection repository locally against production through an ephemeral loopback database relay. It requires the separately provisioned `CONSOLE_DATABASE_URL`, verifies the database session is read-only before serving, and never starts migrations, heartbeat writes, jobs, or Discord clients. Use `npm run console:provision` only from a trusted production-confirmed workstation to create or rotate that least-privilege credential. The deployed Console keeps its ordinary application connection solely because it owns the durable Console heartbeat; the development process never receives that write-capable URL.
-
-`release:status` is the single safe release view. It combines an explicitly requested PR (or the current non-main branch), Helm release state, role images/readiness/revisions, current-pod restart counts, the matching deployment workflow, and the deployed revision-quality assessment. Running it from `main` intentionally omits PR evidence without producing a warning. It uses the same typed deployment-health evaluator as CI and exits nonzero for failed checks, deployment failure, role drift, incomplete rollout, restarted current pods, stale active execution/task work, or a failed quality gate; unavailable evidence is reported explicitly rather than guessed.
-
-The worker reconciles stale non-task executions into an explicit failed terminal result so crashed probes or lost queue workers cannot remain running forever.
+`npm run release:status -- --pr <number>` combines an explicit PR (or the current non-main branch), Helm release state, role images, readiness and revisions, restart counts, and the matching deployment workflow run. It exits nonzero for failed checks, role drift, incomplete rollout, or restarted pods, and reports unavailable evidence explicitly.
 
 ## Debug a Discord result
 
-For a Discord link or suspected rollout regression, start from the retained production ledger and correlate ingress, reply-chain, model, tool, and delivery events. Warning signals include both warning- and error-level runtime events; a top-level successful prompt can therefore still be triaged when a tool or delivery sub-operation degraded.
-
-Investigation order:
+For a Discord link or a suspected rollout regression, start from the retained ledger and correlate ingress, reply-chain, model, tool, and delivery events. Warning signals include warning- and error-level events, so a successful prompt can still be triaged when a tool or delivery step degraded.
 
 1. Resolve the deployed revision and rollout time.
 2. Confirm ingress captured the intended current message and reply chain.
-3. Inspect the persisted turn envelope and memory scope.
-4. Inspect selected tools, canonical arguments, typed results, and rejected gates.
-5. Separate model completion from delivery intent and Discord network writes.
-6. Cluster repeated failures by revision before changing code.
-7. Fix the smallest canonical owner and add focused regression coverage.
+3. Inspect the persisted turn envelope and the session key: a changed contract hash starts a fresh session.
+4. Check whether the turn was steered (`agent.execution.steered`), fell back (`agent.nanocodex.fallback_model`), or was repaired (`agent.nanocodex.repair_started`).
+5. Inspect selected tools, canonical arguments, typed results, and rejected gates.
+6. Separate model completion from delivery intent and Discord network writes.
+7. Cluster repeated failures by revision before changing code.
+8. Fix the smallest owner and add focused regression coverage.
 
-Do not begin with browser scraping, provider blame, or source speculation when the runtime ledger can show what happened. Runtime diagnostics are retained for trusted operator workflows; they are not a model-facing Discord capability. Private chain of thought is not available or required.
+Do not begin with browser scraping, provider blame, or source speculation when the ledger can show what happened. Runtime diagnostics are for trusted operators, not a model-facing capability. Private chain of thought is neither available nor required.
 
-## Improvement inbox
+Deleted reply parents are informational `discord.reply_context.unavailable` events. Unexpected fetch failures remain warnings.
 
-The Unicode `🐛` reaction on a response authored by the configured assistant bot creates a private `member_report` signal for the current requester. Reactions on user-authored messages or other bots are ignored. `listMyImprovementSignals` returns only the requester's active signals in channels they may currently see. Removing the reaction withdraws that signal; if it was the last signal on an untriaged case, the case is dismissed.
-
-Every source feeds the same case stream. Source keys provide exact idempotency; deterministic fingerprints coalesce only high-confidence matches; uncertain semantic matches require the explicit `merge` command. A report authorizes an isolated assessment and confirmed repair, but never replays the reported Discord request or grants the sandbox production access.
-
-Trusted runtime, deployment, CI, and eval observers use the same private intake contract. They provide a stable observation ID for exact idempotency and a separate stable failure code for cross-run coalescing. The intake accepts only bounded identifiers and content-minimized summaries; it never accepts prompt, reply, member, or private-eval payloads. Terminal failures create signals, while passing, awaiting-traffic, and insufficient-data observations do not. PR jobs remain isolated from production credentials; `ci_detection` is available only to a trusted configured caller and does not synchronize cases to GitHub.
-
-The production observation also projects schedule run outcomes and current reminder state into that stream. Schedule failure codes contain only the failure kind and an opaque schedule digest, so separate schedules do not block one another. Their proof producer requires evidence from that exact schedule: idle or missing schedules remain inconclusive, and an auto-paused schedule stays unhealthy until it is resumed and completes successfully.
-
-`triage <case-id>` is read-only by default and reconstructs a redacted dossier from active signals plus content-free runtime and delivery aggregates. `triage <case-id> --apply` records the reviewed conclusion, evidence, contract, ownership fields, and lifecycle transition atomically and idempotently; an explicit verdict override requires an operator evidence summary. Manual triage never starts work. Moving a case to `actionable` requires supporting evidence and an accepted contract whose every check resolves to a registered proof adapter with its inputs available. `suggest` returns same-boundary title candidates but never merges them. Report-authorized assessment may link its own confirmed repair; other coding work remains explicitly linked through `runSandboxAgent` or `link-task`. Success moves the case to `verifying`, while failure returns it to `actionable`. `verify <case-id> --revision <sha>` is read-only by default and derives typed check results from retained source-owned proof; `--apply` writes the immutable receipt and lifecycle transition. Free-form success summaries and operator-selected executions cannot resolve a case. Never copy private source evidence into a public issue, PR metadata, or tracked fixtures.
-
-Improvement detail projects safe signal provenance, evidence summaries, the active contract, linked repository work, and the immutable verification receipt into the same chronological Trace as assessment and repair events. Reporter identity, raw signal details, prompts, artifacts, task output, and private model reasoning remain excluded.
-
-The worker-owned `improvement.reconcile` job runs at startup, immediately after member report changes or clarification replies, and every five minutes. Every queue attempt records a durable started and terminal receipt. It applies known source-owned detector triage and queues a deterministic autonomous assessment for report-backed cases. A pending clarification suppresses duplicate assessment; transient assessment and report-authorized repair failures retry with at most three deterministic task identities. Assessment keeps the checkout clean until it rejects the report or establishes an executable contract; a confirmed repair opens an auto-merge PR. Publishing that PR does not advance the case to verification: reconciliation compares its exact stored head with GitHub, observes aggregate checks and review state, retires terminal check failures before retrying repair, and advances only after an actual merge. Changed heads, drafts, conflicts, requested changes, and unresolved review requirements are operator blockers. Reporter conversations stay silent unless an exact clarification is outstanding or the case is resolved by deployed verification. Each visible turn mentions the reporter in an explicit reply to the original source message; `in_progress` and `verifying` produce no Discord status update. The reporter's explicit reply to the clarification message becomes same-case evidence and wakes a fresh assessment. Missing source-channel access, a deleted source message, or exhausted delivery retries blocks for operator recovery; reporter conversations never create threads or DMs. `DISCORD_BOT_CHANNEL_ID` remains only the destination for deployment announcements. Automation incidents remain in the private case stream and Console. `reconciliation.awaiting_operator` is reserved for exhausted retries, a concrete automation blocker, failed original-channel delivery, or ambiguity members cannot resolve. The worker also refreshes active PR work, retries verification against the newest durable promotion, evaluates every producer assigned to reconciliation, and refreshes a durable case health projection. The Helm-managed watchdog CronJob runs `improve:watchdog` every fifteen minutes with a five-minute run deadline and evaluates only reconciliation health, so a stopped worker cannot classify itself as healthy. GitHub production observation may independently invoke the same command, but does not provide its liveness schedule. The watchdog records its own receipts, and reconciliation observes those receipts in return. `inbox` and `show` expose case state, blocker, next action, retry trigger, and last material progress. A producer that exceeds its scheduled freshness budget, remains started past its run budget, or crosses its consecutive-failure threshold records a coalesced automated improvement signal. Dependent cases wait on that recovery case; they do not masquerade as ordinary traffic waits or become duplicate human-review items. `blocked` remains the operator queue. Stalled edges use the health progress clock rather than the case's general update time. Repeated passes are no-ops at every boundary.
-
-`improve health` derives a content-free effectiveness report directly from cases, signals, events, work attempts, tasks, runtime cost events, verification outcomes, and producer receipts. The 30-day default window can be changed with bounded `--hours`; current blocker, stalled, and unhealthy-producer counts always cover the complete active stream. The scheduled production-observation artifact includes this report next to revision quality. GitHub receives only aggregate counts, latency/cost distributions, exact machine blocker codes, producer state/reason, and opaque recurrence keys—never case text or Discord/runtime content. Detection ownership is declared in the producer registry: reconciliation observes the release, replay, observation, and watchdog producers, while the independently scheduled watchdog observes reconciliation.
-
-Active contracts that the prompt evaluator can represent are exported into the private regression suite:
-
-```bash
-npm run eval:regressions
-```
-
-The export stays under `.discord-ai-agent/evals/` with owner-only file permissions. Replays are read-only: mutating tools are removed from the model contract and current-turn mutation authority is false. Contracts without a safe observable replay assertion stay with their registered owning producer rather than becoming an eval note.
-
-Private regression cases carry their source application revision and failure category. The deployment workflow runs them after the capability canary, and a separate scheduled/manual workflow checks the deployed revision daily. Both record content-free per-check results and the automatically resolved canonical replay execution before invoking case verification. Harness errors remain inconclusive; they do not masquerade as product failures. If retained private context cannot faithfully reproduce a contract, the proof records a content-free terminal reason and reconciliation blocks the case for contract revision instead of scheduling the same impossible replay forever. A terminal workflow failure records an idempotent private `eval_detection` signal before the workflow fails. CI logs receive only aggregate counts by source revision and category; prompts, answers, run IDs, notes, and full reports stay inside the production worker.
-
-## Production triage
-
-Group canonical runtime-ledger failures by deployed revision, warning/error event name, failed or empty tool result, and latency. Use retained artifacts only after authorization and redaction; do not export private prompt, reply, or member data.
-
-Deleted reply parents are informational `discord.reply_context.unavailable` events. Unexpected fetch failures remain warnings, so warning-only triage is not polluted by normal Discord deletion.
-
-Prompt and reply Console details default to semantic phases derived from the canonical ledger. Use the phase summary first to isolate intake, agent, or delivery latency; expand the parent context only when the operative request depends on it. Tool outcomes and exceptions stay in their owning Agent phase. Each tool shows compact status, output-size, file/table, and retry metadata beside its duration. Arguments remain locally expandable, while opening Result lazily reads the call-correlated retained transcript rather than adding it to the initial activity payload. Structured results render as formatted JSON, text results preserve whitespace, and retained file/table descriptors stay attached to the same call. Results are bounded to 65,536 characters; retention-safe substitutions, truncation, credential-shaped fields, and signed URL redactions are labeled explicitly. Tool totals count actual executions; an identical-success reuse is labeled separately and is not rendered as a second tool execution. Legacy executions without terminal counters derive their total from projected terminal tool events rather than nested provider metadata. Use **Raw events** when phase evidence is insufficient, and correlate its typed event codes and retained source-event provenance before opening private artifacts. Header, feed, and trace duration all begin at the retained Discord prompt when available and end at the terminal execution or delivered reply; a disagreement is a projection defect, not an alternate latency definition.
-
-For repository sandbox failures, inspect the terminal task event's `failureCode`, `failureDiagnosis.diagnosticsStatus`, and `observed.metadata` before opening its retained `kubernetes_pod_log` artifact. `sandbox_oom`, `sandbox_evicted`, `sandbox_deadline`, `sandbox_start_failed`, `sandbox_runner_crash`, and `sandbox_disappeared` are distinct causes. `sandbox_unknown` with `read_failed`, `pod_missing`, or `api_unavailable` means the cause was not retained and must not be guessed from the last successful command. A running observation with `retrying: true` is the single automatic infrastructure retry, not another logical code-change task.
+A worker that logs `nanocode host started without its durable session store` is running sessions in memory: check `DATABASE_URL` and Postgres reachability from the worker. A turn that fails with `nanocode host exited` restarts the host on the next turn.
 
 ## Build and release verification
 
@@ -214,174 +142,32 @@ npm run verify:db
 npm run eval -- --dry-run
 ```
 
-CI classifies the changed paths and starts lint, tests, production build, repository-policy checks, and relevant DB or infrastructure verification in parallel. Documentation-only and callback-receiver-only changes do not start the DB service; application and high-consequence lifecycle changes still do. The production build performs the TypeScript compilation, so CI does not repeat a separate no-emit compilation. CodeQL remains an independent PR and scheduled analysis. On a deployable `main` push, the same CI run publishes images and invokes the reusable K3s deployment workflow after `verify` succeeds. GitHub Actions reaches the outbound-only production host through Systems Manager rather than exposing the Kubernetes API. This keeps rollout and post-deploy verification on the source commit's check graph. Pull requests skip the deployment job. Active main runs are not cancelled by newer pushes, and the production deployment workflow remains serialized under its own non-cancelling concurrency group.
+CI classifies changed paths and runs lint, tests, the production build, repository-policy checks, DB verification, the native-runtime job (cargo fmt, clippy, tests, build, and `tests/native` against Postgres), and infrastructure checks in parallel, each only for the paths it owns. Unknown paths take the broader path. The required `verify` job accepts skipped jobs but never a cancelled or failed one. CodeQL runs separately. The `Agent Evals` workflow runs only on PRs labeled `evals` (see [Development](development.md#evals)).
 
-CI builds two images from one Docker Bake `release` group: the runtime image (`final` target) into the `ECR_REPOSITORY` repository and the sandbox image (`codegen` target: repository tooling plus the desktop layer) into `ECR_REPOSITORY-sandbox`. Both always carry the same tag. For same-repository PRs, the optional candidate-image path waits for the cheaper verification jobs to pass, then pushes both images to their repositories under a `tree-<Git tree hash>` tag. The OIDC build role may push only to those two repositories and has no Kubernetes or Systems Manager access. Dependency, Docker, or native-manifest changes scan the exact remote runtime candidate on one shared runner; the sandbox image relies on ECR scan-on-push. After merge, CI calculates the merged tree hash, promotes the sandbox candidate and then the runtime candidate to the commit-SHA tag, and deletes both tree tags; the one-day untagged lifecycle is the cleanup fallback. Exact-tree promotion lets main omit repeated tests and rebuilding. Once candidate publication is enabled, a missing candidate in either repository fails closed rather than rebuilding an unverified release. Before enablement, main retains the existing full verification and builds and pushes both images through the same Bake group. PR builds restore trusted default-branch BuildKit caches (separate `runtime` and `codegen` scopes) but do not fill one-use PR cache scopes. Nested Rust targets, Terraform providers, coverage, and other local build state are excluded from the Docker context.
+CI builds one runtime image (`final` target of the `Dockerfile`, Docker Bake group `release`), which contains the compiled application and the nanocode host binary. When candidate publishing is enabled, same-repository PRs push a `tree-<Git tree hash>` candidate after the cheaper checks pass, and a `main` push promotes the matching candidate to the commit-SHA tag instead of rebuilding; a missing candidate fails closed. Otherwise `main` builds and pushes the commit-SHA image directly.
 
-Before Helm runs, deployment confirms that the application Secret contains `TASK_SIGNING_SECRET` (by key presence only). After Helm completes, it verifies the Postgres StatefulSet, bot, worker, callback API, and egress-proxy readiness, the exact immutable image and `APP_REVISION`, that the worker runs as the `-worker` launcher identity with `SANDBOX_IMAGE` set to the same-tag sandbox image, that the `gvisor` RuntimeClass exists, that only the worker may create Jobs, and that the app, sandbox, and egress-proxy identities cannot create Jobs or Pods or read Secrets. It also verifies the existing public-table baseline, Discord gateway readiness, and a 30-second restart-free window. These checks make no model call, create no Discord message, and spend no funds. Failure restores the exact prior Helm revision when one exists; a failed first install leaves the bot at zero replicas. Migrations remain forward-only and must preserve the preceding application revision long enough for this recovery path.
+On a deployable `main` push, CI invokes the reusable `Deploy K3s` workflow after `verify` succeeds. It sends `scripts/deployK3s.sh` to the production host through Systems Manager and checks the downloaded script's SHA-256 before running it. The script refreshes the ECR pull credential, upgrades Postgres and the application with Helm (migrations run as a pre-upgrade hook), and then checks:
 
-The bot does not resolve improvement cases or publish a deployment announcement merely because a new pod became ready. Release pods wait for the workflow to write the verified revision and unique rollout ID to Postgres after every gate passes. The private eval runner retains aggregate-only per-contract outcomes, promotion applies complete receipts, and production observation later supplies traffic-sampled quality proof. Runtime/delivery contracts remain `verifying` until a revision-matched terminal execution is supplied. The system never replays a member's old request as authority. Local, non-SHA revisions bypass this production-only promotion gate.
+- Postgres, worker, and bot rollout;
+- the exact image and `APP_REVISION` on bot and worker, and their ready replica counts;
+- that the worker runs as the shared `<release>-app` identity and that identity cannot create Jobs or Pods or read Secrets;
+- the public-table baseline;
+- a 30-second restart-free window;
+- the bot's gateway-ready log line.
 
-Model- and provider-backed regressions are not part of deployment readiness. They run only when explicitly requested for debugging. Durable delivery behavior is exercised by the reliability and database suites, while production observation derives quality from real member traffic without generating synthetic member-visible messages.
+These checks make no model call, send no Discord message, and spend no funds. On success the worker writes the revision and rollout ID to `deployment_verifications`. On failure the script rolls back to the previous Helm revision; a failed first install leaves the bot at zero replicas. Migrations are forward-only and must keep the previous application revision working long enough for that rollback.
 
-The production-observation workflow samples the deployed revision every six hours and retains a 48-hour aggregate containing answer status/latency by model, terminal per-run capability outcomes, raw tool attempts, recovered validation retries, per-capability p50/p95/max latency, latency budgets and slow-success counts, warning/error counts, and delivery states. Statistical answer, tool, report-rate, and latency evidence is grouped by a content-addressed behavior cohort: prompt version, tool-contract version, model/runtime configuration version, and an explicit quality-runtime version. Compatible code-only revisions therefore contribute to one useful sample instead of restarting observation. Changes to execution or delivery semantics that alter quality comparability must bump `QUALITY_RUNTIME_VERSION`; prompt, tool, and relevant configuration changes split cohorts automatically. Only explicitly member-originated Discord executions enter this quality cohort; scheduled read-only occurrences use their own `scheduled` identity, while CLI prompts, evals, and deployment canaries remain `synthetic`. Scheduled health is reported alongside member quality without entering its gate: exact-revision counts cover succeeded, partial, and failed runs, while overdue rows, expired delivery leases, repeated partial outcomes, and recent automatic pauses create content-free improvement detections. A failure already represented by an automatic pause is not duplicated as a separate run incident. Pending member delivery obligations become incidents after five minutes, avoiding false alerts for replies actively being delivered, while abandoned obligations fail immediately. The workflow reads the canonical runtime ledger and schedule control projection inside the cluster and publishes only safe counts—never prompts, replies, schedule IDs, member identities, or private Discord content. Output includes the cohort fingerprint and contributing exact revisions. Use `npm run quality:revision -- --revision <sha> --hours 48` for the same safe operator view inside a configured runtime.
-
-Repeated attempts of the same capability in one execution count once toward terminal capability health, using the final result; attempts and recovered schema retries remain separate efficiency signals. This prevents a recovered malformed call from masquerading as several independent member-facing failures without hiding its latency and cost. Error observation follows the same rule: a specific typed failure is the root occurrence, while `agent.nanocodex.runtime_failed`, `agent.execution.failed`, and `agent.span` are fallback roots only when the execution has no more-specific error. Terminal tool outcomes, overdue or abandoned delivery, and otherwise-unexplained failed answers form separate root clusters. Safe error kind, code, and status dimensions distinguish clusters without exposing error prose, prompts, replies, or execution IDs in the scheduled output.
-
-The embedding worker scans a bounded newest-first backlog shortly after startup and every five minutes. It re-enqueues eligible stored messages whose realtime enqueue was missed during a rollout or transient queue failure; the existing singleton key keeps recovery idempotent.
-
-The observation compares the deployed behavior cohort with the most recently active prior cohort. Hard delivery, failed-answer root occurrences, warning/error, and root-cluster evidence remains scoped to the exact deployed revision and fails immediately; aggregate failure rates and answer-latency thresholds use the compatible cohort and enforce only after a useful sample. A failed assessment records one private `runtime_detection` for each exact execution and root cluster. A successful capability that exceeds its contract-owned latency budget independently records a medium-severity `tool_latency` detection without failing or rolling back an otherwise healthy release. Its stable cluster reference is revision-independent, so the same capability breach across revisions coalesces while unrelated failures remain separate cases; the private signal retains the canonical execution reference. Aggregate policy failures such as answer latency use their own metric cluster. A latency-cluster contract passes only after three real successful calls to that same capability occur without recurrence; reused calls and unrelated tool traffic do not count. Production quality counts only human/report signal sources in its report-rate metric, so its own automated detections cannot create a feedback loop. `rollback_candidate` means the current cohort failed while its sufficiently sampled baseline cohort passed; it is evidence to inspect and roll back, not permission for an unrelated mutation. A cohort with no member answers reports `awaiting_traffic`. After traffic begins but before ten member answers it reports `insufficient_data`; the assessment includes remaining answer and tool-call sample counts. Both remain observable without generating a false incident or improvement signal, except that directly observed slow-success calls still enter the unified improvement stream.
-
-Run the deterministic failure suite with `npm run test:reliability`. It covers same-thread serialization, cross-thread concurrency, Discord rate limits and idempotent final delivery, model timeouts/retries, durable queue handoff, signed sandbox callbacks, and lost-sandbox reconciliation. `npm run verify:db` additionally proves concurrent ledger writes and queued work surviving a producer/worker restart.
+Run the deterministic failure suite with `npm run test:reliability`: same-thread serialization, cross-thread concurrency, Discord rate limits and idempotent delivery, model timeouts and retries, and runtime lifecycle. `npm run verify:db` additionally proves concurrent ledger writes and queued work surviving a restart.
 
 ## Kubernetes production
 
-The production deployment is the Helm chart in `deploy/helm/discord-ai-agent/`; `deploy/terraform/aws/` is its authoritative AWS stack. One `t3a.medium` EC2 host runs the K3s server, Postgres, the bot, the worker, the callback API, and the sandbox egress proxy. Its security group admits only the sandbox node pool (below), and it accepts deployment and operator commands only through Systems Manager.
+Production is the Helm chart in `deploy/helm/discord-ai-agent/` plus `deploy/helm/postgres/`, on the AWS stack in `deploy/terraform/aws/`. One `t3a.medium` EC2 host runs the K3s server, Postgres, the bot, and the worker (and the Console when enabled). The host has no inbound security-group rule and takes deployment and operator commands only through Systems Manager. Every workload runs under one app service account with no Kubernetes token mounted.
 
-Sandbox Jobs never run on that host. A separate spot Auto Scaling group (`<prefix>-k3s-sandbox`, minimum 0, maximum 1, desired 0) runs disposable K3s agents. They join with `discord-ai-agent.dev/pool=sandbox` and the taint `discord-ai-agent.dev/sandbox=true:NoSchedule`, and they install the pinned gVisor `runsc` and `containerd-shim-runsc-v1`. Their IAM role may only register with Systems Manager, pull the sandbox ECR repository, and read the agent join record. Their security group may reach the server only on 6443/tcp, 8472/udp, and 10250/tcp, and accepts only flannel VXLAN (8472/udp) back from the server. Every six hours the server mints a 24-hour K3s bootstrap token (`k3s token create --description sandbox-agent`, agent-only, stored as a `kube-system` Secret). It writes that token and its private API URL to the `<prefix>/k3s/agent-join` secret and deletes superseded tokens. A resource policy denies every other principal `GetSecretValue`, and the token cannot join a server. Agents re-read the record before every K3s start.
+The 30 GiB root disk is disposable. The retained 20 GiB encrypted Postgres disk and the 8 GiB encrypted K3s-state disk are pinned to the host's availability zone and backed up daily for 14 days. The Auto Scaling group replaces a failed host, and bootstrap attaches both volumes before starting K3s. Secrets Manager keeps the two Kubernetes Secret manifests without putting their values in Terraform state. See [Single-node K3s production](architecture/single-node-k3s.md) for the decision and its constraints, and `deploy/terraform/aws/README.md` before any `terraform apply`.
 
-The pool scales to zero, and the server's `discord-ai-agent-sandbox-scaler` service sizes it from sandbox demand every 20 seconds. Demand means any unfinished Job or any pod that is not `Succeeded` or `Failed` and carries `app.kubernetes.io/name=discord-ai-agent,app.kubernetes.io/component=sandbox`. When there is demand and desired capacity is 0, the scaler sets it to 1. After ten continuous minutes without demand it sets it back to 0, so it never scales down while a sandbox pod is pending or running. Each pass changes capacity only after every Kubernetes and AWS read succeeds. The service logs one journal line per scale change or idle-window start. Terraform ignores `desired_capacity`, so it never fights the scaler, and the server role may set desired capacity on this group only.
+Never add, remove, or change token flags on the K3s server unit; see [the lesson](architecture/single-node-k3s.md#never-change-server-token-flags). `tests/unit/architecture.test.ts` pins the server flags.
 
-The first task after an idle period waits in `Pending` through a cold start of a few minutes: spot launch, bootstrap downloads, K3s join, and the sandbox image pull. The 30-minute Job deadline includes that wait. A task that arrives within ten minutes of the previous one reuses the warm agent. With no sandbox work the pool costs nothing beyond ECR storage. Each burst of work bills one spot agent (a `.large` type from `sandbox_instance_types` plus its 40 GiB gp3 root) for the cold start, the work itself, and the ten-minute idle tail. Continuous work keeps at most one agent running. A manual scale-up still works for testing, but the scaler returns an idle pool to 0 after ten minutes. Review recent decisions with:
-
-```bash
-AWS_PROFILE=production-operator scripts/runProductionCommand.sh \
-  'journalctl -u discord-ai-agent-sandbox-scaler.service --since -2h -o cat'
-```
-
-Spot interruption terminates any running sandbox; the launcher's single infrastructure retry and `sandbox_disappeared` diagnosis cover it.
-
-Scale-in and spot interruption leave the agent's Node object `NotReady`, with its `<hostname>.node-password.k3s` Secret in `kube-system`. K3s would also reject a later instance that reused that hostname. Every five minutes the server's `discord-ai-agent-sandbox-node-cleanup` timer deletes both for each `discord-ai-agent.dev/pool=sandbox` Node that has been `NotReady` for more than ten minutes, but only when EC2 reports no pending, running, stopping, or stopped instance at its private IP that launched before the Node registered. It never selects `discord-ai-agent-production`. Any AWS or Kubernetes error ends the run before it deletes anything, and each deletion is logged as `Removed stale sandbox node <name>.` in the unit's journal.
-
-The 30 GiB root disk is disposable. The retained 20 GiB encrypted Postgres disk and separate 8 GiB encrypted K3s-state disk are pinned to the same availability zone and backed up daily for 14 days. The Auto Scaling group replaces a failed host; bootstrap attaches both exact volumes before starting K3s. Secrets Manager retains the two Kubernetes Secret manifests without putting their values in Terraform state. See [Single-node K3s production](architecture/single-node-k3s.md) for the complete decision and recovery contract.
-
-GitHub Actions deploys the exact CI-published image by sending `scripts/deployK3s.sh` to the host through Systems Manager. The script verifies its own SHA, downloads the chart from the exact commit, refreshes the namespace-local ECR credential, upgrades Postgres and the application with Helm, and promotes the release only after content-free checks pass. The chart runs migrations as a hook; application pods never run migrations on startup.
-
-For an operator inspection, run a bounded command through the same private path:
-
-```bash
-AWS_PROFILE=production-operator scripts/runProductionCommand.sh \
-  'k3s kubectl -n discord-ai-agent get pods,statefulsets,deployments -o wide'
-```
-
-Use Helm—not `kubectl rollout undo`—for recovery so one field manager continues to own application revisions. Run Helm and Kubernetes commands through `scripts/runProductionCommand.sh`; select an explicit known-good revision and never guess a rollback target.
-
-### Sandbox agent join
-
-Never add, remove, or change token flags (`--token`, `--token-file`, `--agent-token`, `--agent-token-file`) on the production K3s server. They rewrite `server/cred/passwd` on the persistent state volume. K3s with SQLite never writes that change back to the datastore, so the next start refuses to run because the file is "newer than datastore". This crash-looped production for about six minutes on 2026-10-20. The server unit stays at the flags it was created with, and sandbox agents join with bootstrap tokens instead. See [the incident lesson](architecture/single-node-k3s.md#lesson-never-change-server-token-flags-on-an-existing-cluster).
-
-Join changes live in the launch-template user data. Apply them from a clean `main` as a targeted, reviewed plan of only the two launch templates. Production's variables were rebuilt at `~/.config/<prefix>/production.tfvars`.
-
-`scripts/rolloutK3sSandboxServerUnits.sh` runs the whole sequence below. It refuses to run unless HEAD is a clean, current `origin/main`, and it lists the sandbox nodes. It writes the installer's remote script for review, plans only the two launch templates and the server runtime policy, and rejects any plan that is not an in-place update of their `user_data` (with `latest_version`/`default_version`) or `policy`. It applies that saved plan, then runs the installer and checks every expected status line. It asks you to type `apply` and then `install` before each production change. Use `--plan-only` to stop after the checked plan:
-
-```bash
-scripts/rolloutK3sSandboxServerUnits.sh --var-file "$HOME/.config/<prefix>/production.tfvars" --plan-only
-scripts/rolloutK3sSandboxServerUnits.sh --var-file "$HOME/.config/<prefix>/production.tfvars"
-```
-
-The manual equivalent:
-
-```bash
-cd deploy/terraform/aws
-eval "$(aws configure export-credentials --profile production-operator --format env)"
-terraform plan -var-file="$HOME/.config/<prefix>/production.tfvars" \
-  -target=aws_launch_template.k3s -target=aws_launch_template.k3s_sandbox \
-  -target=aws_iam_role_policy.k3s_runtime -out=k3s-join.tfplan
-terraform show k3s-join.tfplan
-terraform apply k3s-join.tfplan
-```
-
-Apply only if the plan updates `user_data` (and the derived `latest_version`) on one or both of those templates and the server's `k3s_runtime` inline policy, and changes nothing else. Both Auto Scaling groups follow `$Latest` without an instance refresh, so the apply replaces no instance. The next launch, including self-healing, boots the fixed user data.
-
-The running server does not need replacement. Install the server-side sandbox units on it with the idempotent installer. It copies the join refresher, the stale Node cleanup, and the sandbox scaler (each script and its units) verbatim from the server template, and it refuses any block that uses template interpolation. On a host booted before the scaler, it adds `SANDBOX_AUTOSCALING_GROUP=<prefix>-k3s-sandbox` to `runtime.env`, deriving the prefix from the join secret's ARN. It runs one scaler pass directly, so a missing IAM grant fails the install. Apply the policy first. It retires the earlier boot-time publisher and refuses to run if `k3s.service` still carries a token flag. It never modifies `k3s.service` and checks that the unit's digest is unchanged. It prints only unit states, scaler and cleanup decisions, the remaining sandbox Node count, and token expiry. Review the script it sends with `--print`:
-
-```bash
-scripts/installK3sSandboxServerUnits.sh --print
-AWS_PROFILE=production-operator scripts/installK3sSandboxServerUnits.sh
-```
-
-Expect `k3s=active`, `refresh=success`, `timer=active`, `cleanup=success`, `cleanup_timer=active`, `scaler=active`, and `sandbox_agent_tokens=1`. With the pool at zero, expect `sandbox_nodes=0` and a `Removed stale sandbox node` line for each leftover agent, such as the join test's `ip-10-0-102-112.ec2.internal`. Rerunning the installer is safe: it mints a fresh join token and runs one cleanup pass and one scaler pass. Confirm a new secret version without reading its value. Then test a join by starting a computer task: watch the scaler raise the pool, the sandbox node become `Ready`, and the pool return to 0 ten minutes after the task ends.
-
-```bash
-AWS_PROFILE=production-operator aws secretsmanager list-secret-version-ids \
-  --secret-id <prefix>/k3s/agent-join --query 'Versions[].{created:CreatedDate,stages:VersionStages}' --output table
-AWS_PROFILE=production-operator scripts/runProductionCommand.sh \
-  'k3s kubectl get nodes -l discord-ai-agent.dev/pool=sandbox'
-```
-
-## Sandbox and network posture
-
-Every sandbox runs untrusted code: code updates run `npm install` of arbitrary dependencies, and the computer profile downloads and runs member-supplied programs. Untrusted code never shares a node or credentials with production Postgres.
-
-The worker service account (`<release>-worker`) is the only identity with a Kubernetes token and the sandbox-launcher Role. It may create per-task Jobs, Secrets, and ConfigMaps. The app, sandbox, and egress-proxy service accounts disable token mounts and have no RBAC. Sandbox secrets omit Discord and database credentials. Sandbox callback bearer tokens are scoped to the task and sandbox-run IDs and expire after two hours. Each task receives a separately derived callback-signing key rather than the deployment master secret; each exact body also carries a two-minute timestamped HMAC, limiting cross-task forgery and replay while allowing normal clock skew. Terminal callbacks remain idempotent.
-
-Isolation layers, outermost first:
-
-- **Node pool.** Only tainted spot agents run sandboxes. Their IAM role and security group grant nothing beyond joining the cluster and pulling the sandbox image.
-- **gVisor.** The `gvisor` RuntimeClass (handler `runsc`, `systrap` platform) carries scheduling constraints, so any pod using it is pinned to the sandbox pool and tolerates its taint. It also declares a fixed pod overhead.
-- **Admission.** The `<release>-sandbox-isolation` ValidatingAdmissionPolicy fails closed. Any pod that runs as `discord-ai-agent-sandbox` or carries `app.kubernetes.io/component=sandbox` is rejected unless it uses the `gvisor` RuntimeClass and that service account, shares no host namespace, mounts no hostPath or Kubernetes API token, and runs no privileged container. A Job built without these fields therefore fails to start instead of running on the server.
-- **Network.** NetworkPolicy (enforced by K3s's embedded kube-router) lets every sandbox pod reach only the egress proxy's public port, the callback API, and kube-dns. Only pods labeled `discord-ai-agent.dev/egress=credentialed` may reach the proxy's credentialed port, and only pods labeled `discord-ai-agent.dev/egress=model` may reach its model port. The proxy enforces the same rules on ingress, accepts only sandbox clients, and may itself reach only DNS and public port 443.
-- **Credentials.** Sandboxes receive placeholder tokens, never the real OpenRouter key or GitHub token.
-
-### Egress proxy
-
-`<release>-egress-proxy` is a pinned mitmproxy image with the repository addon `deploy/helm/discord-ai-agent/files/egress_proxy.py`, scheduled on the server node. It mirrors the credential-injecting proxy in paradigmxyz/centaur. For every tunnel it allows only port 443. It resolves the hostname itself, refuses any non-global, multicast, or denied address (`0.0.0.0/8`, `10.0.0.0/8`, `100.64.0.0/10`, `127.0.0.0/8`, `169.254.0.0/16`, `172.16.0.0/12`, `192.168.0.0/16`), and pins the connection to the checked address so DNS rebinding cannot redirect it.
-
-Each listener owns a fixed credential set:
-
-| Port | Admitted pods | Injects |
-| --- | --- | --- |
-| 8080 credentialed | `discord-ai-agent.dev/egress=credentialed` (repository profile) | OpenRouter (`OPENROUTER_API_KEY`) for `openrouter.ai`; GitHub for `github.com`, `api.github.com`, `uploads.github.com` |
-| 8082 model | `discord-ai-agent.dev/egress=model` (computer profile) | OpenRouter only, for `openrouter.ai`, using `SANDBOX_OPENROUTER_API_KEY` when set, else `OPENROUTER_API_KEY` |
-| 8081 public | any sandbox pod | nothing |
-
-A tunnel is intercepted only when its CONNECT host and TLS SNI are the same host in that listener's set. The proxy then replaces the placeholder in `Authorization` with the real credential, including inside `Basic` credentials, only when the request's Host also matches, and forwards over certificate-verified TLS. GitHub hosts are never intercepted on 8082, so the GitHub placeholder is forwarded unchanged and useless there. GitHub uses a repository-scoped App installation token minted exactly as in `src/github/appToken.ts`, or `GITHUB_TOKEN` when no App is configured. Every other tunnel is opaque passthrough: no interception and no injection.
-
-Contract for the Job launcher (`src/execution/backend.ts`), which must match these chart defaults:
-
-| Field | Value |
-| --- | --- |
-| Pool node label | `discord-ai-agent.dev/pool=sandbox` |
-| Pool taint | `discord-ai-agent.dev/sandbox=true:NoSchedule` |
-| `runtimeClassName` | `gvisor` (adds the selector and toleration itself; setting them explicitly is harmless) |
-| `priorityClassName` | `discord-ai-agent-sandbox` (value -100, never preempts) |
-| `serviceAccountName` | `discord-ai-agent-sandbox`; also set `automountServiceAccountToken: false` |
-| Repository profile (code updates) | pod label `discord-ai-agent.dev/egress=credentialed`, proxy `http://discord-ai-agent-egress-proxy:8080` |
-| Computer profile | pod label `discord-ai-agent.dev/egress=model`, proxy `http://discord-ai-agent-egress-proxy:8082` |
-| Public proxy (optional, untrusted program traffic; never injects) | `http://discord-ai-agent-egress-proxy:8081`, reachable by any sandbox pod |
-| `NO_PROXY` | `discord-ai-agent-api,.svc,.cluster.local,localhost,127.0.0.1` |
-| `OPENROUTER_API_KEY` placeholder | `discord-ai-agent-egress-placeholder-openrouter` |
-| `GITHUB_TOKEN` placeholder | `discord-ai-agent-egress-placeholder-github` |
-| Proxy CA ConfigMap | `discord-ai-agent-egress-proxy-ca`, key `ca.crt` (suggested mount `/etc/discord-ai-agent/egress-proxy/ca.crt`) |
-
-Set `HTTPS_PROXY`, `HTTP_PROXY`, and their lowercase forms to the chosen proxy URL. Node trusts the CA additively through `NODE_EXTRA_CA_CERTS`. Child processes that replace the default bundle when configured need a combined bundle: the image's `/etc/ssl/certs/ca-certificates.crt` followed by `ca.crt`, written to a writable path (for example an `emptyDir`) and exported as `SSL_CERT_FILE` and `GIT_SSL_CAINFO`. This covers git, `gh`, curl, and NanoCodex's `rustls-native-certs`. Only intercepted credential hosts present proxy-signed certificates, so programs that read only the system store (Wine, Chromium) still reach every other host normally. The placeholders are public constants; the per-profile pod label and port separation are what keep GitHub injection away from the computer profile.
-
-Residual risk on the model port: the untrusted program runs in the same pod as NanoCodex, so for the task's lifetime (at most the 30-minute task deadline) it can send its own requests to `openrouter.ai` through 8082 and spend model credits on the injected key. It cannot obtain the key itself, reach GitHub with credentials, or reach any private address. The mitigation is a separate OpenRouter key with a hard credit limit, stored as the optional `SANDBOX_OPENROUTER_API_KEY` key of the application Secret (`discord-ai-agent-env`). Only the egress proxy reads it, so it is not part of the application environment manifest. Without it, 8082 falls back to `OPENROUTER_API_KEY` and the exposure is that key's full balance.
-
-The interception CA is generated once by Helm, retained across upgrades and uninstall (`helm.sh/resource-policy: keep`), and valid for ten years. Rotate it by deleting the `discord-ai-agent-egress-proxy-ca-key` Secret and redeploying when no sandbox is running. The worker's launcher Role can read Secrets in the namespace and therefore this key; the worker is trusted. Sandboxes can still resolve arbitrary names through cluster DNS; DNS is the remaining covert channel and is not filtered.
-
-The optional Cilium FQDN policy predates the proxy and is not used by K3s.
-
-Every code-update task runs in a separate Kubernetes Job. The regular worker owns queue handoff and reconciliation; no dedicated warm worker, persistent cache, or alternate execution backend exists.
-
-## Local Kubernetes validation
-
-Use kind or another local cluster when the Kubernetes sandbox path itself is under test:
-
-```bash
-kind create cluster --name discord-ai-agent
-docker build -t discord-ai-agent:local .
-kind load docker-image discord-ai-agent:local --name discord-ai-agent
-helm upgrade --install discord-ai-agent deploy/helm/discord-ai-agent \
-  --namespace discord-ai-agent --create-namespace \
-  --set image.repository=discord-ai-agent \
-  --set image.tag=local \
-  --set image.pullPolicy=IfNotPresent \
-  --set sandbox.image=discord-ai-agent:local \
-  --set sandbox.imagePullPolicy=IfNotPresent
-```
-
-Kind has no gVisor runtime; sandbox Jobs need `runsc` on a node, a node labeled and tainted like the sandbox pool, and `--set sandbox.isolation.enabled=true --set egressProxy.enabled=true --set networkPolicy.enabled=true --set api.enabled=true` to exercise the production path. Without them, test only chat delivery locally. Create the application Secret first and point `DATABASE_URL` at a Postgres instance reachable from the cluster. Validate chat delivery and one harmless code-update request, then inspect the Job, callback events, PR, and cleanup. This is an advanced integration path, not the default contributor loop.
+Use Helm, not `kubectl rollout undo`, for recovery so one field manager owns application revisions. Run Helm and Kubernetes commands through `scripts/runProductionCommand.sh`, and select an explicit known-good Helm revision (`npm run release:rollback -- --to <helm-revision>`); never guess a rollback target.
 
 ## Recovery checks
 
@@ -390,11 +176,9 @@ When production is unhealthy, inspect these independently:
 - database connectivity and migration completion;
 - bot gateway readiness and Discord permissions;
 - worker queue registration and backlog age;
-- agent-runtime silence/hard timeouts;
-- API authentication and callback reachability;
-- Kubernetes Job state;
+- the nanocode host: durable store, crashes, and turn timeouts;
 - delivery obligations awaiting replay;
-- payment or transfer reconciliation when enabled;
-- deployed revision versus the revision that produced a run.
+- payment reconciliation when wallets are enabled;
+- the deployed revision versus the revision that produced a run.
 
-Use provider or Kubernetes logs after the canonical ledger identifies the failing boundary. A successful model result with a pending delivery obligation is a delivery incident; a missing execution after persisted ingress is a queue incident; a submitted transfer without a terminal receipt is a reconciliation incident.
+Use provider or Kubernetes logs after the ledger identifies the failing boundary. A successful model result with a pending delivery obligation is a delivery incident; a missing execution after persisted ingress is a queue incident; a submitted transfer without a terminal receipt is a reconciliation incident.

@@ -24,11 +24,10 @@ Production startup rejects retired variables so old deployment settings cannot s
 | `NODE_ENV` | runtime platform | no | Node runtime mode. |
 | `APP_REVISION` | release workflow | no | Immutable deployed git revision. |
 | `RELEASE_VERIFICATION_ID` | release workflow | no | Unique public identifier for this rollout's post-deploy promotion. |
-| `PREVIOUS_APP_REVISION` | release announcements | no | Previously deployed git revision. |
 
 ## Ownership
 
-- Humans or the secret manager set variables marked for application credentials, GitHub, access policy, and optional integrations.
-- Docker/Kubernetes and the deployment workflow inject `NODE_ENV`, revision metadata, namespace, and the immutable sandbox image.
+- Humans or the secret manager set variables marked for application credentials, access policy, and optional integrations.
+- Docker/Kubernetes and the deployment workflow inject `NODE_ENV` and revision metadata.
 - `.env.example` is generated from the same manifest and is the local-development template.
 - `npm run config:check` verifies generated files; `npm run config:docs` rewrites them intentionally.

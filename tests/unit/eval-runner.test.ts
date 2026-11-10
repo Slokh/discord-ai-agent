@@ -1,8 +1,12 @@
 import fs from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 import {
+  type EvalCaseResult,
+  type EvalPrompt,
+  type EvalRunReport,
   buildPromptCommand,
   compareEvalReports,
+  consistency,
   evaluatePromptAssertions,
   evidenceFromTrace,
   extractPromptJson,
@@ -11,9 +15,8 @@ import {
   parseEvalArgs,
   safeEvalSummary,
   validateEvalToolNames,
-  type EvalPrompt,
-  type EvalRunReport
 } from "../../scripts/eval.js";
+import { parseVerdict } from "../../scripts/evalJudge.js";
 
 const basePrompt: EvalPrompt = {
   id: "history-job",
@@ -399,5 +402,43 @@ describe("eval runner", () => {
     expect(summary).toContain("REGRESSED web-current-external-fact: passed -> failed (+0.150s)");
     expect(summary).toContain("requested: openrouter:web_search -> searchDiscordHistory");
     expect(summary).toContain("IMPROVED stats-channel-popularity-normalized: failed -> passed (-0.100s)");
+  });
+});
+
+describe("eval consistency and judging", () => {
+  const run = (id: string, status: EvalCaseResult["status"], attempt: number): EvalCaseResult => ({
+    id,
+    attempt,
+    category: "test",
+    prompt: id,
+    status,
+    durationMs: 1,
+    runId: null,
+    traceId: null,
+    answer: "",
+    evidence: { requestedTools: [], selectedTools: [], auditedTools: [], toolAuditLines: [], eventNames: [], traceEventCount: 0, toolAuditCount: 0 },
+    failures: status === "passed" ? [] : ["failed"],
+  });
+
+  it("reports pass@1 and pass^k over repeated runs", () => {
+    const results = [
+      run("a", "passed", 1), run("a", "passed", 2), run("a", "passed", 3),
+      run("b", "passed", 1), run("b", "failed", 2), run("b", "passed", 3),
+      run("c", "skipped", 1),
+    ];
+    expect(consistency(results, 3)).toEqual({ repeat: 3, cases: 2, passAt1: 0.833, passHatK: 0.5 });
+  });
+
+  it("counts a case as regressed when any repeated run fails", () => {
+    const baseline = { generatedAt: "", durationMs: 0, totals: { passed: 2, failed: 0, error: 0, skipped: 0, total: 2 }, results: [run("a", "passed", 1), run("a", "passed", 2)] };
+    const current = { generatedAt: "", durationMs: 0, totals: { passed: 1, failed: 1, error: 0, skipped: 0, total: 2 }, results: [run("a", "passed", 1), run("a", "failed", 2)] };
+    expect(compareEvalReports(baseline, current, "baseline.json").totals.regressed).toBe(1);
+  });
+
+  it("parses judge verdicts and fails closed on malformed output", () => {
+    expect(parseVerdict('{"pass": true, "reason": "matches the reference"}')).toEqual({ pass: true, reason: "matches the reference" });
+    expect(parseVerdict("Sure! ```json\n{\"pass\": false, \"reason\": \"invented a date\"}\n```")).toEqual({ pass: false, reason: "invented a date" });
+    expect(parseVerdict("looks good")).toEqual({ pass: false, reason: "Judge returned no verdict." });
+    expect(parseVerdict('{"pass": "yes"}').pass).toBe(false);
   });
 });

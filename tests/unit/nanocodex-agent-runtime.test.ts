@@ -168,6 +168,28 @@ describe("NanoCodex agent runtime executor", () => {
       .resolves.toBeUndefined();
   });
 
+  it("repairs a turn that ended without a reply in the same session", async () => {
+    const runtime = agentRuntime();
+    const calls: any[] = [];
+    const runTurn = vi.fn(async (input: any) => {
+      calls.push(input);
+      return calls.length === 1 ? result("  ") : result("Here is the answer.");
+    });
+    await expect(executeNanoCodexAgentRuntime({
+      toolContext: toolContext(runtime),
+      text: "hello",
+      timeoutMs: 1_000,
+      host: fakeHost(runTurn),
+    })).resolves.toMatchObject({ content: "Here is the answer." });
+    expect(calls).toHaveLength(2);
+    expect(calls[1].requestId).toBe("request-1:repair");
+    expect(calls[1].sessionId).toBe(calls[0].sessionId);
+    expect(runtime.recordEvent).toHaveBeenCalledWith(expect.objectContaining({
+      eventName: "agent.nanocodex.complete",
+      metadata: expect.objectContaining({ repaired: true, contract: expect.stringMatching(/^[0-9a-f]{16}$/) }),
+    }));
+  });
+
   it("keeps the canonical nested tool contract visible to the model", () => {
     const definitions = localToolDefinitionsForModel();
     const draw = definitions.find((tool) => tool.function.name === "drawRandom");

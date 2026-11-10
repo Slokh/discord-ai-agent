@@ -57,14 +57,12 @@ describe("toolRegistry", () => {
     }));
   });
 
-  it("requires current group-level evidence for demographic health comparisons", () => {
+  it("keeps web research guidance general instead of tuned to one eval", () => {
     const tool = toolRegistry.find((entry) => entry.name === "web__run");
 
-    expect(tool?.description).toContain("ALWAYS call this");
-    expect(tool?.description).toContain("demographic comparisons involving health outcomes or life expectancy");
-    expect(tool?.description).toContain("exact phrase `group-level`");
-    expect(tool?.description).toContain("from an individual prediction");
-    expect(tool?.description).toContain("without substituting unsolicited personal or relationship advice");
+    expect(tool?.description).toContain("population statistics, make clear they describe groups");
+    expect(tool?.description).not.toContain("exact phrase");
+    expect(tool?.description).not.toContain("ALWAYS call this");
   });
 
   it("exposes explicit image alpha controls", () => {

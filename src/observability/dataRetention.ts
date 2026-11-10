@@ -1,4 +1,5 @@
 import type { DbPool } from "../db/pool.js";
+import { deleteNanocodeSessionsUnusedSince } from "../db/nanocodeSessionRepository.js";
 import { logger } from "../util/logger.js";
 
 const DEFAULT_INTERVAL_MS = 60 * 60 * 1000;
@@ -38,6 +39,7 @@ export async function runDataRetentionOnce(input: {
   }
   if (runtimeSessionCutoff) {
     result.agentRuntimeSessions = await deleteAgentRuntimeSessions(input.db, runtimeSessionCutoff, limit);
+    result.nanocodeSessions = await deleteNanocodeSessionsUnusedSince(input.db, runtimeSessionCutoff, limit);
   }
   if (terminalReminderCutoff) {
     result.scheduledReminders = await deleteBatches(

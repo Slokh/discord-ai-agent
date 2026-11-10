@@ -9,6 +9,7 @@ import * as discordEmojiUsage from "./discordEmojiUsageRepository.js";
 import * as embeddings from "./embeddingRepository.js";
 import * as retrieval from "./retrievalRepository.js";
 import { clearRetiredFeatureDataForUser } from "./retiredFeatureDataRepository.js";
+import * as nanocodeSessions from "./nanocodeSessionRepository.js";
 import * as serverOverlays from "./serverOverlayRepository.js";
 import * as userPreferences from "./userPreferenceRepository.js";
 import type { PersistedMessage } from "./types.js";
@@ -44,6 +45,8 @@ export function createAppDatabase(pool: DbPool) {
     ...archive,
     ...bindRepository(pool, embeddings),
     ...bindRepository(pool, retrieval),
+    recordNanocodeSession: (input: Parameters<typeof nanocodeSessions.recordNanocodeSession>[1]) =>
+      nanocodeSessions.recordNanocodeSession(pool, input),
     ...bindRepository(pool, serverOverlays),
     ...bindRepository(pool, userPreferences),
 
@@ -59,6 +62,7 @@ export function createAppDatabase(pool: DbPool) {
     },
     async requestUserDeletion(userId: string) {
       await clearRetiredFeatureDataForUser(pool, userId);
+      await nanocodeSessions.deleteNanocodeSessionsForUser(pool, userId);
       await userPreferences.clearUserPreferences(pool, userId);
       await discordArchive.requestUserDeletion(pool, userId);
       await discordEmojiUsage.clearDiscordEmojiUsageForAuthor(pool, userId);

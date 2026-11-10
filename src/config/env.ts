@@ -23,6 +23,8 @@ export const productConfig = {
     appTitle: "Discord AI Agent",
     httpReferer: PUBLIC_REPOSITORY_URL,
     chat: "openai/gpt-6-luna",
+    // Used for a turn only when the primary model fails before any tool ran.
+    chatFallback: "openai/gpt-6-sol",
     utility: "openai/gpt-6-luna",
     embedding: "qwen/qwen3-embedding-8b",
     image: "google/gemini-3.1-flash-image",
@@ -115,6 +117,7 @@ export function loadConfig(argv = process.argv) {
       appTitle: productConfig.models.appTitle,
       httpReferer: productConfig.models.httpReferer,
       chatModel: productConfig.models.chat,
+      chatFallbackModel: productConfig.models.chatFallback,
       utilityModel: productConfig.models.utility,
       embeddingModel: productConfig.models.embedding,
       imageModel: productConfig.models.image,

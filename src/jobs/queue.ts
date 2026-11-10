@@ -70,6 +70,8 @@ export type AgentRuntimeExecutionJob = {
 
 export type AgentRuntimeExecutionRunner = {
   run: (job: AgentRuntimeExecutionJob, context: { jobs: JobRuntime }) => Promise<void>;
+  /** Folds the job into the requester's running turn; true when it was handled that way. */
+  steer?: (job: AgentRuntimeExecutionJob) => Promise<boolean>;
 };
 
 export type JobRuntime = {
@@ -335,7 +337,18 @@ export async function startJobs(input: {
   if (agentRuntimeWorkerEnabled && agentRuntimeRunner) {
     const threadExecutions = new KeyedSerialQueue();
     await boss.work<AgentRuntimeExecutionJob>(AGENT_RUNTIME_EXECUTION_JOB, { batchSize: input.config.agentPromptMaxConcurrency, pollingIntervalSeconds: 1 }, async (jobs) => {
-      await Promise.all(jobs.map((job) => threadExecutions.run(job.data.agentThreadKey ?? job.data.channelId, async () => {
+      await Promise.all(jobs.map(async (job) => {
+        // A follow-up from the requester whose turn is still running joins that
+        // turn instead of waiting behind it in the thread queue.
+        const steered = await agentRuntimeRunner.steer?.(job.data).catch((error) => {
+          logger.warn({ err: error, runId: job.data.runId }, "Failed to steer a follow-up into the running turn");
+          return false;
+        });
+        if (steered) {
+          logger.info({ queue: AGENT_RUNTIME_EXECUTION_JOB, jobId: job.id, runId: job.data.runId }, "Steered follow-up into the running turn");
+          return;
+        }
+        await threadExecutions.run(job.data.agentThreadKey ?? job.data.channelId, async () => {
         const startedAt = Date.now();
         await runWithTrace(
           {
@@ -431,7 +444,8 @@ export async function startJobs(input: {
             }
           }
         );
-      })));
+        });
+      }));
     });
   } else if (agentRuntimeWorkerEnabled) {
     logger.warn({ queue: AGENT_RUNTIME_EXECUTION_JOB }, "Agent runtime execution worker requested without a runner");

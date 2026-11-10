@@ -39,7 +39,7 @@ export function replyContextAttachmentCount(replyContext: DiscordReplyContext | 
   );
 }
 
-function isDiscordImageAttachment(attachment: DiscordAttachmentContext) {
+export function isDiscordImageAttachment(attachment: DiscordAttachmentContext) {
   return attachment.contentType?.toLowerCase().startsWith("image/") ||
     /\.(?:png|jpe?g|webp|gif|bmp|tiff?|heic|avif)(?:[?#].*)?$/i.test(attachment.filename ?? attachment.url);
 }

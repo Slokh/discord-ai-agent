@@ -11,6 +11,7 @@ import { startPaymentReconciler } from "./payments/reconciler.js";
 import { createApplicationServices } from "./runtime/applicationServices.js";
 import { startOperatorConsole } from "./console/server.js";
 import { startServiceHeartbeat } from "./runtime/serviceHeartbeat.js";
+import { stopSharedNanocodeHost } from "./agent/sharedNanocodeHost.js";
 import type { ServiceComponent } from "./db/serviceHeartbeatRepository.js";
 
 async function main() {
@@ -169,6 +170,8 @@ async function main() {
     paymentReconciler?.stop();
     await operatorConsole?.close().catch(() => undefined);
     await jobs?.stop().catch(() => undefined);
+    // After jobs drain, so no turn is still using the host.
+    await stopSharedNanocodeHost().catch(() => undefined);
     runtime?.destroy();
     if (!runtime) client?.destroy();
     await serviceHeartbeat.stop().catch(() => undefined);

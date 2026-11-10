@@ -1330,7 +1330,7 @@ describe("generateImage", () => {
     expect(chat).toHaveBeenCalledWith(
       expect.objectContaining({
         model: "openai/gpt-5.6-luna",
-        reasoningEffort: "max",
+        reasoningEffort: "low",
         maxTokens: 1024,
         messages: expect.arrayContaining([
           expect.objectContaining({

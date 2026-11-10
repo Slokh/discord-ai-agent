@@ -255,6 +255,8 @@ async function main() {
     }
   } finally {
     await jobs.stop().catch(() => undefined);
+    const { stopSharedNanocodeHost } = await import("../src/agent/sharedNanocodeHost.js");
+    await stopSharedNanocodeHost().catch(() => undefined);
     await services.close().catch(() => undefined);
   }
 }

@@ -273,7 +273,7 @@ describe("architecture guardrails", () => {
 
   it("centralizes production environment access", async () => {
     const sourceFiles = await listSourceFiles(path.join(process.cwd(), "src"));
-    const allowedPrefixes = ["src/config/", "src/execution/"];
+    const allowedPrefixes = ["src/config/"];
     const offenders: string[] = [];
     for (const file of sourceFiles) {
       const relative = normalizePath(path.relative(process.cwd(), file));

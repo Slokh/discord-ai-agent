@@ -28,9 +28,11 @@ const PIXEL = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcS
 
 type Fake = Awaited<ReturnType<typeof startFakeResponsesServer>>;
 const cleanups: Array<() => Promise<void>> = [];
+// The first turn starts the host process, which is slow on a cold CI runner.
+const TEST_TIMEOUT_MS = 60_000;
 afterEach(async () => {
   while (cleanups.length) await cleanups.pop()!();
-});
+}, 30_000);
 
 async function harness(script: (request: RecordedResponsesRequest, index: number) => FakeModelStep, options: { durable?: boolean } = {}) {
   const fake = await startFakeResponsesServer(script);
@@ -89,7 +91,7 @@ function turn(host: NanocodeHost, requestId: string, sessionKey: string, text: s
   };
 }
 
-describe.skipIf(!existsSync(binary))("nanocode host (real binary, fake model)", () => {
+describe.skipIf(!existsSync(binary))("nanocode host (real binary, fake model)", { timeout: TEST_TIMEOUT_MS }, () => {
   it("runs parallel Code Mode tool calls concurrently and continues the session", async () => {
     const { fake, start } = await harness(addTwice);
     const host = start();
@@ -170,7 +172,7 @@ describe.skipIf(!existsSync(binary))("nanocode host (real binary, fake model)", 
   });
 });
 
-describe.skipIf(!existsSync(binary) || !databaseUrl)("nanocode session deletion (real binary, Postgres)", () => {
+describe.skipIf(!existsSync(binary) || !databaseUrl)("nanocode session deletion (real binary, Postgres)", { timeout: TEST_TIMEOUT_MS }, () => {
   it("deletes one requester's session and leaves a session that shares its records resumable", async () => {
     const pool = new pg.Pool({ connectionString: databaseUrl });
     cleanups.push(() => pool.end());

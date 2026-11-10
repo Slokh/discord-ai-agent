@@ -185,7 +185,6 @@ export async function prepareDiscordAgentTurn(input: {
     sessionMessages: priorSessionMessages,
     statusChannelId: input.responseSink.statusChannelId,
     statusMessageId: input.responseSink.statusMessageId,
-    interaction: input.request.interaction,
   });
   const turnEnvelopeArtifactId = await storeAgentRuntimeTurnEnvelope({
     agentRuntime: input.context.agentRuntime,

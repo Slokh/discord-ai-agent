@@ -33,7 +33,11 @@ describe.skipIf(!runDbTests)("Agent runtime recovery database behavior", () => {
     await agentRuntime.upsertSession({ sessionId: staleSessionId, threadKey: `stale-${randomUUID()}`, request: "stale", status: "running" });
     await agentRuntime.upsertSession({ sessionId: freshSessionId, threadKey: `fresh-${randomUUID()}`, request: "fresh", status: "running" });
     await agentRuntime.upsertSession({ sessionId: taskSessionId, threadKey: `task-${randomUUID()}`, request: "task", status: "running" });
-    await repo.upsertAgentTaskQueued({ taskId, taskType: "code_change", title: "task execution", request: "task", requestedBy: "test", backend: "kubernetes-sandbox" });
+    // Retired sandbox tasks may still own historical executions; recovery must never touch them.
+    await pool.query(
+      "INSERT INTO agent_tasks(task_id, task_type, title, request, requested_by, status) VALUES ($1, 'code_change', 'task execution', 'task', 'test', 'running')",
+      [taskId],
+    );
     await agentRuntime.createExecution({ executionId: staleExecutionId, sessionId: staleSessionId, status: "running" });
     await agentRuntime.createExecution({ executionId: `agent-execution-${randomUUID()}`, sessionId: freshSessionId, status: "running" });
     await agentRuntime.createExecution({ executionId: `agent-execution-${randomUUID()}`, sessionId: taskSessionId, taskId, status: "running" });
@@ -60,6 +64,7 @@ describe.skipIf(!runDbTests)("Agent runtime recovery database behavior", () => {
     await expect(repo.isDeploymentVerified({ revision, deploymentId })).resolves.toBe(false);
     await repo.markDeploymentVerified({ revision, deploymentId });
     await expect(repo.isDeploymentVerified({ revision, deploymentId })).resolves.toBe(true);
+    await expect(repo.latestDeploymentVerification()).resolves.toEqual({ revision, deploymentId, verifiedAt: expect.any(Date) });
     await expect(repo.isDeploymentVerified({ revision, deploymentId: `deployment-${randomUUID()}` })).resolves.toBe(false);
   });
 

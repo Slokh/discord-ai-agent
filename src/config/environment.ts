@@ -1,4 +1,4 @@
-export type EnvironmentVariableGroup = "core" | "github" | "access" | "integration" | "deployment";
+export type EnvironmentVariableGroup = "core" | "access" | "integration" | "deployment";
 
 export type EnvironmentVariableDefinition = {
   name: string;
@@ -18,20 +18,11 @@ export const environmentVariables = [
   { name: "DISCORD_GUILD_ID", group: "core", description: "Private community guild ID.", requiredFor: "Discord bot, worker, and hosted Console roles", operator: true },
   { name: "DATABASE_URL", group: "core", description: "Postgres connection string with pgvector available.", requiredFor: "all roles", example: "postgres://discord_ai_agent:discord_ai_agent@localhost:5433/discord_ai_agent", secret: true, operator: true },
   { name: "OPENROUTER_API_KEY", group: "core", description: "OpenRouter credential for model and provider-backed tools.", requiredFor: "agent execution", secret: true, operator: true },
-  { name: "TASK_SIGNING_SECRET", group: "core", description: "Shared HMAC secret for isolated task callbacks.", requiredFor: "code updates", secret: true, operator: true },
   { name: "CONSOLE_SESSION_SECRET", group: "core", description: "HMAC secret for hosted Console sessions and OAuth state.", requiredFor: "hosted Console authentication", secret: true, operator: true },
-
-  { name: "GITHUB_TOKEN", group: "github", description: "GitHub token used for code-update publication when an App is not configured.", requiredFor: "code updates (token mode)", secret: true, operator: true },
-  { name: "GITHUB_APP_ID", group: "github", description: "GitHub App ID.", requiredFor: "code updates (App mode)", operator: true },
-  { name: "GITHUB_APP_PRIVATE_KEY", group: "github", description: "GitHub App private key.", requiredFor: "code updates (App mode)", secret: true, operator: true },
-  { name: "GITHUB_APP_INSTALLATION_ID", group: "github", description: "GitHub App installation ID.", requiredFor: "code updates (App mode)", operator: true },
 
   { name: "BOT_OWNER_USER_ID", group: "access", description: "Discord user ID with owner authority.", requiredFor: "owner-only mutations", operator: true },
   { name: "OPS_ALLOWLIST_USER_IDS", group: "access", description: "Comma-separated Discord user IDs with operations authority.", requiredFor: "restricted operations", operator: true },
-  { name: "DISCORD_PREMIUM_SKU_IDS", group: "access", description: "Comma-separated configured Discord premium SKU IDs.", requiredFor: "premium buttons", operator: true },
 
-  { name: "SPOTIFY_CLIENT_ID", group: "integration", description: "Spotify application client ID.", requiredFor: "Spotify tools", operator: true },
-  { name: "SPOTIFY_CLIENT_SECRET", group: "integration", description: "Spotify application client secret.", requiredFor: "Spotify tools", secret: true, operator: true },
   { name: "PRIVY_APP_ID", group: "integration", description: "Privy application ID; supplying both Privy values enables wallets.", requiredFor: "wallets", operator: true },
   { name: "PRIVY_APP_SECRET", group: "integration", description: "Privy application secret; supplying both Privy values enables wallets.", requiredFor: "wallets", secret: true, operator: true },
 
@@ -39,9 +30,6 @@ export const environmentVariables = [
   { name: "APP_REVISION", group: "deployment", description: "Immutable deployed git revision.", requiredFor: "release workflow" },
   { name: "RELEASE_VERIFICATION_ID", group: "deployment", description: "Unique public identifier for this rollout's post-deploy promotion.", requiredFor: "release workflow" },
   { name: "PREVIOUS_APP_REVISION", group: "deployment", description: "Previously deployed git revision.", requiredFor: "release announcements" },
-  { name: "DISCORD_BOT_CHANNEL_ID", group: "deployment", description: "Single Discord text channel for deployment announcements.", requiredFor: "deployment announcements", operator: true },
-  { name: "POD_NAMESPACE", group: "deployment", description: "Namespace where isolated code-update Jobs are created.", requiredFor: "Kubernetes worker" },
-  { name: "SANDBOX_IMAGE", group: "deployment", description: "Immutable code-update sandbox image reference.", requiredFor: "Kubernetes worker" },
 ] as const satisfies readonly EnvironmentVariableDefinition[];
 
 export const environmentVariableNames = new Set<string>(environmentVariables.map((definition) => definition.name));
@@ -58,6 +46,10 @@ export const retiredEnvironmentVariableNames = new Set([
   "SANDBOX_CACHE_DIR", "SANDBOX_CACHE_PVC_NAME", "TEMPO_NETWORK", "TEMPO_USD_TOKEN", "USER_WALLETS_ENABLED",
   "WALLET_BALANCES_PUBLIC", "WALLET_ENABLED", "WALLET_INITIAL_GRANT_USD", "WORKER_TASK_ENABLED",
   "RELEASE_NOTES_CHANNEL_ID", "IMPROVEMENT_REPORT_CHANNEL_ID",
+  // Removed with code updates, Spotify, Components V2, and deployment announcements.
+  "TASK_SIGNING_SECRET", "GITHUB_TOKEN", "GITHUB_APP_ID", "GITHUB_APP_PRIVATE_KEY", "GITHUB_APP_INSTALLATION_ID",
+  "DISCORD_PREMIUM_SKU_IDS", "SPOTIFY_CLIENT_ID", "SPOTIFY_CLIENT_SECRET", "DISCORD_BOT_CHANNEL_ID",
+  "POD_NAMESPACE", "SANDBOX_IMAGE",
 ]);
 
 export function assertNoRetiredEnvironmentVariables(env: NodeJS.ProcessEnv): void {

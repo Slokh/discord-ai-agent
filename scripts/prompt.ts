@@ -5,7 +5,7 @@ import type { DbPool } from "../src/db/pool.js";
 import type { DiscordAiAgentRepository } from "../src/db/repositories.js";
 import type { AgentFile, ToolContext } from "../src/tools/types.js";
 import { loadAgentRuntimeTurnEnvelope } from "../src/agent/runtimeEnvelope.js";
-import { privateReplayReplyContextFromEnvelope } from "../src/observability/improvementContractReplay.js";
+import { privateReplayReplyContextFromEnvelope } from "../src/agent/turnReplay.js";
 import { persistLocalPromptTurn } from "./promptMemory.js";
 
 const SESSION_CONTEXT_MESSAGE_LIMIT = 24;
@@ -78,8 +78,7 @@ async function main() {
     },
     worker: false,
     crawlWorker: false,
-    embeddingWorker: false,
-    taskWorker: false
+    embeddingWorker: false
   });
 
   try {

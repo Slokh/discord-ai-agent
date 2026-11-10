@@ -6,8 +6,6 @@ import { z } from "zod";
 import { extractPromptJson, type PromptJsonOutput } from "./promptJson.js";
 
 export { extractPromptJson } from "./promptJson.js";
-import type { ImprovementContractCheck } from "../src/db/types.js";
-import { improvementContractReplayResults, type ImprovementReplayCheckResult } from "../src/observability/improvementContractReplay.js";
 import { openRouterServerToolRegistry, toolRegistry } from "../src/tools/registry.js";
 
 const DEFAULT_EVAL_DIR = "evals/prompts";
@@ -19,27 +17,10 @@ const KNOWN_EVAL_TOOLS = new Set<string>([
   ...openRouterServerToolRegistry.map((tool) => tool.type),
 ]);
 
-const improvementContractCheckSchema = z.discriminatedUnion("kind", [
-  z.object({ kind: z.literal("tool"), name: z.string().min(1), expectation: z.enum(["required", "forbidden"]) }),
-  z.object({ kind: z.literal("answer_text"), value: z.string().min(1), expectation: z.enum(["required", "forbidden"]) }),
-  z.object({ kind: z.literal("runtime_event"), name: z.string().min(1), expectation: z.enum(["required", "forbidden"]) }),
-  z.object({ kind: z.literal("delivery_state"), state: z.string().min(1) }),
-  z.object({ kind: z.literal("test"), reference: z.string().min(1) }),
-  z.object({ kind: z.literal("eval"), reference: z.string().min(1) }),
-  z.object({ kind: z.literal("database_invariant"), reference: z.string().min(1) }),
-  z.object({ kind: z.literal("deployment_canary"), reference: z.string().min(1) }),
-  z.object({ kind: z.literal("manual"), description: z.string().min(1) }),
-]);
-
 const evalPromptSchema = z.object({
   id: z.string().min(1),
   category: z.string().min(1),
   sourceRevision: z.string().min(1).optional(),
-  improvementCaseId: z.string().min(1).optional(),
-  improvementContractId: z.string().min(1).optional(),
-  improvementContractVersion: z.number().int().positive().optional(),
-  improvementReplayDisposition: z.enum(["context_unavailable"]).optional(),
-  improvementChecks: z.array(improvementContractCheckSchema).default([]),
   prompt: z.string().min(1),
   notes: z.string().optional(),
   expectedTools: z.array(z.string().min(1)).default([]),
@@ -100,7 +81,6 @@ export type EvalArgs = {
   list: boolean;
   json: boolean;
   safeSummary: boolean;
-  recordImprovementResults: boolean;
   promptTimeoutMs: number;
 };
 
@@ -119,11 +99,6 @@ export type EvalCaseResult = {
   id: string;
   category: string;
   sourceRevision?: string;
-  improvementCaseId?: string;
-  improvementContractId?: string;
-  improvementContractVersion?: number;
-  improvementReplayDisposition?: "context_unavailable";
-  improvementCheckResults?: ImprovementReplayCheckResult[];
   prompt: string;
   status: "passed" | "failed" | "error" | "skipped";
   durationMs: number;
@@ -202,27 +177,10 @@ async function main() {
     return;
   }
 
-  const producerRunKey = process.env.GITHUB_RUN_ID
-    ? `github-${process.env.GITHUB_RUN_ID}-${process.env.GITHUB_RUN_ATTEMPT ?? "1"}`
-    : `private-replay-${new Date().toISOString()}`;
-  if (args.recordImprovementResults) await recordPrivateReplayProducerRun(producerRunKey, "started");
-  let report: EvalRunReport;
-  let comparison: EvalComparisonReport | null;
-  let outputPath: string;
-  try {
-    report = await runEvalPrompts(selectedPrompts, args);
-    comparison = args.comparePath ? compareEvalReports(await loadEvalReport(args.comparePath), report, args.comparePath) : null;
-    outputPath = await writeEvalReport(report, args.outputDir, comparison);
-    if (args.recordImprovementResults) await recordImprovementResults(report, args);
-  } catch (error) {
-    if (args.recordImprovementResults) await recordPrivateReplayProducerRun(producerRunKey, "failed", "producer_execution_failed");
-    throw error;
-  }
+  const report = await runEvalPrompts(selectedPrompts, args);
+  const comparison = args.comparePath ? compareEvalReports(await loadEvalReport(args.comparePath), report, args.comparePath) : null;
+  const outputPath = await writeEvalReport(report, args.outputDir, comparison);
   const hasFailures = report.totals.failed > 0 || report.totals.error > 0;
-  if (args.recordImprovementResults) {
-    const producerResult = privateReplayProducerResult(report);
-    await recordPrivateReplayProducerRun(producerRunKey, producerResult.status, producerResult.outcomeCode);
-  }
   if (args.safeSummary) {
     process.stdout.write(`${JSON.stringify(safeEvalSummary(report), null, 2)}\n`);
     process.exitCode = hasFailures ? 1 : 0;
@@ -238,47 +196,6 @@ async function main() {
   process.exitCode = hasFailures ? 1 : 0;
 }
 
-/**
- * Producer liveness measures whether the replay runner completed, not whether
- * every replay assertion passed. Assertion failures are handled by the
- * case-specific verification result and the command's non-zero exit status.
- */
-export function privateReplayProducerResult(report: Pick<EvalRunReport, "totals">) {
-  return {
-    status: "succeeded" as const,
-    outcomeCode: report.totals.failed > 0 || report.totals.error > 0 ? "eval_assertions_failed" : undefined,
-  };
-}
-
-async function recordPrivateReplayProducerRun(
-  runKey: string,
-  status: "started" | "succeeded" | "failed",
-  outcomeCode?: string,
-) {
-  const [{ loadConfig }, { createPool }, { createAppDatabase }] = await Promise.all([
-    import("../src/config/env.js"),
-    import("../src/db/pool.js"),
-    import("../src/db/repositories.js"),
-  ]);
-  const config = loadConfig();
-  const pool = createPool(config);
-  try {
-    const repo = createAppDatabase(pool);
-    await repo.recordImprovementProofProducerRun({
-      trigger: "post_deploy_private_replay",
-      runKey,
-      status,
-      revision: config.appRevision,
-      deploymentId: config.releaseNotes.verificationId,
-      outcomeCode,
-    });
-  } catch (error) {
-    process.stderr.write(`Failed to record private-replay producer ${status}: ${error instanceof Error ? error.message : String(error)}\n`);
-  } finally {
-    await pool.end();
-  }
-}
-
 export function parseEvalArgs(argv: string[]): EvalArgs {
   const args: EvalArgs = {
     files: [],
@@ -289,7 +206,6 @@ export function parseEvalArgs(argv: string[]): EvalArgs {
     list: false,
     json: false,
     safeSummary: false,
-    recordImprovementResults: false,
     promptTimeoutMs: DEFAULT_TIMEOUT_MS
   };
 
@@ -335,8 +251,6 @@ export function parseEvalArgs(argv: string[]): EvalArgs {
       args.json = true;
     } else if (arg === "--safe-summary") {
       args.safeSummary = true;
-    } else if (arg === "--record-improvement-results") {
-      args.recordImprovementResults = true;
     } else if (arg === "--prompt-timeout-ms") {
       args.promptTimeoutMs = positiveInteger(requiredNext(argv, ++index, arg), arg);
     } else if (arg.startsWith("--prompt-timeout-ms=")) {
@@ -405,10 +319,6 @@ export async function runEvalPrompts(prompts: EvalPrompt[], args: EvalArgs): Pro
     for (const prompt of prompts) {
       results.push({
         ...await runEvalPrompt(prompt, args, traceReader),
-        ...(prompt.improvementCaseId ? { improvementCaseId: prompt.improvementCaseId } : {}),
-        ...(prompt.improvementContractId ? { improvementContractId: prompt.improvementContractId } : {}),
-        ...(prompt.improvementContractVersion ? { improvementContractVersion: prompt.improvementContractVersion } : {}),
-        ...(prompt.improvementReplayDisposition ? { improvementReplayDisposition: prompt.improvementReplayDisposition } : {}),
       });
     }
   } finally {
@@ -441,7 +351,6 @@ async function runEvalPrompt(
       traceId: null,
       answer: "",
       evidence: emptyEvidence(),
-      improvementCheckResults: replayResults(prompt, "", emptyEvidence(), "inconclusive"),
       failures: [],
       notes: prompt.skipReason ?? prompt.notes
     };
@@ -466,7 +375,6 @@ async function runEvalPrompt(
       traceId: null,
       answer: "",
       evidence: emptyEvidence(),
-      improvementCheckResults: replayResults(prompt, "", emptyEvidence(), "inconclusive"),
       failures: [`prompt command exited with ${result.exitCode}`],
       notes: prompt.notes,
       stderr: result.stderr,
@@ -489,7 +397,6 @@ async function runEvalPrompt(
       traceId: null,
       answer: result.stdout.trim(),
       evidence: emptyEvidence(),
-      improvementCheckResults: replayResults(prompt, "", emptyEvidence(), "inconclusive"),
       failures: ["prompt command did not return parseable JSON"],
       notes: prompt.notes,
       stderr: result.stderr,
@@ -516,7 +423,6 @@ async function runEvalPrompt(
     traceId,
     answer: output.content,
     evidence,
-    improvementCheckResults: replayResults(prompt, output.content, evidence),
     failures,
     notes: prompt.notes,
     stderr: result.stderr.trim() || undefined
@@ -530,7 +436,6 @@ export function buildPromptCommand(prompt: EvalPrompt): { command: string; args:
     : ["run", "prompt", "--", "--json"];
   if (prompt.noMemory) args.push("--no-memory");
   if (prompt.useDiscordMemory) args.push("--use-discord-memory");
-  if (prompt.improvementCaseId) args.push("--read-only");
   args.push(...prompt.promptArgs, prompt.prompt);
   return { command: compiled ? process.execPath : "npm", args };
 }
@@ -705,56 +610,6 @@ export function safeEvalSummary(report: EvalRunReport) {
       left.revision.localeCompare(right.revision)
       || left.category.localeCompare(right.category)),
   };
-}
-
-async function recordImprovementResults(report: EvalRunReport, args: EvalArgs) {
-  if (!args.includePrivate || args.dirs.some((dir) => dir !== DEFAULT_PRIVATE_EVAL_DIR)) {
-    throw new Error("--record-improvement-results requires --private-only.");
-  }
-  const [{ loadConfig }, { createPool }, { createAppDatabase }] = await Promise.all([
-    import("../src/config/env.js"),
-    import("../src/db/pool.js"),
-    import("../src/db/repositories.js"),
-  ]);
-  const config = loadConfig();
-  const deploymentId = config.releaseNotes.verificationId;
-  if (!deploymentId) throw new Error("Release verification ID is required to record improvement results.");
-  const results = report.results.flatMap((result) => {
-    if (!result.improvementCaseId || !result.improvementContractId || !result.improvementContractVersion) return [];
-    const status = result.status === "passed" ? "passed" as const
-      : result.status === "failed" ? "failed" as const
-        : "inconclusive" as const;
-    return [{
-      caseId: result.improvementCaseId,
-      contractId: result.improvementContractId,
-      contractVersion: result.improvementContractVersion,
-      revision: config.appRevision,
-      deploymentId,
-      status,
-      referenceId: result.id,
-      runKey: report.generatedAt,
-      durationMs: result.durationMs,
-      traceId: result.traceId,
-      outcomeCode: result.status === "skipped" && result.improvementReplayDisposition === "context_unavailable"
-        ? "private_replay_context_unavailable" as const
-        : null,
-      checkResults: result.improvementCheckResults ?? [],
-    }];
-  });
-  const pool = createPool(config);
-  try {
-    const repo = createAppDatabase(pool);
-    await repo.recordImprovementEvalResults(results);
-    if (await repo.isDeploymentVerified({ revision: config.appRevision, deploymentId })) {
-      await repo.verifyImprovementCasesForDeployment({
-        revision: config.appRevision,
-        deploymentId,
-        actorId: "private-replay",
-      });
-    }
-  } finally {
-    await pool.end();
-  }
 }
 
 export function compareEvalReports(baseline: EvalRunReport, current: EvalRunReport, baselinePath: string): EvalComparisonReport {
@@ -942,28 +797,6 @@ function emptyEvidence(): EvalTraceEvidence {
   };
 }
 
-function replayResults(
-  prompt: EvalPrompt,
-  answer: string,
-  evidence: EvalTraceEvidence,
-  unavailableStatus?: "inconclusive",
-) {
-  if (unavailableStatus) {
-    return improvementContractReplayResults(prompt.improvementChecks as ImprovementContractCheck[], {
-      answer,
-      observedTools: [],
-      eventNames: [],
-      available: false,
-    }).map((result) => ({ ...result, status: unavailableStatus }));
-  }
-  return improvementContractReplayResults(prompt.improvementChecks as ImprovementContractCheck[], {
-    answer,
-    observedTools: uniqueStrings([...evidence.selectedTools, ...evidence.auditedTools]),
-    eventNames: evidence.eventNames,
-    available: true,
-  });
-}
-
 function valueAfterEquals(arg: string) {
   return arg.slice(arg.indexOf("=") + 1).trim();
 }
@@ -1001,7 +834,6 @@ Options:
   --dry-run                  Validate selected prompts without running them.
   --json                     Print the final report as JSON.
   --safe-summary             Print only counts grouped by source revision and category.
-  --record-improvement-results  Persist content-free per-contract results (requires --private-only).
 `);
 }
 

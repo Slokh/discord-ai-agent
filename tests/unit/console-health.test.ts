@@ -70,9 +70,11 @@ describe("production Console health", () => {
         return json({ schemaVersion: 3, environment: "production", revision: "revision-a", generatedAt: new Date(now).toISOString() });
       }
       if (url.pathname === "/api/activity") {
-        return json({ schemaVersion: 3, environment: "production", active: [], recent: [{ kind: "improvement", id: "improvement-a" }] });
+        expect(url.searchParams.get("types")).toBe("conversation");
+        return json({ schemaVersion: 3, environment: "production", active: [], recent: [{ kind: "conversation", id: "runtime-a" }] });
       }
-      return json({ schemaVersion: 2, environment: "production", kind: "improvement", id: "improvement-a" });
+      expect(url.pathname).toBe("/api/activity/conversation/runtime-a");
+      return json({ schemaVersion: 2, environment: "production", kind: "conversation", id: "runtime-a" });
     });
 
     const result = await checkConsoleHealth({

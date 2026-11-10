@@ -247,7 +247,6 @@ jobs:
           # after a partial publish reuses images already pushed for this tag.
           targets=()
           aws ecr describe-images --repository-name "$ECR_REPOSITORY" --image-ids "imageTag=$TAG" >/dev/null 2>&1 || targets+=(runtime)
-          aws ecr describe-images --repository-name "$ECR_REPOSITORY-sandbox" --image-ids "imageTag=$TAG" >/dev/null 2>&1 || targets+=(codegen)
           echo "targets=$(IFS=,; echo "${targets[*]}")" >>"$GITHUB_OUTPUT"
       - name: Build and publish tree-addressed candidate images
         if: steps.missing.outputs.targets != ''
@@ -259,9 +258,7 @@ jobs:
           targets: ${{ steps.missing.outputs.targets }}
           set: |
             runtime.tags=${{ steps.ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ steps.identity.outputs.tree_tag }}
-            codegen.tags=${{ steps.ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}-sandbox:${{ steps.identity.outputs.tree_tag }}
             runtime.cache-from=type=gha,scope=runtime
-            codegen.cache-from=type=gha,scope=codegen
 
   candidate-security:
     needs: [changes, candidate-images]
@@ -416,19 +413,12 @@ jobs:
           REGISTRY: ${{ steps.ecr.outputs.registry }}
           TREE_TAG: ${{ steps.identity.outputs.tree_tag }}
         run: |
-          # The sandbox image is promoted first so a runtime release tag never
-          # exists without its matching sandbox image.
-          docker buildx imagetools create \
-            --tag "$REGISTRY/$ECR_REPOSITORY-sandbox:$IMAGE_TAG" \
-            "$REGISTRY/$ECR_REPOSITORY-sandbox:$TREE_TAG"
           docker buildx imagetools create \
             --tag "$REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" \
             "$REGISTRY/$ECR_REPOSITORY:$TREE_TAG"
-          for repository in "$ECR_REPOSITORY-sandbox" "$ECR_REPOSITORY"; do
-            aws ecr batch-delete-image \
-              --repository-name "$repository" \
-              --image-ids "imageTag=$TREE_TAG" >/dev/null || true
-          done
+          aws ecr batch-delete-image \
+            --repository-name "$ECR_REPOSITORY" \
+            --image-ids "imageTag=$TREE_TAG" >/dev/null || true
       - name: Require the exact verified candidate
         if: vars.CANDIDATE_IMAGE_PUBLISHING_ENABLED == 'true' && steps.promote.outcome != 'success'
         run: |
@@ -444,7 +434,6 @@ jobs:
           # after a partial publish reuses images already pushed for this tag.
           targets=()
           aws ecr describe-images --repository-name "$ECR_REPOSITORY" --image-ids "imageTag=$TAG" >/dev/null 2>&1 || targets+=(runtime)
-          aws ecr describe-images --repository-name "$ECR_REPOSITORY-sandbox" --image-ids "imageTag=$TAG" >/dev/null 2>&1 || targets+=(codegen)
           echo "targets=$(IFS=,; echo "${targets[*]}")" >>"$GITHUB_OUTPUT"
       - name: Build and publish images when no verified candidate exists
         if: vars.CANDIDATE_IMAGE_PUBLISHING_ENABLED != 'true' && steps.missing.outputs.targets != ''
@@ -456,11 +445,8 @@ jobs:
           targets: ${{ steps.missing.outputs.targets }}
           set: |
             runtime.tags=${{ steps.ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ env.IMAGE_TAG }}
-            codegen.tags=${{ steps.ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}-sandbox:${{ env.IMAGE_TAG }}
             runtime.cache-from=type=gha,scope=runtime
-            codegen.cache-from=type=gha,scope=codegen
             runtime.cache-to=type=gha,mode=max,scope=runtime,ignore-error=true
-            codegen.cache-to=type=gha,mode=max,scope=codegen,ignore-error=true
 
   deploy-k3s:
     needs: [changes, verify, publish-images]

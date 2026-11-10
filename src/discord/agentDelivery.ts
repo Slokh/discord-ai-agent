@@ -22,10 +22,9 @@ import {
   serializeDiscordDeliveryIntent,
 } from "./deliveryIntent.js";
 import { persistDeliveryFiles, releaseFailedRequestWager } from "./agentDeliveryRecovery.js";
-import { deliverDiscordPresentation } from "./presentationDelivery.js";
+import { deliverDiscordReply } from "./replyDelivery.js";
 import { loadAgentRuntimeInputLines, prepareDiscordAgentTurn, replayPreparedDiscordAgentTurn } from "./turnPreparation.js";
 import {
-  attachPromptTasksToDiscordReply,
   fetchDiscordMessage,
   markDiscordDeliveryDelivered,
   parseDateMs,
@@ -347,7 +346,6 @@ export async function executeDiscordAgentRequest(
       content: response.content,
       storedContent: response.storedContent,
       footer: formattedFooter,
-      presentation: response.discordPresentation,
       files: deliveryFileReferences,
     });
     const deliveryIntentArtifactId = input.agentRuntime
@@ -362,7 +360,6 @@ export async function executeDiscordAgentRequest(
             schemaVersion: deliveryIntent.schemaVersion,
             responseRedacted,
             fileCount: deliveryIntent.files.length,
-            requestedRichPresentation: Boolean(deliveryIntent.presentation),
           },
         }).then((artifact) => artifact.artifactId).catch((error) => {
           requestLogger.warn({ err: error }, "Failed to persist Discord delivery intent before delivery");
@@ -390,25 +387,13 @@ export async function executeDiscordAgentRequest(
         metadata: { deliveryIntentArtifactId, deliveryIntentSchemaVersion: deliveryIntent.schemaVersion },
       }).catch((error) => requestLogger.warn({ err: error }, "Failed to link Discord delivery intent to obligation"));
     }
-    const delivery = await deliverDiscordPresentation({
+    const { reply: finalReply, messageCount, continuationMessageIds } = await deliverDiscordReply({
       responseSink,
-      repo: input.repo,
-      logger: requestLogger,
-      executionId: agentRuntimeExecution.executionId,
-      guildId: turnEnvelope.guildId,
-      channelId: turnEnvelope.channelId,
-      sourceMessageId: message.id,
-      requesterUserId: turnEnvelope.userId,
       content: response.content,
       files: response.files,
       footer: formattedFooter,
-      presentation: response.discordPresentation,
-      premiumSkuIds: input.config.discord.premiumSkuIds,
     });
-    const { reply: finalReply, richPresentationDelivered, actionGenerationId, messageCount, continuationMessageIds } = delivery;
     await markDiscordDeliveryDelivered(input, agentRuntimeExecution.executionId, finalReply, requestLogger);
-    await attachPromptTasksToDiscordReply(input, request.requestId, finalReply, requestLogger)
-      .catch((error) => requestLogger.warn({ err: error, replyMessageId: finalReply.id }, "Failed to reconcile prompt tasks after Discord delivery"));
     requestLogger.info({ replyMessageId: finalReply.id, messageCount, continuationMessageIds }, "Sent Discord final response");
     await finishAgentRuntimePromptExecution({
       agentRuntime: input.agentRuntime,
@@ -460,20 +445,6 @@ export async function executeDiscordAgentRequest(
       }
     }).catch((error) => requestLogger.warn({ err: error, replyMessageId: finalReply.id }, "Failed to append delivered Discord turn to conversation memory"));
     requestLogger.info({ durationMs: durationMs(request.messageStartedAt) }, "Discord mention handled");
-    const presentationArtifactId = response.discordPresentation
-      ? await storeAgentRuntimeResponseArtifact({
-          agentRuntime: input.agentRuntime,
-          session: agentRuntimeExecution.session,
-          executionId: agentRuntimeExecution.executionId,
-          traceId: request.requestId,
-          name: "Discord presentation plan",
-          content: JSON.stringify(response.discordPresentation, null, 2),
-          metadata: { replyMessageId: finalReply.id, richPresentationDelivered, actionGenerationId },
-        }).catch((error) => {
-          requestLogger.warn({ err: error }, "Failed to store Discord presentation artifact");
-          return null;
-        })
-      : null;
     await storeAgentRuntimeResponseArtifact({
       agentRuntime: input.agentRuntime,
       session: agentRuntimeExecution.session,
@@ -485,9 +456,6 @@ export async function executeDiscordAgentRequest(
         replyMessageId: finalReply.id,
         discordUrl: finalReply.url,
         responseRedacted,
-        presentationArtifactId,
-        richPresentationDelivered,
-        actionGenerationId,
         deliveryIntentArtifactId,
         files: response.files?.map((file) => ({ name: file.name, contentType: file.contentType, bytes: file.data.length })) ?? []
       }
@@ -514,7 +482,6 @@ export async function executeDiscordAgentRequest(
       );
       const finalReply = (await responseSink.sendError(filteredContent, elapsedResponseFooter(request.messageStartedAt, input.config))).message;
       await markDiscordDeliveryDelivered(input, agentRuntimeExecution.executionId, finalReply, requestLogger);
-      await attachPromptTasksToDiscordReply(input, request.requestId, finalReply, requestLogger);
       const deletedMemoryRows = await input.repo
         .deleteConversationMessagesByDiscordMessageIds({
           threadKey,
@@ -561,7 +528,6 @@ export async function executeDiscordAgentRequest(
     const errorContent = cleanResponse(`I hit an error: ${error instanceof Error ? error.message : String(error)}`, input.config.maxReplyChars);
     const finalReply = (await responseSink.sendError(errorContent, elapsedResponseFooter(request.messageStartedAt, input.config))).message;
     await markDiscordDeliveryDelivered(input, agentRuntimeExecution.executionId, finalReply, requestLogger);
-    await attachPromptTasksToDiscordReply(input, request.requestId, finalReply, requestLogger);
     requestLogger.info({ replyMessageId: finalReply.id }, "Sent Discord error response");
     await recordAgentRuntimeSpan({
       agentRuntime: input.agentRuntime,

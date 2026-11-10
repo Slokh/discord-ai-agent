@@ -2,22 +2,13 @@ import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
-import * as k8s from "@kubernetes/client-node";
-import { Octokit } from "@octokit/rest";
 import {
   assertDiscordConfig,
-  assertExecutionConfig,
   assertOpenRouterConfig,
   loadConfig,
-  productConfig,
 } from "../src/config/env.js";
 import { createPool } from "../src/db/pool.js";
-import { createAppDatabase } from "../src/db/repositories.js";
-import { resolveGitHubTaskToken } from "../src/github/appToken.js";
-import { taskBearerToken, taskCallbackSecret } from "../src/execution/token.js";
-import { parseGitHubRepository } from "../src/github/repository.js";
 import { passingRandomCanaryChannel, passingStatsCanaryChannel, passingWebCanaryChannel } from "../src/observability/postDeployCanaryEvidence.js";
-import { waitForSandboxCallback } from "../src/observability/sandboxCallbackCanary.js";
 import { deploymentToolset } from "../src/tools/toolScope.js";
 import { discordWrite } from "../src/discord/api.js";
 import { logger } from "../src/util/logger.js";
@@ -27,10 +18,9 @@ const execFileAsync = promisify(execFile);
 const config = loadConfig();
 assertDiscordConfig(config);
 assertOpenRouterConfig(config);
-assertExecutionConfig(config);
 
 const deployed = deploymentToolset(config);
-for (const name of ["getDiscordStats", "searchDiscordHistory", "runSandboxAgent", "web__run"] as const) {
+for (const name of ["getDiscordStats", "searchDiscordHistory", "web__run"] as const) {
   if (!deployed.localTools.some((tool) => tool.name === name)) throw new Error(`Post-deploy canary is missing deployed capability ${name}.`);
 }
 for (const type of ["openrouter:web_search", "openrouter:web_fetch"] as const) {
@@ -65,19 +55,14 @@ const randomPrompt = [
 const pool = createPool(config);
 let deliveryChannelId: string;
 try {
-  const [, , channelId] = await Promise.all([
-    verifyGitHub(),
-    verifySandboxCallback(pool),
-    runConversationCanary(pool),
-  ]);
-  deliveryChannelId = channelId;
+  deliveryChannelId = await runConversationCanary(pool);
 } finally {
   await pool.end();
 }
 
 await verifyDiscordRetryBoundary();
 await verifyDiscordAccess(deliveryChannelId);
-process.stdout.write("Post-deploy canary passed: model, retrieval, bounded randomness, hosted web, follow-up continuity, GitHub, sandbox scheduling, and Discord access are operational.\n");
+process.stdout.write("Post-deploy canary passed: model, retrieval, bounded randomness, hosted web, follow-up continuity, and Discord access are operational.\n");
 
 async function runConversationCanary(database: ReturnType<typeof createPool>) {
   const [, , channelId] = await Promise.all([
@@ -149,137 +134,6 @@ async function runPrompt(prompt: string, input: { userId: string; channelId?: st
   return extractPromptJson(stdout);
 }
 
-async function verifyGitHub() {
-  const token = await resolveGitHubTaskToken(config);
-  const { owner, repo } = parseGitHubRepository(config.github.repository);
-  const response = await new Octokit({ auth: token }).repos.get({ owner, repo });
-  if (response.data.full_name.toLowerCase() !== `${owner}/${repo}`.toLowerCase()) {
-    throw new Error("GitHub canary authenticated against an unexpected repository.");
-  }
-}
-
-async function verifySandboxCallback(database: ReturnType<typeof createPool>) {
-  const kubeConfig = new k8s.KubeConfig();
-  kubeConfig.loadFromDefault();
-  const batch = kubeConfig.makeApiClient(k8s.BatchV1Api);
-  const core = kubeConfig.makeApiClient(k8s.CoreV1Api);
-  const namespace = config.execution.kubernetes.namespace;
-  const name = `post-deploy-canary-${randomUUID().slice(0, 8)}`;
-  const secretName = `${name}-secret`;
-  const taskId = `${name}-task`;
-  const sandboxRunId = `${name}-run`;
-  const repo = createAppDatabase(database);
-  await repo.upsertAgentTaskQueued({
-    taskId,
-    taskType: "post-deploy-canary",
-    title: "Verify sandbox callback boundary",
-    request: "Complete a signed no-change callback without running repository code.",
-    requestedBy: "deployment",
-    backend: "kubernetes-sandbox",
-  });
-  await repo.markAgentTaskRunning({ taskId, backend: "kubernetes-sandbox", step: "callback_canary" });
-  const token = taskBearerToken({ taskId, sandboxRunId, secret: config.execution.taskSigningSecret });
-  const callbackSecret = taskCallbackSecret({ taskId, sandboxRunId, secret: config.execution.taskSigningSecret });
-  const labels = {
-    "app.kubernetes.io/name": "discord-ai-agent",
-    "app.kubernetes.io/component": "sandbox",
-    "discord-ai-agent/task-id": taskId,
-    "discord-ai-agent/sandbox-run-id": sandboxRunId,
-  };
-  try {
-    await core.createNamespacedSecret({
-      namespace,
-      body: {
-        metadata: { name: secretName, labels },
-        type: "Opaque",
-        stringData: {
-          CANARY_TASK_ID: taskId,
-          CANARY_SANDBOX_RUN_ID: sandboxRunId,
-          CANARY_TASK_TOKEN: token,
-          CANARY_SIGNING_SECRET: callbackSecret,
-          CANARY_CALLBACK_URL: productConfig.callback.internalUrl,
-        },
-      },
-    });
-    await batch.createNamespacedJob({
-      namespace,
-      body: {
-        metadata: {
-          name,
-          labels,
-        },
-        spec: {
-          activeDeadlineSeconds: 120,
-          backoffLimit: 0,
-          template: {
-            metadata: { labels },
-            spec: {
-              restartPolicy: "Never",
-              serviceAccountName: config.execution.kubernetes.serviceAccountName,
-              containers: [{
-                name: "canary",
-                image: config.execution.kubernetes.sandboxImage,
-                imagePullPolicy: config.execution.kubernetes.imagePullPolicy,
-                envFrom: [{ secretRef: { name: secretName } }],
-                command: ["node", "-e", sandboxCallbackScript()],
-              }],
-            },
-          },
-        },
-      },
-    });
-    await waitForSandboxCallback({
-      readTaskStatus: async () => (await repo.getAgentTask(taskId))?.status,
-      readJobStatus: async () => {
-        try {
-          return (await batch.readNamespacedJob({ namespace, name })).status;
-        } catch (error) {
-          if (kubernetesStatus(error) === 404) return undefined;
-          throw error;
-        }
-      },
-    });
-  } finally {
-    await batch.deleteNamespacedJob({ namespace, name, propagationPolicy: "Background" }).catch((error: unknown) => {
-      if (kubernetesStatus(error) !== 404) throw error;
-    });
-    await core.deleteNamespacedSecret({ namespace, name: secretName }).catch((error: unknown) => {
-      if (kubernetesStatus(error) !== 404) throw error;
-    });
-    await database.query("DELETE FROM agent_tasks WHERE task_id = $1", [taskId]);
-  }
-}
-
-function sandboxCallbackScript() {
-  return `
-    const { createHmac } = require("node:crypto");
-    const taskId = process.env.CANARY_TASK_ID;
-    const sandboxRunId = process.env.CANARY_SANDBOX_RUN_ID;
-    const secret = process.env.CANARY_SIGNING_SECRET;
-    const body = JSON.stringify({
-      status: "no_changes",
-      verifyPassed: true,
-      error: "Post-deploy callback canary completed without repository work.",
-      metadata: { sandboxRunId, canary: true }
-    });
-    const timestamp = String(Date.now());
-    const signature = createHmac("sha256", secret).update(timestamp + ".").update(body).digest("hex");
-    fetch(process.env.CANARY_CALLBACK_URL + "/internal/tasks/" + encodeURIComponent(taskId) + "/complete", {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        authorization: "Bearer " + process.env.CANARY_TASK_TOKEN,
-        "x-agent-task-timestamp": timestamp,
-        "x-agent-task-signature": signature
-      },
-      body
-    }).then(async (response) => {
-      if (!response.ok) throw new Error("callback failed (" + response.status + "): " + await response.text());
-      process.stdout.write("sandbox-callback-canary-ok\\n");
-    }).catch((error) => { console.error(error); process.exit(1); });
-  `;
-}
-
 async function verifyDiscordAccess(channelId: string) {
   const headers = { Authorization: `Bot ${config.discord.token}` };
   const [bot, channel] = await Promise.all([
@@ -311,10 +165,4 @@ async function discordRequest<T = unknown>(path: string, init: RequestInit): Pro
   if (!response.ok) throw new Error(`Discord canary request ${init.method ?? "GET"} ${path} failed (${response.status}).`);
   if (response.status === 204) return undefined as T;
   return await response.json() as T;
-}
-
-function kubernetesStatus(error: unknown) {
-  if (typeof error !== "object" || error == null) return undefined;
-  const candidate = error as { code?: unknown; statusCode?: unknown; response?: { statusCode?: unknown } };
-  return Number(candidate.code ?? candidate.statusCode ?? candidate.response?.statusCode);
 }

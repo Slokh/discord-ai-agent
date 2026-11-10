@@ -51,7 +51,7 @@ export function invalidToolCallResponse(input: {
 }
 
 function deploymentValidatorFor(tool: ToolRegistryEntry, config: AppConfig): ValidateFunction {
-  const key = `${tool.name}|wallet:${Boolean(config.payments?.userWalletsEnabled)}|premium:${(config.discord?.premiumSkuIds ?? []).join(",")}`;
+  const key = `${tool.name}|wallet:${Boolean(config.payments?.userWalletsEnabled)}`;
   const existing = deploymentValidators.get(key);
   if (existing) return existing;
   const validator = ajv.compile(toolForDeployment(tool, config).parameters as object);

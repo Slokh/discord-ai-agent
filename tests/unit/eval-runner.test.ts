@@ -9,7 +9,6 @@ import {
   filterPrompts,
   formatEvalSummary,
   parseEvalArgs,
-  privateReplayProducerResult,
   safeEvalSummary,
   validateEvalToolNames,
   type EvalPrompt,
@@ -21,7 +20,6 @@ const basePrompt: EvalPrompt = {
   category: "history",
   prompt: "what did people say about jobs?",
   notes: undefined,
-  improvementChecks: [],
   expectedTools: [],
   forbiddenTools: [],
   expectedRequestedTools: [],
@@ -51,23 +49,13 @@ describe("eval runner", () => {
   });
 
   it("can isolate private production regressions from committed evals", () => {
-    expect(parseEvalArgs(["--private-only", "--safe-summary", "--record-improvement-results"])).toEqual(
+    expect(parseEvalArgs(["--private-only", "--safe-summary"])).toEqual(
       expect.objectContaining({
         dirs: [".discord-ai-agent/evals"],
         includePrivate: true,
         safeSummary: true,
-        recordImprovementResults: true,
       }),
     );
-  });
-
-  it("keeps a completed private replay producer healthy when assertions fail", () => {
-    expect(privateReplayProducerResult({
-      totals: { passed: 0, failed: 1, error: 0, skipped: 0, total: 1 },
-    })).toEqual({ status: "succeeded", outcomeCode: "eval_assertions_failed" });
-    expect(privateReplayProducerResult({
-      totals: { passed: 1, failed: 0, error: 0, skipped: 0, total: 1 },
-    })).toEqual({ status: "succeeded", outcomeCode: undefined });
   });
 
   it("formats private regression output without prompts, answers, or run identifiers", () => {
@@ -79,9 +67,6 @@ describe("eval runner", () => {
         id: "private-run-id",
         category: "wrong_tool",
         sourceRevision: "revision-a",
-        improvementCaseId: "private-case-id",
-        improvementContractId: "private-contract-id",
-        improvementContractVersion: 2,
         prompt: "private member prompt",
         status: "failed",
         durationMs: 100,
@@ -95,7 +80,7 @@ describe("eval runner", () => {
     const summary = JSON.stringify(safeEvalSummary(report));
     expect(summary).toContain('"revision":"revision-a"');
     expect(summary).toContain('"category":"wrong_tool"');
-    expect(summary).not.toMatch(/private member prompt|private answer|run-secret|trace-secret|private assertion|private-case-id|private-contract-id/);
+    expect(summary).not.toMatch(/private member prompt|private answer|run-secret|trace-secret|private assertion/);
   });
 
   it("filters prompts by category and text", () => {
@@ -125,11 +110,6 @@ describe("eval runner", () => {
       command: "npm",
       args: ["run", "prompt", "--", "--json", "--no-memory", "--channel=general", "what happened recently?"]
     });
-    expect(buildPromptCommand({
-      ...basePrompt,
-      improvementCaseId: "imp-1",
-      prompt: "replay safely",
-    }).args).toContain("--read-only");
   });
 
   it("extracts prompt JSON even when surrounding output exists", () => {

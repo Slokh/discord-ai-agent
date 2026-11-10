@@ -258,7 +258,7 @@ describe("agent runtime envelope", () => {
     ]);
   });
 
-  it("keeps model-authored actions and current user submissions distinct in model input", () => {
+  it("ignores retired component submissions carried by older stored envelopes", () => {
     const text = agentRuntimeTurnInputText({
       text: "Compare the selected choices",
       interaction: {
@@ -267,13 +267,9 @@ describe("agent runtime envelope", () => {
         component: { type: "string_select", values: ["one", "two"] },
         fields: [{ key: "note", type: "text_input", value: "current user text" }],
       },
-    });
+    } as any);
 
-    expect(text).toContain("[Model-authored Discord component action]\nCompare the selected choices");
-    expect(text).toContain("[Current user-submitted Discord interaction data]");
-    expect(text).toContain('"values":["one","two"]');
-    expect(text).toContain('"key":"note","type":"text_input","value":"current user text"');
-    expect(text).not.toContain("opaque");
+    expect(text).toBe("Compare the selected choices");
   });
 
   it("keeps Discord preview metadata out of the authoritative request text", () => {

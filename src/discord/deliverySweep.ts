@@ -14,7 +14,7 @@ import {
 } from "./deliveryIntent.js";
 import { discordEdit, discordReply } from "./api.js";
 import { DiscordResponseSink } from "./responseSink.js";
-import { deliverDiscordPresentation } from "./presentationDelivery.js";
+import { deliverDiscordReply } from "./replyDelivery.js";
 
 const RESTART_NOTICE = "I was restarted before finishing this reply — please re-ask.";
 
@@ -56,7 +56,6 @@ export async function sweepDiscordDeliveryObligations(input: {
   repo: DiscordAiAgentRepository;
   logger: Logger;
   maxReplyChars: number;
-  premiumSkuIds?: string[];
   olderThanMs?: number;
   limit?: number;
   /** Restrict to one producer's obligations, e.g. task results that are safe to deliver immediately. */
@@ -80,7 +79,6 @@ type SweepInput = {
   repo: DiscordAiAgentRepository;
   logger: Logger;
   maxReplyChars: number;
-  premiumSkuIds?: string[];
 };
 
 async function sweepOne(input: SweepInput, obligation: DiscordDeliveryObligationRecord) {
@@ -139,33 +137,19 @@ async function deliverIntent(
     const artifact = await input.agentRuntime.getBinaryArtifact({ artifactId });
     return artifact?.data;
   });
-  const delivery = await deliverDiscordPresentation({
+  const { reply } = await deliverDiscordReply({
     responseSink: sink,
-    repo: input.repo,
-    logger: input.logger,
-    executionId: execution.executionId,
-    guildId: obligation.guildId,
-    channelId: obligation.channelId,
-    sourceMessageId: obligation.sourceMessageId,
-    requesterUserId: intent.requesterUserId,
     content: intent.content,
     files,
     footer: intent.footer,
-    presentation: intent.presentation,
-    premiumSkuIds: input.premiumSkuIds,
   });
-  const { reply, richPresentationDelivered, actionGenerationId } = delivery;
   const reaction = intent.sourceMessageReaction ? await sink.addSourceMessageReactions([intent.sourceMessageReaction]) : null;
   await input.obligations.markDelivered({
     executionId: execution.executionId,
     statusChannelId: reply.channelId,
     statusMessageId: reply.id,
-    metadata: { swept: true, recoveredFromIntent: true, richPresentationDelivered, actionGenerationId },
+    metadata: { swept: true, recoveredFromIntent: true },
   });
-  if (obligation.metadata.kind === "agent_task_result") {
-    await finishAgentTaskResultDelivery(input, obligation, execution, reply, intent, files);
-    return;
-  }
   const session = await input.agentRuntime.getSession({ sessionId: execution.sessionId });
   await finishAgentRuntimePromptExecution({
     agentRuntime: input.agentRuntime,
@@ -206,49 +190,8 @@ async function deliverIntent(
       },
     }).catch((error) => input.logger.warn({ err: error, executionId: execution.executionId, replyMessageId: reply.id }, "Failed to reconcile recovered conversation memory"));
   }
-  await recordDeliveryRecovery(input, execution, reply.id, "durable_intent", { richPresentationDelivered });
-  input.logger.info({ executionId: execution.executionId, replyMessageId: reply.id, richPresentationDelivered }, "Recovered durable Discord delivery intent");
-}
-
-/**
- * Task results are the task's own terminal message, not a recovered chat turn:
- * the task execution keeps its terminal status, and the result joins the
- * requester's conversation so follow-ups can refer to it.
- */
-async function finishAgentTaskResultDelivery(
-  input: SweepInput,
-  obligation: DiscordDeliveryObligationRecord,
-  execution: AgentRuntimeExecutionRecord,
-  reply: Message,
-  intent: DiscordDeliveryIntent,
-  files: Array<{ name: string; contentType?: string; data: Buffer }>,
-) {
-  await input.agentRuntime.recordEvent({
-    sessionId: execution.sessionId,
-    executionId: execution.executionId,
-    traceId: execution.traceId,
-    kind: "status",
-    eventName: "discord.delivery.task_result_delivered",
-    summary: "Delivered the agent task result to Discord.",
-    metadata: { replyMessageId: reply.id, replyUrl: reply.url, fileCount: files.length, taskId: obligation.metadata.taskId ?? null },
-  }).catch((error) => input.logger.warn({ err: error, executionId: execution.executionId }, "Failed to record task result delivery"));
-  if (obligation.threadKey) {
-    await input.repo.appendConversationMessage({
-      threadKey: obligation.threadKey,
-      role: "assistant",
-      discordMessageId: reply.id,
-      authorId: input.client.user?.id ?? null,
-      authorDisplayName: input.client.user?.username ?? null,
-      content: intent.storedContent,
-      metadata: {
-        discordUrl: reply.url,
-        agentTask: true,
-        taskId: obligation.metadata.taskId ?? null,
-        files: files.map((file) => ({ name: file.name, contentType: file.contentType, bytes: file.data.length })),
-      },
-    }).catch((error) => input.logger.warn({ err: error, executionId: execution.executionId }, "Failed to append task result to conversation memory"));
-  }
-  input.logger.info({ executionId: execution.executionId, replyMessageId: reply.id, fileCount: files.length }, "Delivered agent task result");
+  await recordDeliveryRecovery(input, execution, reply.id, "durable_intent", {});
+  input.logger.info({ executionId: execution.executionId, replyMessageId: reply.id }, "Recovered durable Discord delivery intent");
 }
 
 async function recordDeliveryRecovery(

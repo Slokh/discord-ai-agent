@@ -34,7 +34,6 @@ describe("decideDiscordDeliverySweep", () => {
       deliveryKey: "request-1",
       requesterUserId: "user-1",
       content: "done",
-      presentation: { version: 1, audience: "requester", components: [{ type: "text", content: "Rich" }] },
       files: [{ artifactId: "artifact-1", name: "result.txt", sizeBytes: file.length, sha256: "f6a214f7a5fcda0c2cee9660b7fc29f5649e3c68aad48e20e950137c98913a68", contentType: "text/plain" }],
     });
     expect(decideDiscordDeliverySweep({ execution: { status: "running", error: null, metadata: {} }, deliveryIntent: intent })).toEqual({
@@ -43,6 +42,15 @@ describe("decideDiscordDeliverySweep", () => {
     });
     const decoded = parseDiscordDeliveryIntent(serializeDiscordDeliveryIntent(intent));
     await expect(discordDeliveryIntentFiles(decoded, async () => file)).resolves.toEqual([{ name: "result.txt", data: file, contentType: "text/plain" }]);
+  });
+
+  it("still recovers legacy intents that carry a retired rich presentation", () => {
+    const intent = createDiscordDeliveryIntent({ deliveryKey: "request-1", requesterUserId: "user-1", content: "done" });
+    const legacy = {
+      ...JSON.parse(serializeDiscordDeliveryIntent(intent)),
+      presentation: { version: 1, audience: "requester", components: [{ type: "text", content: "Rich" }] },
+    };
+    expect(parseDiscordDeliveryIntent(JSON.stringify(legacy))).toEqual(expect.objectContaining({ content: "done", files: [] }));
   });
 
   it("stores only explicitly redacted response text in a durable intent", () => {

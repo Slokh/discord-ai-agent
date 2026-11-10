@@ -33,7 +33,7 @@ export type ProductionDatabaseTunnel = {
 
 export async function startProductionDatabaseTunnel(input: {
   credentialVariable: "DATABASE_URL" | "CONSOLE_DATABASE_URL";
-  component: "api" | "console";
+  component: "worker" | "console";
   mode?: "read_only" | "administrative";
 }): Promise<ProductionDatabaseTunnel> {
   const pod = productionPod(input.component);
@@ -114,7 +114,7 @@ function localDatabaseUrl(source: string, localPort: number) {
   return url.toString();
 }
 
-function productionPod(component: "api" | "console") {
+function productionPod(component: "worker" | "console") {
   const selector = `${APP_LABEL},app.kubernetes.io/component=${component}`;
   const pod = commandText("kubectl", [
     "--namespace", NAMESPACE, "get", "pods", "--selector", selector,

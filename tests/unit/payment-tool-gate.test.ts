@@ -3,63 +3,29 @@ import { restrictedToolGate } from "../../src/agent/toolGate.js";
 import type { ToolContext } from "../../src/tools/types.js";
 
 describe("payment tool permissions", () => {
-  it.each(["adminTransferWalletFunds", "reconcileWalletTransfers"] as const)(
-    "strictly restricts %s to configured payment admins",
-    async (toolName) => {
-      await expect(restrictedToolGate(context("friend"), toolName)).resolves.toEqual(expect.objectContaining({ allowed: false }));
-      await expect(restrictedToolGate(context("owner"), toolName)).resolves.toEqual({ allowed: true });
-      await expect(restrictedToolGate(context("operator"), toolName)).resolves.toEqual({ allowed: true });
-    }
-  );
-
-  it.each(["updateBotAvatar", "createDiscordEmoji"] as const)(
-    "restricts %s to the owner or ops allowlist",
-    async (toolName) => {
-      await expect(restrictedToolGate(context("friend"), toolName)).resolves.toEqual(expect.objectContaining({ allowed: false }));
-      await expect(restrictedToolGate(context("owner"), toolName)).resolves.toEqual({ allowed: true });
-      await expect(restrictedToolGate(context("operator"), toolName)).resolves.toEqual({ allowed: true });
-    },
-  );
-
-  it.each(["updateBotAvatar", "createDiscordEmoji"] as const)(
-    "fails closed for %s when no operator is configured",
-    async (toolName) => {
-      await expect(restrictedToolGate({
-        userId: "friend",
-        mutationAuthorizedByCurrentInput: true,
-        config: { allowlists: { ownerUserId: null, opsUserIds: [] } },
-      } as unknown as ToolContext, toolName)).resolves.toEqual(expect.objectContaining({ allowed: false }));
-    },
-  );
-
-  it("fails closed for model changes unless an owner or op is configured", async () => {
-    await expect(restrictedToolGate(context("friend"), "setAgentModel"))
-      .resolves.toEqual(expect.objectContaining({ allowed: false }));
-    await expect(restrictedToolGate(context("owner"), "setAgentModel"))
-      .resolves.toEqual({ allowed: true });
-    await expect(restrictedToolGate(context("operator"), "setAgentModel"))
-      .resolves.toEqual({ allowed: true });
-    await expect(restrictedToolGate({
-      userId: "friend",
-      config: { allowlists: { opsUserIds: [] } },
-      requestText: "switch model to moonshotai/kimi-k3",
-    } as unknown as ToolContext, "setAgentModel"))
-      .resolves.toEqual(expect.objectContaining({ allowed: false }));
+  it("strictly restricts getWalletFeeSummary to configured payment admins", async () => {
+    await expect(restrictedToolGate(context("friend"), "getWalletFeeSummary")).resolves.toEqual(expect.objectContaining({ allowed: false }));
+    await expect(restrictedToolGate(context("owner"), "getWalletFeeSummary")).resolves.toEqual({ allowed: true });
+    await expect(restrictedToolGate(context("operator"), "getWalletFeeSummary")).resolves.toEqual({ allowed: true });
   });
 
-  it("lets an authorized owner use the typed model-setting tool without grammar parsing", async () => {
-    const ctx = context("owner");
-    ctx.requestText = "I added a tool for changing models";
+  it("fails closed for strict ops tools when no operator is configured", async () => {
+    await expect(restrictedToolGate({
+      userId: "friend",
+      mutationAuthorizedByCurrentInput: true,
+      config: { allowlists: { ownerUserId: null, opsUserIds: [] } },
+    } as unknown as ToolContext, "getWalletFeeSummary")).resolves.toEqual(expect.objectContaining({ allowed: false }));
+  });
 
-    await expect(restrictedToolGate(ctx, "setAgentModel"))
-      .resolves.toEqual({ allowed: true });
+  it("lets any authorized member use default-policy mutating wallet tools", async () => {
+    await expect(restrictedToolGate(context("friend"), "transferWalletFunds")).resolves.toEqual({ allowed: true });
   });
 
   it("fails closed when an ingress omits mutation authority", async () => {
     const ctx = context("owner");
     delete (ctx as Partial<ToolContext>).mutationAuthorizedByCurrentInput;
 
-    await expect(restrictedToolGate(ctx, "setAgentModel"))
+    await expect(restrictedToolGate(ctx, "transferWalletFunds"))
       .resolves.toEqual(expect.objectContaining({ allowed: false }));
   });
 });
@@ -68,7 +34,7 @@ function context(userId: string): ToolContext {
   return {
     userId,
     mutationAuthorizedByCurrentInput: true,
-    requestText: "switch model to moonshotai/kimi-k3",
+    requestText: "send 1 dollar to my friend",
     config: {
       allowlists: {
         ownerUserId: "owner",

@@ -125,7 +125,7 @@ describe("production operator console access", () => {
 
   it("uses labelled Kubernetes readiness while the deployed heartbeat schema is unavailable", async () => {
     const kubernetes = {
-      items: ["api", "bot", "worker"].map((component) => ({
+      items: ["console", "bot", "worker"].map((component) => ({
         kind: "Deployment",
         metadata: { labels: { "app.kubernetes.io/component": component } },
         spec: {
@@ -141,7 +141,7 @@ describe("production operator console access", () => {
         overview: async () => ({
           environment: "production",
           services: [],
-          summary: { serviceTelemetryAvailable: false, healthyServices: 0, serviceCount: 4 },
+          summary: { serviceTelemetryAvailable: false, healthyServices: 0, serviceCount: 3 },
         }),
       },
       readKubernetes: async () => kubernetes,
@@ -158,7 +158,7 @@ describe("production operator console access", () => {
     expect(snapshot.services).toEqual([
       expect.objectContaining({ component: "bot", status: "healthy", instances: 1, desiredInstances: 1 }),
       expect.objectContaining({ component: "worker", status: "healthy", instances: 1, desiredInstances: 1 }),
-      expect.objectContaining({ component: "api", status: "healthy", instances: 1, desiredInstances: 1 }),
+      expect.objectContaining({ component: "console", status: "healthy", instances: 1, desiredInstances: 1 }),
     ]);
   });
 
@@ -190,13 +190,13 @@ describe("production operator console access", () => {
         status: { readyReplicas: 1, updatedReplicas: 1, availableReplicas: 1 },
       }, {
         kind: "Deployment",
-        metadata: { labels: { "app.kubernetes.io/component": "api" } },
+        metadata: { labels: { "app.kubernetes.io/component": "console" } },
         spec: { replicas: 1, template: { spec: { containers: [{ image: "registry/app:revision-b" }] } } },
         status: {},
       }],
     })).toEqual([
       expect.objectContaining({ component: "worker", status: "degraded", instances: 1, desiredInstances: 2 }),
-      expect.objectContaining({ component: "api", status: "offline", instances: 0, desiredInstances: 1 }),
+      expect.objectContaining({ component: "console", status: "offline", instances: 0, desiredInstances: 1 }),
     ]);
   });
 });

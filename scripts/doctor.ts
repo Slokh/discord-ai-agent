@@ -1,6 +1,5 @@
 import { loadConfig } from "../src/config/env.js";
 import { createPool } from "../src/db/pool.js";
-import { parseGitHubRepository } from "../src/github/repository.js";
 
 async function main() {
   const config = loadConfig();
@@ -10,18 +9,10 @@ async function main() {
   checks.push(["Discord client ID", Boolean(config.discord.clientId), "configured for the Discord bot application"]);
   checks.push(["Discord guild ID", Boolean(config.discord.guildId), "configured for the target Discord server"]);
   checks.push(["OpenRouter API key", Boolean(config.openRouter.apiKey), "required for chat, embeddings, and images"]);
-  checks.push([
-    "GitHub task credential",
-    Boolean(config.github.token || (config.github.appId && config.github.appPrivateKey && config.github.appInstallationId)),
-    "required for sandbox code-update PRs"
-  ]);
-  checks.push(["Task signing secret", Boolean(config.execution.taskSigningSecret), "required for Kubernetes sandbox callbacks"]);
   if (config.payments.walletEnabled) {
     checks.push(["Privy app ID", Boolean(config.payments.privyAppId), "required when wallets are enabled"]);
     checks.push(["Privy app secret", Boolean(config.payments.privyAppSecret), "required when wallets are enabled"]);
   }
-  const githubRepository = checkGitHubRepository(config.github.repository);
-  checks.push(["GitHub repository", githubRepository.ok, githubRepository.detail]);
 
   const pool = createPool(config);
   try {
@@ -97,15 +88,6 @@ async function main() {
 
   const failed = checks.some(([, ok]) => !ok);
   if (failed) process.exitCode = 1;
-}
-
-function checkGitHubRepository(repository: string | undefined) {
-  try {
-    parseGitHubRepository(repository);
-    return { ok: true, detail: "real owner/repo configured" };
-  } catch (error) {
-    return { ok: false, detail: error instanceof Error ? error.message : String(error) };
-  }
 }
 
 main().catch((error) => {

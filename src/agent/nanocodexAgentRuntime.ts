@@ -78,7 +78,6 @@ export async function executeNanoCodexAgentRuntime(input: {
         files: output?.files.length ? [...output.files] : recoveredMutation.files,
         tables: output?.tables.length ? [...output.tables] : recoveredMutation.tables,
         footerLines: output?.footerLines.length ? [...output.footerLines] : recoveredMutation.footerLines,
-        discordPresentation: output?.presentation ?? recoveredMutation.discordPresentation,
       };
     }
     if (!output?.files.length) throw error;
@@ -94,7 +93,6 @@ export async function executeNanoCodexAgentRuntime(input: {
       files: output.files,
       tables: output.tables.length > 0 ? output.tables : undefined,
       footerLines: output.footerLines.length > 0 ? output.footerLines : undefined,
-      discordPresentation: output.presentation,
     };
   }
 }
@@ -370,7 +368,6 @@ async function runRetainedNanoCodexTurn(input: {
       files: output.files.length > 0 ? [...output.files] : recoverableToolResult.files,
       tables: output.tables.length > 0 ? [...output.tables] : recoverableToolResult.tables,
       footerLines: output.footerLines.length > 0 ? [...output.footerLines] : recoverableToolResult.footerLines,
-      discordPresentation: output.presentation ?? recoverableToolResult.discordPresentation,
       memoryEvents: memoryEvents.length > 0 ? memoryEvents : undefined,
     };
   }
@@ -391,7 +388,6 @@ async function runRetainedNanoCodexTurn(input: {
     files: output.files.length > 0 ? [...output.files] : undefined,
     tables: output.tables.length > 0 ? [...output.tables] : undefined,
     footerLines: output.footerLines.length > 0 ? [...output.footerLines] : undefined,
-    discordPresentation: output.presentation,
     memoryEvents: memoryEvents.length > 0 ? memoryEvents : undefined,
   };
   await recordAgentEvent(ctx, {

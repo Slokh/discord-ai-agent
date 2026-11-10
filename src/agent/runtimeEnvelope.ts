@@ -1,7 +1,6 @@
 import type { AgentRuntimeRepository, AgentRuntimeSessionRecord } from "../db/agentRuntimeRepository.js";
 import type { ConversationMessage } from "../db/repositories.js";
 import type { DiscordAttachmentContext, DiscordEmbedContext, DiscordMentionedUserIdentity, DiscordReplyContext } from "../tools/types.js";
-import type { DiscordInteractionSubmission } from "../discord/components/interactionNormalization.js";
 
 export type AgentRuntimeConversationMessageSnapshot = {
   id: number;
@@ -45,7 +44,8 @@ export type AgentRuntimeTurnEnvelope = {
     statusChannelId: string | null;
     statusMessageId: string | null;
   };
-  interaction?: DiscordInteractionSubmission | null;
+  /** Component submissions were removed; older stored envelopes may still carry one. */
+  interaction?: unknown;
   createdAt: string;
 };
 
@@ -75,7 +75,6 @@ export function buildAgentRuntimeTurnEnvelope(input: {
   statusChannelId?: string | null;
   statusMessageId?: string | null;
   createdAt?: Date;
-  interaction?: AgentRuntimeTurnEnvelope["interaction"];
 }): AgentRuntimeTurnEnvelope {
   return {
     schemaVersion: 2,
@@ -111,7 +110,6 @@ export function buildAgentRuntimeTurnEnvelope(input: {
       statusChannelId: input.statusChannelId ?? null,
       statusMessageId: input.statusMessageId ?? null
     },
-    interaction: input.interaction ?? null,
     createdAt: (input.createdAt ?? new Date()).toISOString()
   };
 }
@@ -272,19 +270,8 @@ export function agentRuntimeInputLinesFromEnvelope(envelope: AgentRuntimeTurnEnv
   return [JSON.stringify(line)];
 }
 
-export function agentRuntimeTurnInputText(input: Pick<AgentRuntimeTurnEnvelope, "text" | "interaction">): string {
-  if (!input.interaction) return input.text;
-  const submitted = {
-    schemaVersion: input.interaction.schemaVersion,
-    component: input.interaction.component,
-    ...(input.interaction.fields?.length ? { fields: input.interaction.fields } : {}),
-  };
-  return [
-    "[Model-authored Discord component action]",
-    input.text,
-    "[Current user-submitted Discord interaction data]",
-    JSON.stringify(submitted),
-  ].join("\n");
+export function agentRuntimeTurnInputText(input: Pick<AgentRuntimeTurnEnvelope, "text">): string {
+  return input.text;
 }
 
 export function promptTextFromAgentRuntimeInputLines(inputLines: string[] | undefined): string | null {

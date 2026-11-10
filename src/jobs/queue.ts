@@ -4,8 +4,6 @@ import { startAgentRuntimeReconciler } from "../agent/runtimeReconciler.js";
 import type { AppConfig } from "../config/env.js";
 import type { AgentRuntimeRepository } from "../db/agentRuntimeRepository.js";
 import type { DeliveryObligationsRepository } from "../db/deliveryObligationsRepository.js";
-import type { AgentTaskJob, AgentTaskStartResult } from "../execution/types.js";
-import type { ExecutionBackend, ExecutionContext } from "../execution/backend.js";
 import type { DiscordAiAgentRepository } from "../db/repositories.js";
 import type { DbPool } from "../db/pool.js";
 import { startConversationCompactionMaintenance } from "../db/conversationCompaction.js";
@@ -19,22 +17,14 @@ import {
 } from "../observability/backgroundJobRuntime.js";
 import { startDataRetentionMaintenance } from "../observability/dataRetention.js";
 import type { OpenRouterClient } from "../models/openrouter.js";
-import { runImprovementReconciliationOnce, type ImprovementReconciliationResult } from "../improvements/reconciler.js";
 import { durationMs, logger } from "../util/logger.js";
 import { currentTraceContext, runWithTrace } from "../util/trace.js";
-import { enqueueAgentTaskJob, type AgentTaskEnqueueInput, type AgentTaskEnqueueResult } from "./agentTaskEnqueue.js";
-import { waitForAgentTaskCapacity, waitForAgentTaskTerminal } from "./agentTaskCapacity.js";
-import { agentTaskRuntimeParentMetadata } from "./agentTaskRuntimeParent.js";
 import { normalizeEmbeddingPriority } from "./embeddingPriority.js";
 import { KeyedSerialQueue } from "./keyedSerialQueue.js";
-import { configureReminderQueues, enqueueReminderDelivery, registerReminderWorkers, REMINDER_DELIVERY_JOB, REMINDER_RECONCILIATION_JOB, type ReminderJobRunner } from "./reminderJobs.js";
 
 export const CRAWL_GUILD_JOB = "crawl.guild";
 export const EMBED_MESSAGE_JOB = "embedding.message";
-export const AGENT_TASK_JOB = "agent.task";
-const AGENT_TASK_JOB_EXPIRE_SECONDS = 2 * 60 * 60;
 export const AGENT_RUNTIME_EXECUTION_JOB = "agent.runtime.execution";
-export const IMPROVEMENT_RECONCILIATION_JOB = "improvement.reconcile";
 const EMBEDDING_JOB_BATCH_SIZE = 400;
 const AGENT_RUNTIME_JOB_EXPIRE_SECONDS = 10 * 60;
 
@@ -54,11 +44,6 @@ export type CrawlJobRunner = {
 export type EmbeddingJobRunner = {
   embedMessage?: (messageId: string) => Promise<void>;
   embedMessages?: (messageIds: string[], context?: { runtime?: BackgroundJobRuntime | null }) => Promise<unknown>;
-};
-
-export type AgentTaskRunner = {
-  name?: string;
-  start: (job: AgentTaskJob, context?: ExecutionContext) => Promise<AgentTaskStartResult>;
 };
 
 export type AgentRuntimeExecutionJob = {
@@ -85,6 +70,8 @@ export type AgentRuntimeExecutionJob = {
 
 export type AgentRuntimeExecutionRunner = {
   run: (job: AgentRuntimeExecutionJob, context: { jobs: JobRuntime }) => Promise<void>;
+  /** Folds the job into the requester's running turn; true when it was handled that way. */
+  steer?: (job: AgentRuntimeExecutionJob) => Promise<boolean>;
 };
 
 export type JobRuntime = {
@@ -92,9 +79,6 @@ export type JobRuntime = {
   enqueueGuildCrawl: () => Promise<string | null>;
   enqueueMessageEmbedding: (messageId: string, options?: MessageEmbeddingEnqueueOptions) => Promise<string | null>;
   enqueueAgentRuntimeExecution: (job: AgentRuntimeExecutionJob) => Promise<string | null>;
-  enqueueAgentTask: (job: AgentTaskEnqueueInput) => Promise<AgentTaskEnqueueResult>;
-  enqueueImprovementReconciliation: () => Promise<string | null>;
-  enqueueReminderDelivery: (reminderId: string, scheduledFor: Date) => Promise<string | null>;
   stop: () => Promise<void>;
 };
 
@@ -102,16 +86,11 @@ export async function startJobs(input: {
   config: AppConfig;
   crawler: CrawlJobRunner;
   embedding?: EmbeddingJobRunner;
-  agentTask?: AgentTaskRunner | ExecutionBackend;
   agentRuntime?: AgentRuntimeExecutionRunner;
   worker?: boolean;
   crawlWorker?: boolean;
   embeddingWorker?: boolean;
-  taskWorker?: boolean;
   agentRuntimeWorker?: boolean;
-  improvementWorker?: boolean;
-  reminderWorker?: boolean;
-  reminders?: ReminderJobRunner;
   pgBossSchema?: string;
   repo?: DiscordAiAgentRepository;
   agentRuntimeRepo?: AgentRuntimeRepository;
@@ -121,23 +100,18 @@ export async function startJobs(input: {
 }): Promise<JobRuntime> {
   const crawlWorkerEnabled = input.crawlWorker ?? input.worker !== false;
   const embeddingWorkerEnabled = input.embeddingWorker ?? input.worker !== false;
-  const taskWorkerEnabled = input.taskWorker ?? false;
   const agentRuntimeWorkerEnabled = input.agentRuntimeWorker ?? false;
-  const improvementWorkerEnabled = input.improvementWorker ?? false;
-  const reminderWorkerEnabled = input.reminderWorker ?? false;
   const boss = input.pgBossSchema
     ? new PgBoss({ connectionString: input.config.databaseUrl, schema: input.pgBossSchema })
     : new PgBoss(input.config.databaseUrl);
   logger.info(
-    { crawlWorkerEnabled, embeddingWorkerEnabled, taskWorkerEnabled, agentRuntimeWorkerEnabled, improvementWorkerEnabled, reminderWorkerEnabled, schema: input.pgBossSchema ?? "pgboss" },
+    { crawlWorkerEnabled, embeddingWorkerEnabled, agentRuntimeWorkerEnabled, schema: input.pgBossSchema ?? "pgboss" },
     "Starting pg-boss"
   );
   await boss.start();
   await boss.createQueue(CRAWL_GUILD_JOB, { policy: "short" });
   await boss.createQueue(EMBED_MESSAGE_JOB, { policy: "short", retryLimit: 3, retryDelay: 10, retryBackoff: true });
   await boss.updateQueue(EMBED_MESSAGE_JOB, { retryLimit: 3, retryDelay: 10, retryBackoff: true });
-  await boss.createQueue(AGENT_TASK_JOB, { policy: "short", retryLimit: 0, expireInSeconds: AGENT_TASK_JOB_EXPIRE_SECONDS });
-  await boss.updateQueue(AGENT_TASK_JOB, { retryLimit: 0, expireInSeconds: AGENT_TASK_JOB_EXPIRE_SECONDS });
   await boss.createQueue(AGENT_RUNTIME_EXECUTION_JOB, {
     policy: "short",
     retryLimit: 2,
@@ -151,23 +125,16 @@ export async function startJobs(input: {
     retryBackoff: true,
     expireInSeconds: AGENT_RUNTIME_JOB_EXPIRE_SECONDS
   });
-  await boss.createQueue(IMPROVEMENT_RECONCILIATION_JOB, { policy: "short", retryLimit: 2, retryDelay: 30, retryBackoff: true });
-  await boss.updateQueue(IMPROVEMENT_RECONCILIATION_JOB, { retryLimit: 2, retryDelay: 30, retryBackoff: true });
-  await configureReminderQueues(boss);
   logger.info(
     {
-      queues: [CRAWL_GUILD_JOB, EMBED_MESSAGE_JOB, AGENT_TASK_JOB, AGENT_RUNTIME_EXECUTION_JOB, IMPROVEMENT_RECONCILIATION_JOB, REMINDER_DELIVERY_JOB, REMINDER_RECONCILIATION_JOB],
+      queues: [CRAWL_GUILD_JOB, EMBED_MESSAGE_JOB, AGENT_RUNTIME_EXECUTION_JOB],
       crawlWorkerEnabled,
       embeddingWorkerEnabled,
-      taskWorkerEnabled,
-      agentRuntimeWorkerEnabled,
-      improvementWorkerEnabled,
-      reminderWorkerEnabled
+      agentRuntimeWorkerEnabled
     },
     "pg-boss ready"
   );
-  const agentTaskBackendName = input.agentTask?.name ?? defaultAgentTaskBackendName(input.config);
-  const runsAnyWorker = crawlWorkerEnabled || embeddingWorkerEnabled || taskWorkerEnabled || agentRuntimeWorkerEnabled || improvementWorkerEnabled || reminderWorkerEnabled;
+  const runsAnyWorker = crawlWorkerEnabled || embeddingWorkerEnabled || agentRuntimeWorkerEnabled;
   const artifactRetentionMaintenance = runsAnyWorker
     ? startArtifactRetentionMaintenance({ agentRuntimeRepo: input.agentRuntimeRepo })
     : null;
@@ -237,19 +204,6 @@ export async function startJobs(input: {
       logger.info({ queue: AGENT_RUNTIME_EXECUTION_JOB, runId: job.runId, jobId: id ?? null }, "Agent runtime execution enqueue complete");
       return id ?? null;
     },
-    enqueueAgentTask: async (job) =>
-      enqueueAgentTaskJob({
-        boss,
-        queueName: AGENT_TASK_JOB,
-        config: input.config,
-        repo: input.repo,
-        agentRuntimeRepo,
-        backendName: agentTaskBackendName,
-        job
-      }),
-    enqueueImprovementReconciliation: async () =>
-      (await boss.send(IMPROVEMENT_RECONCILIATION_JOB, {})) ?? null,
-    enqueueReminderDelivery: (reminderId, scheduledFor) => enqueueReminderDelivery(boss, reminderId, scheduledFor),
     stop: async () => {
       artifactRetentionMaintenance?.stop();
       dataRetentionMaintenance?.stop();
@@ -276,77 +230,6 @@ export async function startJobs(input: {
       await boss.unschedule(CRAWL_GUILD_JOB);
       logger.info({ queue: CRAWL_GUILD_JOB }, "Reconciliation crawl schedule disabled");
     }
-  }
-
-  if (improvementWorkerEnabled && input.repo && input.agentRuntimeRepo && input.deliveryObligations) {
-    await boss.work(
-      IMPROVEMENT_RECONCILIATION_JOB,
-      { batchSize: 1, pollingIntervalSeconds: 2, includeMetadata: true },
-      async (jobs) => {
-        const job = jobs[0];
-        if (!job) return;
-        const runKey = `pgboss-${job.id}-attempt-${job.retryCount + 1}`;
-        await input.repo!.recordImprovementProofProducerRun({
-          trigger: "improvement_reconciliation",
-          runKey,
-          status: "started",
-          revision: input.config.appRevision,
-        });
-        try {
-          const result = await runImprovementReconciliationOnce({
-            repo: input.repo!,
-            config: input.config,
-            runtime: input.agentRuntimeRepo!,
-            deliveries: input.deliveryObligations!,
-            enqueueImprovementTask: (task) => enqueueAgentTaskJob({
-              boss,
-              queueName: AGENT_TASK_JOB,
-              config: input.config,
-              repo: input.repo,
-              agentRuntimeRepo: input.agentRuntimeRepo,
-              backendName: agentTaskBackendName,
-              job: task,
-            }),
-          });
-          const deployment = await input.repo!.latestDeploymentVerification();
-          await input.repo!.recordImprovementProofProducerRun({
-            trigger: "improvement_reconciliation",
-            runKey,
-            status: "succeeded",
-            revision: input.config.appRevision,
-            deploymentId: deployment?.revision === input.config.appRevision ? deployment.deploymentId : null,
-          });
-          logger.info(improvementReconciliationLog(result), "Improvement reconciliation complete");
-        } catch (error) {
-          await input.repo!.recordImprovementProofProducerRun({
-            trigger: "improvement_reconciliation",
-            runKey,
-            status: "failed",
-            revision: input.config.appRevision,
-            outcomeCode: "reconciliation_failed",
-          }).catch(() => undefined);
-          throw error;
-        }
-      },
-    );
-    await boss.schedule(IMPROVEMENT_RECONCILIATION_JOB, input.config.improvementReconcileScheduleCron);
-    await boss.send(IMPROVEMENT_RECONCILIATION_JOB, {});
-    logger.info(
-      { queue: IMPROVEMENT_RECONCILIATION_JOB, cron: input.config.improvementReconcileScheduleCron },
-      "Registered improvement reconciliation schedule",
-    );
-  } else if (improvementWorkerEnabled) {
-    logger.warn(
-      { queue: IMPROVEMENT_RECONCILIATION_JOB },
-      "Improvement worker requested without repository, runtime, or delivery readers",
-    );
-  }
-
-  if (reminderWorkerEnabled && input.reminders) {
-    await registerReminderWorkers(boss, input.reminders);
-    logger.info({ queue: REMINDER_DELIVERY_JOB }, "Registered reminder delivery workers");
-  } else if (reminderWorkerEnabled) {
-    logger.warn({ queue: REMINDER_DELIVERY_JOB }, "Reminder worker requested without a delivery runner");
   }
 
   if (embeddingWorkerEnabled && input.embedding) {
@@ -450,140 +333,22 @@ export async function startJobs(input: {
     logger.warn({ queue: EMBED_MESSAGE_JOB }, "Embedding worker requested without an embedding runner");
   }
 
-  if (taskWorkerEnabled && input.agentTask) {
-    await boss.work<AgentTaskJob>(AGENT_TASK_JOB, { batchSize: 1, pollingIntervalSeconds: 2 }, async (jobs) => {
-      for (const job of jobs) {
-        const startedAt = Date.now();
-        await runWithTrace(
-          {
-            traceId: job.data.traceId ?? job.data.taskId,
-            requestId: job.data.taskId,
-            guildId: job.data.guildId,
-            channelId: job.data.channelId,
-            userId: job.data.userId
-          },
-          async () => {
-            logger.info(
-              { queue: AGENT_TASK_JOB, jobId: job.id, taskId: job.data.taskId, title: job.data.title },
-              "Starting agent.task sandbox"
-            );
-            const backendName = input.agentTask?.name ?? defaultAgentTaskBackendName(input.config);
-            await waitForAgentTaskCapacity({
-              repo: input.repo,
-              backend: backendName,
-              maxConcurrent: input.config.execution.sandbox.maxConcurrentTasks,
-              onWait: (activeCount) => {
-                logger.info(
-                  { queue: AGENT_TASK_JOB, jobId: job.id, taskId: job.data.taskId, activeCount },
-                  "Agent task is queued behind active sandbox capacity",
-                );
-              },
-            });
-            const runtimeParentMetadata = agentTaskRuntimeParentMetadata(job.data);
-            await input.repo?.markAgentTaskRunning({
-              taskId: job.data.taskId,
-              backend: backendName,
-              step: "sandbox_start",
-              statusMessage: startingAgentTaskStatusMessage(backendName),
-              pgBossJobId: job.id,
-              workerStartedAt: new Date(startedAt),
-              metadata: runtimeParentMetadata
-            });
-            const existingRuns = (await input.repo?.getSandboxRunsForTask(job.data.taskId)) ?? [];
-            const activeRun = existingRuns.find((run) => !isTerminalStatus(run.status));
-            if (activeRun) {
-              logger.warn(
-                { queue: AGENT_TASK_JOB, jobId: job.id, taskId: job.data.taskId, sandboxRunId: activeRun.sandboxRunId, backend: activeRun.backend },
-                "Skipping duplicate agent.task launch because an active sandbox run already exists"
-              );
-              return;
-            }
-            try {
-              let sandboxRunRecorded = false;
-              const recordSandboxRunOnce = async (result: { sandboxRunId: string; backendJobName: string; namespace?: string | null; image?: string | null }) => {
-                sandboxRunRecorded = true;
-                await input.repo?.recordSandboxRun({
-                  taskId: job.data.taskId,
-                  sandboxRunId: result.sandboxRunId,
-                  backend: backendName,
-                  backendJobName: result.backendJobName,
-                  namespace: result.namespace ?? input.config.execution.kubernetes.namespace,
-                  image: result.image ?? input.config.execution.kubernetes.sandboxImage
-                });
-              };
-              const result = await input.agentTask!.start(job.data, {
-                recordSandboxRun: recordSandboxRunOnce,
-                progress: async (event) => {
-                  await input.repo?.markAgentTaskProgress({
-                    taskId: job.data.taskId,
-                    backend: backendName,
-                    step: event.step,
-                    statusMessage: event.message,
-                    metadata: { backend: backendName, ...runtimeParentMetadata, ...event.metadata }
-                  });
-                }
-              });
-              if (!sandboxRunRecorded && result?.sandboxRunId) {
-                await recordSandboxRunOnce(result);
-              }
-              await input.repo?.markAgentTaskProgress({
-                taskId: job.data.taskId,
-                backend: backendName,
-                step: "sandbox_running",
-                statusMessage: runningAgentTaskStatusMessage(backendName),
-                metadata: { ...runtimeParentMetadata, ...result }
-              });
-              logger.info(
-                {
-                  queue: AGENT_TASK_JOB,
-                  jobId: job.id,
-                  taskId: job.data.taskId,
-                  sandboxRunId: result.sandboxRunId,
-                  backendJobName: result.backendJobName,
-                  durationMs: durationMs(startedAt)
-                },
-                "agent.task sandbox started"
-              );
-              // Keep this single pg-boss worker occupied until the durable task
-              // is terminal. Combined with the pre-launch capacity check, this
-              // serializes normal operation and also respects a sandbox left
-              // running across a worker restart.
-              if (backendName === "kubernetes-sandbox") {
-                await waitForAgentTaskTerminal({ repo: input.repo, taskId: job.data.taskId });
-              }
-            } catch (error) {
-              const message = error instanceof Error ? error.message : String(error);
-              await input.repo?.markAgentTaskFailed({
-                taskId: job.data.taskId,
-                status: "failed",
-                error: message,
-                metadata: { backend: backendName, failedStep: "sandbox_start", ...runtimeParentMetadata }
-              });
-              logger.error(
-                {
-                  err: error,
-                  queue: AGENT_TASK_JOB,
-                  jobId: job.id,
-                  taskId: job.data.taskId,
-                  durationMs: durationMs(startedAt)
-                },
-                "agent.task sandbox start failed"
-              );
-              throw error;
-            }
-          }
-        );
-      }
-    });
-  } else if (taskWorkerEnabled) {
-    logger.warn({ queue: AGENT_TASK_JOB }, "Agent task worker requested without a runner");
-  }
-
   const agentRuntimeRunner = input.agentRuntime;
   if (agentRuntimeWorkerEnabled && agentRuntimeRunner) {
     const threadExecutions = new KeyedSerialQueue();
     await boss.work<AgentRuntimeExecutionJob>(AGENT_RUNTIME_EXECUTION_JOB, { batchSize: input.config.agentPromptMaxConcurrency, pollingIntervalSeconds: 1 }, async (jobs) => {
-      await Promise.all(jobs.map((job) => threadExecutions.run(job.data.agentThreadKey ?? job.data.channelId, async () => {
+      await Promise.all(jobs.map(async (job) => {
+        // A follow-up from the requester whose turn is still running joins that
+        // turn instead of waiting behind it in the thread queue.
+        const steered = await agentRuntimeRunner.steer?.(job.data).catch((error) => {
+          logger.warn({ err: error, runId: job.data.runId }, "Failed to steer a follow-up into the running turn");
+          return false;
+        });
+        if (steered) {
+          logger.info({ queue: AGENT_RUNTIME_EXECUTION_JOB, jobId: job.id, runId: job.data.runId }, "Steered follow-up into the running turn");
+          return;
+        }
+        await threadExecutions.run(job.data.agentThreadKey ?? job.data.channelId, async () => {
         const startedAt = Date.now();
         await runWithTrace(
           {
@@ -679,7 +444,8 @@ export async function startJobs(input: {
             }
           }
         );
-      })));
+        });
+      }));
     });
   } else if (agentRuntimeWorkerEnabled) {
     logger.warn({ queue: AGENT_RUNTIME_EXECUTION_JOB }, "Agent runtime execution worker requested without a runner");
@@ -696,51 +462,12 @@ export async function startJobs(input: {
   return runtime;
 }
 
-function defaultAgentTaskBackendName(_config: AppConfig) {
-  return "kubernetes-sandbox";
-}
-
-function startingAgentTaskStatusMessage(backendName: string) {
-  if (backendName === "kubernetes-sandbox") return "Starting Kubernetes sandbox.";
-  return "Starting codegen sandbox.";
-}
-
-function runningAgentTaskStatusMessage(backendName: string) {
-  if (backendName === "kubernetes-sandbox") return "Kubernetes sandbox is running the task.";
-  return "Codegen sandbox is running the task.";
-}
-
-function isTerminalStatus(status: string) {
-  return status === "succeeded" || status === "failed" || status === "no_changes" || status === "cancelled";
-}
-
 function formatDurationSeconds(value: number) {
   return `${(value / 1000).toFixed(3)}s`;
 }
 
 function uniqueStrings(values: Array<string | undefined>): string[] {
   return [...new Set(values.filter((value): value is string => Boolean(value)))];
-}
-
-function improvementReconciliationLog(result: ImprovementReconciliationResult) {
-  return {
-    queue: IMPROVEMENT_RECONCILIATION_JOB,
-    proofProducers: countStatuses(result.proofProducers.map(({ state }) => ({ status: state }))),
-    proofProducerDetections: countStatuses(result.proofProducerDetections),
-    triage: countStatuses(result.triage),
-    pullRequests: countStatuses(result.pullRequests),
-    verification: countStatuses(result.verification.cases),
-    verificationRevision: result.verification.deployment?.revision ?? null,
-    health: countStatuses(result.health.map(({ state }) => ({ status: state }))),
-    stalled: result.stalled.length,
-  };
-}
-
-function countStatuses(rows: readonly { status: string }[]) {
-  return rows.reduce<Record<string, number>>((counts, row) => {
-    counts[row.status] = (counts[row.status] ?? 0) + 1;
-    return counts;
-  }, {});
 }
 
 function isTerminalAgentRuntimeStatus(status: string) {

@@ -44,39 +44,6 @@ COPY --chown=node:node skills ./skills
 USER node
 CMD ["node", "dist/src/index.js"]
 
-FROM runtime AS codegen
-USER root
-RUN --mount=type=cache,target=/root/.npm npm install --global npm@11.19.0 \
-  && npm cache clean --force
-RUN apt-get update \
-  && apt-get install -y --no-install-recommends ca-certificates curl git ripgrep \
-  && mkdir -p -m 755 /etc/apt/keyrings \
-  && curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg -o /etc/apt/keyrings/githubcli-archive-keyring.gpg \
-  && chmod go+r /etc/apt/keyrings/githubcli-archive-keyring.gpg \
-  && echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" > /etc/apt/sources.list.d/github-cli.list \
-  && apt-get update \
-  && apt-get install -y --no-install-recommends gh \
-  && rm -rf /var/lib/apt/lists/*
-# Desktop layer for the computer profile: a virtual display, input automation,
-# screenshots, a browser, and Wine for Windows programs. Untrusted programs run
-# only under gVisor on the tainted sandbox node pool.
-RUN apt-get update \
-  && apt-get install -y --no-install-recommends \
-    chromium \
-    fonts-dejavu-core \
-    fonts-liberation2 \
-    fonts-noto-color-emoji \
-    fonts-noto-core \
-    imagemagick \
-    wine \
-    wine64 \
-    xauth \
-    xdotool \
-    xvfb \
-  && rm -rf /var/lib/apt/lists/*
-RUN test -x /usr/local/bin/discord-agent-nanocodex-runtime
-USER node
-
 FROM runtime AS final
 USER root
 RUN rm -rf /usr/local/lib/node_modules/npm \

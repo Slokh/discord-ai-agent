@@ -3,15 +3,10 @@ import type { AgentPromptContribution, PreparedAgentCapability } from "../agent/
 import { installedToolContracts as availableToolContracts } from "./toolContracts.js";
 import { coreToolHandlers } from "../tools/handlers/core.js";
 import { userSettingsToolHandlers } from "../tools/handlers/user-settings.js";
-import { reminderToolHandlers } from "../tools/handlers/reminders.js";
 import { discordRetrievalToolHandlers } from "../tools/handlers/discord-retrieval.js";
-import { opsToolHandlers } from "../tools/handlers/ops.js";
-import { improvementToolHandlers } from "../tools/handlers/improvements.js";
 import { discordActionToolHandlers } from "../tools/handlers/discord-action.js";
-import { codegenToolHandlers } from "../tools/handlers/codegen.js";
 import { imageToolHandlers } from "../tools/handlers/image.js";
 import { generatedDataToolHandlers } from "../tools/handlers/generated-data.js";
-import { spotifyToolHandlers } from "../tools/handlers/spotify.js";
 import { walletToolHandlers } from "../tools/handlers/wallet.js";
 import { externalResearchToolHandlers } from "../tools/handlers/external-research.js";
 import {
@@ -61,9 +56,7 @@ const declarations: readonly CapabilityDeclaration[] = ([
   {
     id: "discordContext",
     summary: "Permission-scoped Discord retrieval, memory, and server culture.",
-    toolNames: TOOL_NAMES_BY_CAPABILITY.discordContext.filter(
-      (name) => name !== "composeDiscordResponse" && name !== "listMyImprovementSignals",
-    ),
+    toolNames: TOOL_NAMES_BY_CAPABILITY.discordContext,
     prepareTurn: async (ctx, userText) => ({
       promptContributions: compactContributions(await prepareDiscordEmojiCapability(ctx, userText)),
     }),
@@ -84,15 +77,7 @@ const declarations: readonly CapabilityDeclaration[] = ([
   {
     id: "discordActions",
     summary: "Requester-authorized bounded Discord reactions and poll creation.",
-    toolNames: TOOL_NAMES_BY_CAPABILITY.discordActions.filter(
-      (name) => name === "addDiscordReaction" || name === "createDiscordPoll",
-    ),
-  },
-  {
-    id: "sandboxTasks",
-    summary: "Isolated sandbox tasks: operate programs and files, diagnose or change this repository, and report back.",
-    // Each mode is enabled by productConfig.sandbox.modes; the tools stay unavailable while every mode is off.
-    toolNames: TOOL_NAMES_BY_CAPABILITY.sandboxTasks,
+    toolNames: TOOL_NAMES_BY_CAPABILITY.discordActions,
   },
   {
     id: "randomGames",
@@ -110,10 +95,8 @@ const declarations: readonly CapabilityDeclaration[] = ([
   },
   {
     id: "wallets",
-    summary: "Live wallet reads, transfers, funding, fees, and reconciliation.",
-    toolNames: TOOL_NAMES_BY_CAPABILITY.wallets.filter(
-      (name) => !name.startsWith("admin") && name !== "reconcileWalletTransfers",
-    ),
+    summary: "Live wallet reads, transfers, funding, and fees.",
+    toolNames: TOOL_NAMES_BY_CAPABILITY.wallets,
   },
   {
     id: "externalResearch",
@@ -133,15 +116,10 @@ const declarations: readonly CapabilityDeclaration[] = ([
 const handlerFamilies = [
   coreToolHandlers,
   userSettingsToolHandlers,
-  reminderToolHandlers,
   discordRetrievalToolHandlers,
-  opsToolHandlers,
-  improvementToolHandlers,
   discordActionToolHandlers,
-  codegenToolHandlers,
   imageToolHandlers,
   generatedDataToolHandlers,
-  spotifyToolHandlers,
   walletToolHandlers,
   externalResearchToolHandlers,
 ] as const;

@@ -35,7 +35,6 @@ export class ExternalResearchCapability {
       storedContent: undefined,
       files: undefined,
       tables: undefined,
-      discordPresentation: undefined,
     };
   }
 }

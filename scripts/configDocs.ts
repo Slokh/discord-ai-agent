@@ -31,7 +31,7 @@ function renderEnvExample() {
     "# Stable models, limits, repository identity, and product behavior live in src/config/env.ts.",
     "",
   ];
-  for (const group of ["core", "github", "access", "integration", "deployment"] as const) {
+  for (const group of ["core", "access", "integration", "deployment"] as const) {
     lines.push(`# ${groupTitle(group)}`);
     for (const variable of variables.filter((candidate) => candidate.group === group)) {
       const prefix = variable.operator && group === "core" ? "" : "# ";
@@ -63,8 +63,8 @@ function renderConfigurationGuide() {
     "",
     "## Ownership",
     "",
-    "- Humans or the secret manager set variables marked for application credentials, GitHub, access policy, and optional integrations.",
-    "- Docker/Kubernetes and the deployment workflow inject `NODE_ENV`, revision metadata, namespace, and the immutable sandbox image.",
+    "- Humans or the secret manager set variables marked for application credentials, access policy, and optional integrations.",
+    "- Docker/Kubernetes and the deployment workflow inject `NODE_ENV` and revision metadata.",
     "- `.env.example` is generated from the same manifest and is the local-development template.",
     "- `npm run config:check` verifies generated files; `npm run config:docs` rewrites them intentionally.",
     "",
@@ -75,7 +75,6 @@ function renderConfigurationGuide() {
 function groupTitle(group: EnvironmentVariableGroup) {
   return ({
     core: "Required application credentials and identity",
-    github: "GitHub publication (choose token or complete App credentials)",
     access: "Operator access and protected capabilities",
     integration: "Optional integrations (supply complete credential pairs)",
     deployment: "Injected deployment metadata (do not hand-configure locally)",

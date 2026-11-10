@@ -7,7 +7,7 @@ export async function releaseActivityDetail(
   const revision = String(deployment.revision);
   const deploymentId = String(deployment.deploymentId);
   const verifiedAt = date(deployment.verifiedAt);
-  const [previous, announcements, producers, receipts] = await Promise.all([
+  const [previous, announcements] = await Promise.all([
     pool.query(
       `SELECT revision,deployment_id,verified_at
        FROM deployment_verifications
@@ -22,20 +22,6 @@ export async function releaseActivityDetail(
        WHERE revision = $1
        ORDER BY posted_at DESC NULLS LAST,updated_at DESC`,
       [revision],
-    ),
-    pool.query(
-      `SELECT trigger,status,outcome_code,started_at,completed_at
-       FROM improvement_proof_producer_runs
-       WHERE revision = $1 OR deployment_id = $2
-       ORDER BY started_at ASC,run_id ASC`,
-      [revision, deploymentId],
-    ),
-    pool.query(
-      `SELECT receipt_id,status,checks,created_at
-       FROM improvement_verification_receipts
-       WHERE revision = $1 AND deployment_id = $2
-       ORDER BY created_at ASC,receipt_id ASC`,
-      [revision, deploymentId],
     ),
   ]);
   const announcementRows = announcements.rows;
@@ -62,31 +48,7 @@ export async function releaseActivityDetail(
         attempts: number(row.attempts), occurredAt: date(row.posted_at ?? row.updated_at),
       })),
     },
-    checks: producers.rows.map((row) => ({
-      name: String(row.trigger), status: String(row.status), outcomeCode: nullable(row.outcome_code),
-      startedAt: date(row.started_at), completedAt: nullableDate(row.completed_at),
-      durationMs: row.completed_at == null ? null : Math.max(0, date(row.completed_at).getTime() - date(row.started_at).getTime()),
-    })),
-    verificationReceipts: receipts.rows.reduce<Record<string, number>>((counts, row) => {
-      const status = String(row.status);
-      counts[status] = (counts[status] ?? 0) + 1;
-      return counts;
-    }, {}),
-    verifications: receipts.rows.map((row) => ({
-      id: String(row.receipt_id), status: String(row.status),
-      summary: verificationSummary(row.checks), occurredAt: date(row.created_at),
-    })),
   };
-}
-
-function verificationSummary(value: unknown): string | null {
-  if (!Array.isArray(value)) return null;
-  for (const candidate of value) {
-    if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) continue;
-    const summary = nullable((candidate as Record<string, unknown>).summary);
-    if (summary) return summary;
-  }
-  return null;
 }
 
 function nullable(value: unknown): string | null {

@@ -1,517 +1,594 @@
+//! Long-lived nanocode host for the Discord agent.
+//!
+//! One process serves every agent session. The Node worker starts it once,
+//! sends the stable tool catalog (`configure`), then streams turns. Sessions
+//! are durable in Postgres (`DATABASE_URL`, schema `nanocode`): a turn's
+//! request ID is the Discord message ID, so a retried job recovers the turn or
+//! returns its recorded result instead of running it twice.
+
+mod bridge;
+mod protocol;
+mod store;
+
 use std::{
-    fs::File,
-    io::{self, BufRead, BufReader},
-    os::fd::{FromRawFd, RawFd},
-    path::PathBuf,
-    sync::{Arc, atomic::{AtomicU64, Ordering}},
+    collections::HashMap,
+    sync::{Arc, Mutex as StdMutex},
+    time::{Duration, Instant},
 };
 
-use async_trait::async_trait;
 use nanocode::{
-    Lineage, Model, ModelSelection, Nanocode, OpenAi, ReasoningMode, SessionCheckpoint, Thinking,
-    Tool, Tools,
-    agent::events::AgentEvent,
-    durability::MemoryStore,
-    oai::{session::SessionId, transport::ResponsesTransport},
-    tool_contract::{
-        ToolContext, ToolDefinition, ToolInput, ToolOutput, ToolOutputBody, ToolOutputWire,
-        ToolResult,
-    },
+    Agent, AgentEvents, Codex, Model, Nanocode, OpenAi, PromptRequest, Thinking, Tools,
+    TurnControl,
+    agent::input::{Prompt, UserInput},
+    codex::{auth::OpenAiAuth, transport::ResponsesGateway},
+    durability::{MemoryStore, SessionStore, SqlStore},
+    oai::transport::ResponsesTransport,
 };
-use nanocode_backend_codex::{CodexCheckpointExt, session::SessionSnapshot};
-use serde::{Deserialize, Serialize};
-use serde_json::{Value, value::RawValue};
+use serde_json::Value;
 use thiserror::Error;
 use tokio::{
-    fs,
-    io::AsyncWriteExt,
-    sync::mpsc,
-    time::{Duration, sleep},
+    io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
+    sync::{Mutex, mpsc},
 };
 
-const PROTOCOL_VERSION: u32 = 1;
-const PROTOCOL_INPUT_FD: i32 = 3;
-const PRIVATE_PROTOCOL_FD_MIN: i32 = 128;
+use crate::{
+    bridge::{Bridge, ProtocolTool},
+    protocol::{
+        CancelRequest, Configure, Inbound, Outbound, PROTOCOL_VERSION, PromptPayload, SteerRequest,
+        TurnRequest, encode,
+    },
+    store::PostgresHost,
+};
 
-#[derive(Debug, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
-enum InboundMessage {
-    Run(Box<RunRequest>),
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct ToolResultMessage {
-    call_id: String,
-    success: bool,
-    output: ToolOutputBody,
-    #[serde(default)]
-    code_mode_value: Option<Value>,
-    #[serde(default)]
-    metadata: Option<Box<RawValue>>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct RunRequest {
-    request_id: String,
-    api_key: String,
-    api_base_url: String,
-    model: String,
-    #[serde(default)]
-    model_id_prefix: Option<String>,
-    thinking: String,
-    #[serde(default = "default_reasoning_mode")]
-    reasoning_mode: String,
-    #[serde(default)]
-    fast_mode: bool,
-    #[serde(default)]
-    hosted_web_search: bool,
-    #[serde(default)]
-    workspace_tools: bool,
-    instructions: String,
-    prompt: String,
-    session_id: String,
-    result_directory: PathBuf,
-    #[serde(default)]
-    workspace: Option<String>,
-    #[serde(default)]
-    resume: Option<SessionSnapshot>,
-    tools: Vec<ToolDefinition>,
-}
-
-fn default_reasoning_mode() -> String {
-    "standard".to_owned()
-}
-
-#[derive(Serialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
-enum OutboundMessage<'a> {
-    Ready {
-        protocol_version: u32,
-    },
-    Event {
-        protocol_version: u32,
-        request_id: &'a str,
-        event: Value,
-    },
-    ToolCall {
-        protocol_version: u32,
-        request_id: &'a str,
-        session_id: &'a str,
-        call_id: &'a str,
-        name: &'a str,
-        arguments: Value,
-        result_file: &'a str,
-    },
-    ToolResultAccepted {
-        protocol_version: u32,
-        request_id: &'a str,
-        call_id: &'a str,
-    },
-    Completed {
-        protocol_version: u32,
-        request_id: &'a str,
-        final_message: &'a str,
-        usage: Value,
-        snapshot: Value,
-    },
-    Failed {
-        protocol_version: u32,
-        request_id: Option<&'a str>,
-        error: &'a str,
-    },
-}
+/// Live sessions idle longer than this are closed; their state stays in the
+/// store and the next turn reopens them.
+const IDLE_SESSION: Duration = Duration::from_secs(15 * 60);
+const STORE_CONNECTIONS: usize = 4;
 
 #[derive(Debug, Error)]
-enum RuntimeError {
-    #[error("stdin closed before a run request was received")]
-    MissingRunRequest,
+enum HostError {
     #[error("invalid model: {0}")]
-    InvalidModel(String),
+    Model(String),
     #[error("invalid thinking level: {0}")]
-    InvalidThinking(String),
-    #[error("invalid reasoning mode: {0}")]
-    InvalidReasoningMode(String),
-    #[error("invalid session ID: {0}")]
-    InvalidSessionId(String),
-    #[error("failed to read protocol input: {0}")]
-    Read(#[from] io::Error),
-    #[error("invalid protocol JSON: {0}")]
+    Thinking(String),
+    #[error("OPENROUTER_API_KEY is required")]
+    MissingApiKey,
+    #[error("the host is not configured yet")]
+    NotConfigured,
+    #[error("the host is already configured")]
+    AlreadyConfigured,
+    #[error("nanocode: {0}")]
+    Nanocode(String),
+    #[error("store: {0}")]
+    Store(String),
+    #[error("protocol JSON: {0}")]
     Json(#[from] serde_json::Error),
-    #[error("NanoCodex failed: {0}")]
-    Nanocodex(String),
+    #[error("io: {0}")]
+    Io(#[from] std::io::Error),
 }
 
-fn nanocode_error(error: impl std::fmt::Display) -> RuntimeError {
-    RuntimeError::Nanocodex(error.to_string())
+fn nanocode_error(error: impl std::fmt::Display) -> HostError {
+    HostError::Nanocode(error.to_string())
 }
 
-#[derive(Clone)]
-struct ProtocolTool {
-    request_id: Arc<str>,
-    definition: ToolDefinition,
+struct LiveSession {
+    agent: Agent,
+    events: AgentEvents,
+}
+
+#[derive(Default)]
+struct SessionSlot {
+    live: Mutex<Option<LiveSession>>,
+    last_used: StdMutex<Option<Instant>>,
+}
+
+struct Host {
+    runtime: Nanocode,
+    store: Option<SessionStore>,
+    bridge: Arc<Bridge>,
     outbound: mpsc::UnboundedSender<Value>,
-    result_directory: Arc<PathBuf>,
-    result_sequence: Arc<AtomicU64>,
-}
-
-#[async_trait]
-impl Tool for ProtocolTool {
-    fn definition(&self) -> ToolDefinition {
-        self.definition.clone()
-    }
-
-    async fn execute(&self, input: ToolInput, context: ToolContext<'_>) -> ToolResult {
-        let arguments = match input {
-            ToolInput::Function(raw) => serde_json::from_str(raw.get())?,
-            ToolInput::Freeform(text) => Value::String(text),
-        };
-        let call_id = context.call_id().to_owned();
-        let result_file = format!(
-            "result-{}.json",
-            self.result_sequence.fetch_add(1, Ordering::Relaxed),
-        );
-        let message = serde_json::to_value(OutboundMessage::ToolCall {
-            protocol_version: PROTOCOL_VERSION,
-            request_id: &self.request_id,
-            session_id: context.session_id(),
-            call_id: &call_id,
-            name: self.definition.name(),
-            arguments,
-            result_file: &result_file,
-        })?;
-        if self.outbound.send(message).is_err() {
-            return Ok(ToolOutput::error(
-                "Application tool bridge closed before dispatch",
-            ));
-        }
-        let result = read_tool_result(self.result_directory.join(&result_file)).await?;
-        if result.call_id != call_id {
-            return Ok(ToolOutput::error("Application tool result call ID mismatch"));
-        }
-        let wire = ToolOutputWire {
-            output: result.output,
-            success: result.success,
-            structured_result: result
-                .code_mode_value
-                .map(|value| serde_json::value::to_raw_value(&value))
-                .transpose()?,
-            metadata: result.metadata,
-            process_trace: None,
-        };
-        let output = ToolOutput::from_wire(wire)?;
-        let accepted = serde_json::to_value(OutboundMessage::ToolResultAccepted {
-            protocol_version: PROTOCOL_VERSION,
-            request_id: &self.request_id,
-            call_id: &call_id,
-        })?;
-        let _ = self.outbound.send(accepted);
-        Ok(output)
-    }
-}
-
-async fn read_tool_result(path: PathBuf) -> Result<ToolResultMessage, serde_json::Error> {
-    loop {
-        match fs::read(&path).await {
-            Ok(bytes) => {
-                let result = serde_json::from_slice(&bytes)?;
-                let _ = fs::remove_file(path).await;
-                return Ok(result);
-            }
-            Err(error) if error.kind() == io::ErrorKind::NotFound => {
-                sleep(Duration::from_millis(10)).await;
-            }
-            Err(error) => return Err(serde_json::Error::io(error)),
-        }
-    }
+    sessions: StdMutex<HashMap<String, Arc<SessionSlot>>>,
+    turns: StdMutex<HashMap<String, TurnControl>>,
 }
 
 #[tokio::main]
 async fn main() {
-    if let Err(error) = run().await {
-        let message = OutboundMessage::Failed {
-            protocol_version: PROTOCOL_VERSION,
-            request_id: None,
-            error: &error.to_string(),
-        };
-        let _ = write_stdout(&message).await;
+    let (outbound, receiver) = mpsc::unbounded_channel();
+    let writer = tokio::spawn(write_outbound(receiver));
+    let result = serve(outbound.clone()).await;
+    if let Err(error) = &result {
+        let _ = outbound.send(
+            encode(&Outbound::Failed {
+                protocol_version: PROTOCOL_VERSION,
+                request_id: None,
+                error: &error.to_string(),
+            })
+            .unwrap_or(Value::Null),
+        );
+    }
+    drop(outbound);
+    let _ = writer.await;
+    if result.is_err() {
         std::process::exit(1);
     }
 }
 
-async fn run() -> Result<(), RuntimeError> {
-    let protocol_input = private_protocol_input(PROTOCOL_INPUT_FD)?;
-    write_stdout(&OutboundMessage::Ready {
-        protocol_version: PROTOCOL_VERSION,
-    })
-    .await?;
-
-    // fd 3 carries only the startup request and is closed before NanoCodex
-    // starts. Later tool results use the run's private filesystem mailbox.
-    let request = tokio::task::spawn_blocking(move || read_run_request(BufReader::new(protocol_input)))
-        .await
-        .map_err(|error| RuntimeError::Nanocodex(format!("protocol startup reader failed: {error}")))??;
-    let (outbound_sender, outbound_receiver) = mpsc::unbounded_channel();
-    let writer = tokio::spawn(write_outbound(outbound_receiver));
-
-    let request_id: Arc<str> = request.request_id.clone().into();
-    let result = run_agent(*request, request_id, outbound_sender.clone()).await;
-    drop(outbound_sender);
-    writer.await.map_err(|error| {
-        RuntimeError::Nanocodex(format!("protocol writer task failed: {error}"))
-    })??;
-    result
-}
-
-fn private_protocol_input(fd: RawFd) -> Result<File, io::Error> {
-    let private_fd = unsafe { libc::fcntl(fd, libc::F_DUPFD_CLOEXEC, PRIVATE_PROTOCOL_FD_MIN) };
-    if private_fd == -1 {
-        return Err(io::Error::last_os_error());
-    }
-    if unsafe { libc::close(fd) } == -1 {
-        let error = io::Error::last_os_error();
-        unsafe { libc::close(private_fd) };
-        return Err(error);
-    }
-    let flags = unsafe { libc::fcntl(private_fd, libc::F_GETFL) };
-    if flags == -1 {
-        let error = io::Error::last_os_error();
-        unsafe { libc::close(private_fd) };
-        return Err(error);
-    }
-    if flags & libc::O_NONBLOCK != 0 {
-        let result = unsafe { libc::fcntl(private_fd, libc::F_SETFL, flags & !libc::O_NONBLOCK) };
-        if result == -1 {
-            let error = io::Error::last_os_error();
-            unsafe { libc::close(private_fd) };
-            return Err(error);
+async fn serve(outbound: mpsc::UnboundedSender<Value>) -> Result<(), HostError> {
+    send(
+        &outbound,
+        &Outbound::Ready {
+            protocol_version: PROTOCOL_VERSION,
+        },
+    )?;
+    let bridge = Arc::new(Bridge::default());
+    let mut host: Option<Arc<Host>> = None;
+    let mut lines = BufReader::new(tokio::io::stdin()).lines();
+    while let Some(line) = lines.next_line().await? {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let message = match serde_json::from_str::<Inbound>(&line) {
+            Ok(message) => message,
+            Err(error) => {
+                send(
+                    &outbound,
+                    &Outbound::Failed {
+                        protocol_version: PROTOCOL_VERSION,
+                        request_id: None,
+                        error: &format!("invalid inbound message: {error}"),
+                    },
+                )?;
+                continue;
+            }
+        };
+        match message {
+            Inbound::Configure(configure) => {
+                if host.is_some() {
+                    return Err(HostError::AlreadyConfigured);
+                }
+                let built = Arc::new(configure_host(*configure, &bridge, &outbound).await?);
+                send(
+                    &outbound,
+                    &Outbound::Configured {
+                        protocol_version: PROTOCOL_VERSION,
+                        durable: built.store.is_some(),
+                    },
+                )?;
+                tokio::spawn(sweep_idle_sessions(Arc::downgrade(&built)));
+                host = Some(built);
+            }
+            Inbound::ToolResult(result) => {
+                bridge.resolve(*result);
+            }
+            Inbound::Turn(turn) => match &host {
+                Some(host) => {
+                    let host = Arc::clone(host);
+                    tokio::spawn(async move { host.run_turn(*turn).await });
+                }
+                None => fail_request(&outbound, &turn.request_id, &HostError::NotConfigured)?,
+            },
+            Inbound::Steer(steer) => match &host {
+                Some(host) => {
+                    let host = Arc::clone(host);
+                    tokio::spawn(async move { host.steer(steer).await });
+                }
+                None => fail_request(&outbound, &steer.request_id, &HostError::NotConfigured)?,
+            },
+            Inbound::Cancel(CancelRequest { request_id }) => {
+                if let Some(host) = &host {
+                    let control = host
+                        .turns
+                        .lock()
+                        .expect("turns lock")
+                        .get(&request_id)
+                        .cloned();
+                    if let Some(control) = control {
+                        let _ = control.cancel().await;
+                    }
+                }
+            }
         }
     }
-    Ok(unsafe { File::from_raw_fd(private_fd) })
+    // The worker closed stdin: finish cleanly.
+    if let Some(host) = host {
+        host.shutdown().await;
+    }
+    Ok(())
 }
 
-async fn run_agent(
-    request: RunRequest,
-    request_id: Arc<str>,
-    outbound: mpsc::UnboundedSender<Value>,
-) -> Result<(), RuntimeError> {
-    let result_directory = Arc::new(request.result_directory.clone());
-    let result_sequence = Arc::new(AtomicU64::new(1));
-    let model = request
-        .model
-        .parse::<Model>()
-        .map_err(|error| RuntimeError::InvalidModel(error.to_string()))?;
-    let thinking = request
-        .thinking
-        .parse::<Thinking>()
-        .map_err(|error| RuntimeError::InvalidThinking(error.to_string()))?;
-    let reasoning_mode = request
-        .reasoning_mode
-        .parse::<ReasoningMode>()
-        .map_err(|error| RuntimeError::InvalidReasoningMode(error.to_string()))?;
-    request
-        .session_id
-        .parse::<SessionId>()
-        .map_err(|error| RuntimeError::InvalidSessionId(error.to_string()))?;
-
-    let mut openai = OpenAi::builder(request.api_key)
-        .model(model)
-        .thinking(thinking)
-        .reasoning_mode(reasoning_mode)
-        .fast_mode(request.fast_mode)
-        .transport(ResponsesTransport::Https)
-        .api_base_url(request.api_base_url);
-    if let Some(prefix) = request.model_id_prefix {
-        openai = openai.model_id_prefix(prefix);
+async fn configure_host(
+    configure: Configure,
+    bridge: &Arc<Bridge>,
+    outbound: &mpsc::UnboundedSender<Value>,
+) -> Result<Host, HostError> {
+    let api_key = std::env::var("OPENROUTER_API_KEY")
+        .ok()
+        .filter(|key| !key.trim().is_empty())
+        .ok_or(HostError::MissingApiKey)?;
+    let mut gateway = ResponsesGateway::openrouter();
+    if let Some(title) = configure.app_title {
+        gateway = gateway.app_title(title);
     }
-    let openai = openai.build().map_err(nanocode_error)?;
+    if let Some(url) = configure.app_url {
+        gateway = gateway.app_url(url);
+    }
+    if let Some(base) = configure.api_base_url {
+        gateway = gateway.base_url(base);
+    }
+    let openai = OpenAi::builder(OpenAiAuth::api_key(api_key))
+        .responses_gateway(gateway)
+        .transport(ResponsesTransport::Https)
+        .model(Model::Luna)
+        .build()
+        .map_err(nanocode_error)?;
 
-    // Discord turns never receive NanoCodex image-generation tools. Hosted
-    // search and the sandbox workspace tools are the only native capabilities
-    // enabled here; every application mutation still crosses the typed
-    // protocol bridge below.
+    // Application tools are the only tools. Every one crosses the bridge, so
+    // the worker keeps authority, auditing and delivery.
     let mut tools = Tools::builder()
         .without_defaults()
-        .web_search(request.hosted_web_search)
-        .workspace(request.workspace_tools);
-    for definition in request.tools {
+        .web_search(false)
+        .workspace(false);
+    for definition in configure.tools {
         tools = tools.tool(ProtocolTool {
-            request_id: Arc::clone(&request_id),
             definition,
+            bridge: Arc::clone(bridge),
             outbound: outbound.clone(),
-            result_directory: Arc::clone(&result_directory),
-            result_sequence: Arc::clone(&result_sequence),
         });
     }
     let tools = tools.build().map_err(nanocode_error)?;
 
-    // One process serves one turn. The application owns continuity through
-    // the returned snapshot, so durability stays in memory and the runtime
-    // never writes session journals into the process home directory.
-    let mut runtime = Nanocode::builder()
+    // Chat keeps working if Postgres is unreachable at startup, but without
+    // durable sessions; `configured.durable` tells the worker which it got.
+    let store = match durable_store().await {
+        Ok(store) => store,
+        Err(error) => {
+            eprintln!("nanocode host: durable store unavailable, sessions stay in memory: {error}");
+            None
+        }
+    };
+    let builder = Nanocode::builder()
         .openai(openai)
         .tools(tools)
-        .instructions(request.instructions)
-        .thinking(thinking)
-        .durability(MemoryStore::new().map_err(nanocode_error)?)
         .without_subagents()
         .without_cua()
         .runner_management(false);
-    if let Some(workspace) = request.workspace {
-        runtime = runtime.workspace(workspace);
+    let runtime = match &store {
+        Some(store) => builder.durability(store.clone()),
+        None => builder.durability(MemoryStore::new().map_err(nanocode_error)?),
     }
-    let runtime = runtime.build_async().await.map_err(nanocode_error)?;
-
-    let checkpoint = session_checkpoint(
-        request.session_id,
-        model,
-        thinking,
-        reasoning_mode,
-        request.fast_mode,
-        request.resume,
-    )?;
-    let outcome = run_turn(
-        &runtime,
-        checkpoint,
-        thinking,
-        request.fast_mode,
-        request.prompt,
-        request_id,
-        outbound,
-    )
-    .await;
-    let shutdown = runtime.shutdown().await;
-    outcome?;
-    shutdown.map_err(nanocode_error)
+    .build_async()
+    .await
+    .map_err(nanocode_error)?;
+    Ok(Host {
+        runtime,
+        store,
+        bridge: Arc::clone(bridge),
+        outbound: outbound.clone(),
+        sessions: StdMutex::new(HashMap::new()),
+        turns: StdMutex::new(HashMap::new()),
+    })
 }
 
-/// Builds the session identity NanoCodex resumes from. A fresh session still
-/// uses the application's deterministic session ID, so tool calls and later
-/// snapshots stay attributable to the same Discord session.
-fn session_checkpoint(
-    session_id: String,
-    model: Model,
-    thinking: Thinking,
-    reasoning_mode: ReasoningMode,
-    fast_mode: bool,
-    resume: Option<SessionSnapshot>,
-) -> Result<SessionCheckpoint, RuntimeError> {
-    let lineage = Lineage::root(session_id.clone());
-    let checkpoint = match resume {
-        Some(snapshot) => {
-            SessionCheckpoint::codex(session_id, lineage, thinking, snapshot).map_err(nanocode_error)?
-        }
-        None => SessionCheckpoint::native(
-            session_id.clone(),
-            ModelSelection::Codex(model),
-            thinking,
-            lineage,
-            session_id,
-            None,
-            false,
-            serde_json::json!({ "fast_mode": fast_mode, "conversation": null }),
-        ),
+/// Postgres when `DATABASE_URL` is set; `NANOCODE_STORE=memory` keeps sessions
+/// in this process only (tests and local experiments).
+async fn durable_store() -> Result<Option<SessionStore>, HostError> {
+    if std::env::var("NANOCODE_STORE").is_ok_and(|mode| mode == "memory") {
+        return Ok(None);
+    }
+    let Some(url) = std::env::var("DATABASE_URL")
+        .ok()
+        .filter(|url| !url.is_empty())
+    else {
+        return Ok(None);
     };
-    Ok(checkpoint.with_reasoning_mode(reasoning_mode))
+    let host = PostgresHost::connect(&url, STORE_CONNECTIONS)
+        .await
+        .map_err(|error| HostError::Store(error.to_string()))?;
+    // Creates or upgrades nanocode's tables before the first session opens.
+    let mut store = SqlStore::new(host);
+    store
+        .migrate()
+        .await
+        .map_err(|error| HostError::Store(error.to_string()))?;
+    nanocode::session_store(store)
+        .map(Some)
+        .map_err(|error| HostError::Store(error.to_string()))
 }
 
-async fn run_turn(
-    runtime: &Nanocode,
-    checkpoint: SessionCheckpoint,
-    thinking: Thinking,
-    fast_mode: bool,
-    prompt: String,
-    request_id: Arc<str>,
-    outbound: mpsc::UnboundedSender<Value>,
-) -> Result<(), RuntimeError> {
-    let (agent, mut events) = runtime.resume(checkpoint).await.map_err(nanocode_error)?;
-    // A resumed snapshot carries the thinking level and service tier it was
-    // recorded with; the current request is authoritative for both.
-    agent.set_thinking(thinking).await.map_err(nanocode_error)?;
-    agent.set_fast_mode(fast_mode).await.map_err(nanocode_error)?;
-
-    let event_request_id = Arc::clone(&request_id);
-    let event_outbound = outbound.clone();
-    let event_task = tokio::spawn(async move {
-        while let Some(event) = events.recv().await {
-            let terminal = event.kind.is_terminal();
-            forward_event(&event_request_id, &event_outbound, &event)?;
-            if terminal {
-                break;
+impl Host {
+    async fn run_turn(self: Arc<Self>, request: TurnRequest) {
+        let request_id = request.request_id.clone();
+        let session_id = request.session_id.clone();
+        let outcome = self.drive_turn(request).await;
+        self.bridge.end(&session_id);
+        self.turns.lock().expect("turns lock").remove(&request_id);
+        match outcome {
+            Ok((final_message, usage, resumed)) => {
+                let _ = send(
+                    &self.outbound,
+                    &Outbound::Completed {
+                        protocol_version: PROTOCOL_VERSION,
+                        request_id: &request_id,
+                        session_id: &session_id,
+                        final_message: &final_message,
+                        usage,
+                        resumed,
+                    },
+                );
+            }
+            Err(error) => {
+                // A failed turn may leave the live agent in an unknown state;
+                // the next turn reopens it from the store.
+                self.forget(&session_id).await;
+                let _ = fail_request(&self.outbound, &request_id, &error);
             }
         }
-        Ok::<(), serde_json::Error>(())
-    });
+    }
 
-    let turn = agent.prompt(prompt).await.map_err(nanocode_error)?;
-    let result = turn.result().await.map_err(nanocode_error)?;
-    // Deliver the turn's remaining lifecycle events, ending with its terminal
-    // event, before the completion message so the ledger keeps their order.
-    match tokio::time::timeout(Duration::from_secs(5), event_task).await {
-        Ok(joined) => joined
-            .map_err(|error| RuntimeError::Nanocodex(format!("event task failed: {error}")))?
-            .map_err(RuntimeError::Json)?,
-        Err(_) => {
-            return Err(RuntimeError::Nanocodex(
-                "turn completed without a terminal event".to_owned(),
-            ));
+    async fn drive_turn(&self, request: TurnRequest) -> Result<(String, Value, bool), HostError> {
+        let model = request
+            .model
+            .trim()
+            .trim_start_matches("openai/")
+            .parse::<Model>()
+            .map_err(|error| HostError::Model(error.to_string()))?;
+        let thinking = request
+            .thinking
+            .parse::<Thinking>()
+            .map_err(|error| HostError::Thinking(error.to_string()))?;
+        let slot = self.slot(&request.session_id);
+        let mut live = slot.live.lock().await;
+        let resumed = match live.as_ref() {
+            Some(_) => true,
+            None => {
+                let (session, existed) = self
+                    .open_or_create(&request.session_id, model, thinking, &request.instructions)
+                    .await?;
+                *live = Some(session);
+                existed
+            }
+        };
+        let mut payload = request.prompt;
+        if !resumed
+            && let Some(bootstrap) = request.bootstrap.filter(|text| !text.trim().is_empty())
+        {
+            payload.text = format!("{bootstrap}\n\n{}", payload.text);
+        }
+        let LiveSession { agent, events } = live.as_mut().expect("session is live");
+        while events.try_recv().is_some() {}
+        agent.set_thinking(thinking).await.map_err(nanocode_error)?;
+
+        self.bridge.begin(&request.session_id, &request.request_id);
+        let turn = agent
+            .prompt(PromptRequest::new(prompt(payload)).request_id(&request.request_id))
+            .await
+            .map_err(nanocode_error)?;
+        self.turns
+            .lock()
+            .expect("turns lock")
+            .insert(request.request_id.clone(), turn.control());
+        let mut result = std::pin::pin!(turn.result());
+        let result = loop {
+            tokio::select! {
+                biased;
+                Some(event) = events.recv() => self.forward(&request.request_id, &event),
+                result = &mut result => break result,
+            }
+        };
+        while let Some(event) = events.try_recv() {
+            self.forward(&request.request_id, &event);
+        }
+        let result = result.map_err(nanocode_error)?;
+        *slot.last_used.lock().expect("slot lock") = Some(Instant::now());
+        let usage = match result.usage() {
+            Some(usage) => serde_json::to_value(usage)?,
+            None => Value::Object(serde_json::Map::new()),
+        };
+        Ok((result.final_message().to_owned(), usage, resumed))
+    }
+
+    async fn open_or_create(
+        &self,
+        session_id: &str,
+        model: Model,
+        thinking: Thinking,
+        instructions: &str,
+    ) -> Result<(LiveSession, bool), HostError> {
+        if let Some(store) = &self.store {
+            match store.load(session_id).await {
+                Ok(_) => {
+                    let (agent, events) = self
+                        .runtime
+                        .open_session(session_id)
+                        .await
+                        .map_err(nanocode_error)?;
+                    return Ok((LiveSession { agent, events }, true));
+                }
+                Err(nanocode::durability::Error::SessionNotFound { .. }) => {}
+                Err(error) => return Err(HostError::Store(error.to_string())),
+            }
+        }
+        let (agent, events) = self
+            .runtime
+            .spawn()
+            .backend::<Codex>()
+            .model(model)
+            .thinking(thinking)
+            .session_id(session_id)
+            .instructions(instructions.to_owned())
+            .build()
+            .await
+            .map_err(nanocode_error)?;
+        Ok((LiveSession { agent, events }, false))
+    }
+
+    async fn steer(&self, request: SteerRequest) {
+        let control = self
+            .turns
+            .lock()
+            .expect("turns lock")
+            .get(&request.request_id)
+            .cloned();
+        let outcome = match control {
+            Some(control) => control
+                .steer_with_id(request.steer_id.clone(), prompt(request.prompt))
+                .await
+                .map_err(|error| error.to_string()),
+            None => Err("the turn is no longer running".to_owned()),
+        };
+        let _ = send(
+            &self.outbound,
+            &Outbound::Steered {
+                protocol_version: PROTOCOL_VERSION,
+                request_id: &request.request_id,
+                steer_id: &request.steer_id,
+                accepted: outcome.is_ok(),
+                error: outcome.as_ref().err().map(String::as_str),
+            },
+        );
+    }
+
+    fn forward(&self, request_id: &str, event: &nanocode::agent::events::AgentEvent) {
+        let Ok(event) = serde_json::to_value(event) else {
+            return;
+        };
+        // Token deltas are only useful to a live UI; the ledger records whole
+        // messages and lifecycle events.
+        if matches!(
+            event.get("type").and_then(Value::as_str),
+            Some("assistant.delta" | "reasoning.summary.delta" | "api.event")
+        ) {
+            return;
+        }
+        let _ = send(
+            &self.outbound,
+            &Outbound::Event {
+                protocol_version: PROTOCOL_VERSION,
+                request_id,
+                event,
+            },
+        );
+    }
+
+    fn slot(&self, session_id: &str) -> Arc<SessionSlot> {
+        Arc::clone(
+            self.sessions
+                .lock()
+                .expect("sessions lock")
+                .entry(session_id.to_owned())
+                .or_default(),
+        )
+    }
+
+    async fn forget(&self, session_id: &str) {
+        let slot = self
+            .sessions
+            .lock()
+            .expect("sessions lock")
+            .remove(session_id);
+        if let Some(slot) = slot
+            && let Some(session) = slot.live.lock().await.take()
+        {
+            let _ = session.agent.shutdown().await;
         }
     }
 
-    let usage = match result.usage() {
-        Some(usage) => serde_json::to_value(usage)?,
-        None => Value::Object(serde_json::Map::new()),
-    };
-    let snapshot = result
-        .try_checkpoint()
-        .map_err(nanocode_error)?
-        .ok_or_else(|| RuntimeError::Nanocodex("turn completed without a checkpoint".to_owned()))?
-        .codex_snapshot()
-        .map_err(nanocode_error)?
-        .ok_or_else(|| {
-            RuntimeError::Nanocodex("turn checkpoint has no conversation snapshot".to_owned())
-        })?;
-    let snapshot = serde_json::to_value(snapshot)?;
-    let completed = serde_json::to_value(OutboundMessage::Completed {
-        protocol_version: PROTOCOL_VERSION,
-        request_id: &request_id,
-        final_message: result.final_message(),
-        usage,
-        snapshot,
-    })?;
-    let _ = outbound.send(completed);
-    agent.shutdown().await.map_err(nanocode_error)?;
+    async fn shutdown(&self) {
+        let slots: Vec<_> = self
+            .sessions
+            .lock()
+            .expect("sessions lock")
+            .drain()
+            .collect();
+        for (_, slot) in slots {
+            if let Some(session) = slot.live.lock().await.take() {
+                let _ = session.agent.flush().await;
+                let _ = session.agent.shutdown().await;
+            }
+        }
+        let _ = self.runtime.shutdown().await;
+    }
+}
+
+/// Closes live sessions that have been idle for a while. Only durable
+/// sessions are evicted; in-memory sessions would lose their history.
+async fn sweep_idle_sessions(host: std::sync::Weak<Host>) {
+    let mut ticks = tokio::time::interval(Duration::from_secs(60));
+    loop {
+        ticks.tick().await;
+        let Some(host) = host.upgrade() else { return };
+        if host.store.is_none() {
+            continue;
+        }
+        let idle: Vec<(String, Arc<SessionSlot>)> = host
+            .sessions
+            .lock()
+            .expect("sessions lock")
+            .iter()
+            .filter(|(_, slot)| {
+                slot.last_used
+                    .lock()
+                    .expect("slot lock")
+                    .is_some_and(|used| used.elapsed() > IDLE_SESSION)
+            })
+            .map(|(id, slot)| (id.clone(), Arc::clone(slot)))
+            .collect();
+        for (session_id, slot) in idle {
+            // A session with a running turn holds its lock; skip it.
+            let Ok(mut live) = slot.live.try_lock() else {
+                continue;
+            };
+            if let Some(session) = live.take() {
+                let _ = session.agent.flush().await;
+                let _ = session.agent.shutdown().await;
+            }
+            drop(live);
+            host.sessions
+                .lock()
+                .expect("sessions lock")
+                .remove(&session_id);
+        }
+    }
+}
+
+fn prompt(payload: PromptPayload) -> Prompt {
+    if payload.images.is_empty() {
+        return Prompt::new(payload.text);
+    }
+    let mut content = vec![UserInput::Text { text: payload.text }];
+    content.extend(
+        payload
+            .images
+            .into_iter()
+            .map(|image_url| UserInput::Image {
+                image_url,
+                detail: None,
+            }),
+    );
+    Prompt::content(content)
+}
+
+fn send(outbound: &mpsc::UnboundedSender<Value>, message: &Outbound<'_>) -> Result<(), HostError> {
+    let _ = outbound.send(encode(message)?);
     Ok(())
 }
 
-fn forward_event(
-    request_id: &str,
+fn fail_request(
     outbound: &mpsc::UnboundedSender<Value>,
-    event: &AgentEvent,
-) -> Result<(), serde_json::Error> {
-    let message = serde_json::to_value(OutboundMessage::Event {
-        protocol_version: PROTOCOL_VERSION,
-        request_id,
-        event: serde_json::to_value(event)?,
-    })?;
-    let _ = outbound.send(message);
-    Ok(())
+    request_id: &str,
+    error: &HostError,
+) -> Result<(), HostError> {
+    send(
+        outbound,
+        &Outbound::Failed {
+            protocol_version: PROTOCOL_VERSION,
+            request_id: Some(request_id),
+            error: &error.to_string(),
+        },
+    )
 }
 
-fn read_run_request(mut input: impl BufRead) -> Result<Box<RunRequest>, RuntimeError> {
-    let mut first = String::new();
-    match input.read_line(&mut first) {
-        Ok(0) => return Err(RuntimeError::MissingRunRequest),
-        Ok(_) => {}
-        Err(error) => return Err(RuntimeError::Read(error)),
-    }
-    match serde_json::from_str::<InboundMessage>(&first)? {
-        InboundMessage::Run(request) => Ok(request),
-    }
-}
-
-async fn write_outbound(mut receiver: mpsc::UnboundedReceiver<Value>) -> Result<(), RuntimeError> {
+async fn write_outbound(mut receiver: mpsc::UnboundedReceiver<Value>) -> std::io::Result<()> {
     let mut stdout = tokio::io::stdout();
     while let Some(message) = receiver.recv().await {
         let mut encoded = serde_json::to_vec(&message)?;
@@ -522,272 +599,32 @@ async fn write_outbound(mut receiver: mpsc::UnboundedReceiver<Value>) -> Result<
     Ok(())
 }
 
-async fn write_stdout(message: &impl Serialize) -> Result<(), RuntimeError> {
-    let mut stdout = tokio::io::stdout();
-    let mut encoded = serde_json::to_vec(message)?;
-    encoded.push(b'\n');
-    stdout.write_all(&encoded).await?;
-    stdout.flush().await?;
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use nanocode::code_mode::runtime::ToolRuntime;
-    use serde_json::json;
-    use std::os::fd::AsRawFd;
-    use tokio::time::{Duration, timeout};
 
     #[test]
-    fn pinned_nanocode_accepts_gpt_6_luna_at_max_reasoning() {
-        assert_eq!("gpt-6-luna".parse::<Model>().expect("GPT-6 Luna").as_str(), "gpt-6-luna");
-        assert_eq!("max".parse::<Thinking>().expect("max effort").as_str(), "max");
-    }
-
-    #[test]
-    fn workspace_tools_expose_view_image_for_screenshots() {
-        let workspace = std::env::temp_dir();
-        let tools = Tools::builder()
-            .without_defaults()
-            .add(nanocode::code_mode::WorkspaceTools::new(workspace.clone()))
-            .build()
-            .expect("valid workspace tools");
-        let runtime = ToolRuntime::new_with_tools(workspace, Vec::new(), &tools);
-        let (definitions, _) = nanocode::code_mode::__private::model_contract(&runtime, "session-test");
-        let contract = serde_json::to_string(&definitions).expect("tool contract JSON");
-        for tool in ["exec_command", "write_stdin", "apply_patch", "view_image"] {
-            assert!(contract.contains(&format!("### `{tool}`")), "missing {tool}: {contract}");
-        }
-    }
-
-    #[test]
-    fn fresh_session_keeps_the_application_session_identity() {
-        let session_id = "0190c1a2-3b4c-7d5e-8f60-718293a4b5c6";
-        let checkpoint = session_checkpoint(
-            session_id.to_owned(),
-            Model::Luna,
-            Thinking::High,
-            ReasoningMode::Standard,
-            false,
-            None,
-        )
-        .expect("fresh checkpoint");
-        checkpoint.validate().expect("valid checkpoint");
-        assert_eq!(checkpoint.session_id(), session_id);
-        assert_eq!(checkpoint.conversation_id(), session_id);
-        assert!(checkpoint.codex_snapshot().expect("codex checkpoint").is_none());
-    }
-
-    #[test]
-    fn application_snapshot_round_trips_through_a_checkpoint() {
-        let session_id = "0190c1a2-3b4c-7d5e-8f60-718293a4b5c6";
-        let stored = json!({
-            "version": 1,
-            "model": "gpt-6-luna",
-            "lineage_id": session_id,
-            "prompt_cache_key": session_id,
-            "workspace": "/workspace",
-            "canonical_context": {
-                "type": "message",
-                "role": "user",
-                "content": [{ "type": "input_text", "text": "<environment_context />" }]
-            },
-            "history": [{
-                "type": "message",
-                "role": "assistant",
-                "content": [{ "type": "output_text", "text": "earlier answer" }]
-            }]
+    fn text_only_prompts_stay_plain_text() {
+        let prompt = prompt(PromptPayload {
+            text: "hello".into(),
+            images: Vec::new(),
         });
-        let snapshot: SessionSnapshot = serde_json::from_value(stored.clone()).expect("snapshot");
-        let checkpoint = session_checkpoint(
-            session_id.to_owned(),
-            Model::Luna,
-            Thinking::High,
-            ReasoningMode::Standard,
-            false,
-            Some(snapshot),
-        )
-        .expect("resumed checkpoint");
-        assert_eq!(checkpoint.session_id(), session_id);
-        let restored = serde_json::to_value(
-            checkpoint
-                .codex_snapshot()
-                .expect("codex checkpoint")
-                .expect("conversation snapshot"),
-        )
-        .expect("snapshot JSON");
-        for field in ["version", "model", "lineage_id", "prompt_cache_key", "workspace", "canonical_context", "history"] {
-            assert_eq!(restored[field], stored[field], "{field}");
-        }
+        assert_eq!(
+            serde_json::to_value(&prompt).expect("serializes")["instruction"],
+            "hello"
+        );
     }
 
     #[test]
-    fn protocol_input_owns_a_private_blocking_close_on_exec_descriptor() {
-        let mut descriptors = [0; 2];
-        assert_eq!(unsafe { libc::pipe(descriptors.as_mut_ptr()) }, 0);
-        let read_fd = descriptors[0];
-        let write_fd = descriptors[1];
-        let flags = unsafe { libc::fcntl(read_fd, libc::F_GETFL) };
-        assert_ne!(flags, -1);
-        assert_ne!(unsafe { libc::fcntl(read_fd, libc::F_SETFL, flags | libc::O_NONBLOCK) }, -1);
-
-        let input = private_protocol_input(read_fd).expect("private protocol input");
-        assert!(input.as_raw_fd() >= PRIVATE_PROTOCOL_FD_MIN);
-        let blocking_flags = unsafe { libc::fcntl(input.as_raw_fd(), libc::F_GETFL) };
-        assert_eq!(blocking_flags & libc::O_NONBLOCK, 0);
-        let descriptor_flags = unsafe { libc::fcntl(input.as_raw_fd(), libc::F_GETFD) };
-        assert_ne!(descriptor_flags & libc::FD_CLOEXEC, 0);
-        assert_eq!(unsafe { libc::fcntl(read_fd, libc::F_GETFL) }, -1);
-
-        assert_eq!(unsafe { libc::close(write_fd) }, 0);
-    }
-
-    #[tokio::test]
-    async fn protocol_tool_result_resumes_nested_code_mode_call() {
-        let definition: ToolDefinition = serde_json::from_value(json!({
-            "type": "function",
-            "name": "lookup",
-            "description": "Return a value.",
-            "strict": false,
-            "parameters": { "type": "object", "properties": {} }
-        }))
-        .expect("valid tool definition");
-        let result_directory = std::env::temp_dir().join(format!(
-            "nanocodex-runtime-test-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .expect("current time")
-                .as_nanos(),
-        ));
-        std::fs::create_dir(&result_directory).expect("result directory");
-        let (outbound, mut calls) = mpsc::unbounded_channel();
-        let tools = Tools::builder()
-            .without_defaults()
-            .tool(ProtocolTool {
-                request_id: Arc::from("request-test"),
-                definition,
-                outbound,
-                result_directory: Arc::new(result_directory.clone()),
-                result_sequence: Arc::new(AtomicU64::new(1)),
-            })
-            .build()
-            .expect("valid tools");
-        let runtime = ToolRuntime::new_with_tools(".", Vec::new(), &tools);
-        let result_sender = tokio::spawn(async move {
-            let call = calls.recv().await.expect("protocol tool call");
-            let call_id = call["call_id"].as_str().expect("call id").to_owned();
-            let result_file = call["result_file"].as_str().expect("result file");
-            std::fs::write(
-                result_directory.join(result_file),
-                serde_json::to_vec(&json!({
-                    "call_id": call_id,
-                    "success": true,
-                    "output": "bridge ok"
-                })).expect("result JSON"),
-            ).expect("write result");
-            result_directory
+    fn images_become_image_inputs_after_the_text() {
+        let prompt = prompt(PromptPayload {
+            text: "look".into(),
+            images: vec!["data:image/png;base64,AA==".into()],
         });
-        let history = Vec::new();
-        let context =
-            ToolContext::new("gpt-6-sol", "session-test", "outer-call", &history, 1_000);
-        let execution = timeout(
-            Duration::from_secs(2),
-            runtime.execute_code(
-                "const value = await tools.lookup({}); text(value);",
-                context,
-            ),
-        )
-        .await
-        .expect("code mode completed");
-
-        let result_directory = result_sender.await.expect("result sender completed");
-        std::fs::remove_dir_all(result_directory).expect("remove result directory");
-        let execution = execution.expect("Code Mode execution should complete");
-        assert!(execution.success);
-        assert_eq!(execution.nested_calls.len(), 1);
-    }
-
-    #[tokio::test]
-    async fn protocol_web_run_reaches_the_application_bridge() {
-        let definition: ToolDefinition = serde_json::from_value(json!({
-            "type": "function",
-            "name": "web__run",
-            "description": "Run web operations.",
-            "strict": false,
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "time": {
-                        "type": "array",
-                        "items": {
-                            "type": "object",
-                            "properties": { "utc_offset": { "type": "string" } },
-                            "required": ["utc_offset"],
-                            "additionalProperties": false
-                        }
-                    },
-                    "response_length": { "type": "string", "enum": ["short", "medium", "long"] }
-                },
-                "anyOf": [{ "required": ["time"] }],
-                "additionalProperties": false
-            }
-        }))
-        .expect("valid web tool definition");
-        let result_directory = std::env::temp_dir().join(format!(
-            "nanocodex-runtime-web-test-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .expect("current time")
-                .as_nanos(),
-        ));
-        std::fs::create_dir(&result_directory).expect("result directory");
-        let (outbound, mut calls) = mpsc::unbounded_channel();
-        let tools = Tools::builder()
-            .without_defaults()
-            .web_search(false)
-            .tool(ProtocolTool {
-                request_id: Arc::from("request-web-test"),
-                definition,
-                outbound,
-                result_directory: Arc::new(result_directory.clone()),
-                result_sequence: Arc::new(AtomicU64::new(1)),
-            })
-            .build()
-            .expect("valid tools");
-        let runtime = ToolRuntime::new_with_tools(".", Vec::new(), &tools);
-        let result_sender = tokio::spawn(async move {
-            let call = calls.recv().await.expect("protocol web tool call");
-            let call_id = call["call_id"].as_str().expect("call id").to_owned();
-            let result_file = call["result_file"].as_str().expect("result file");
-            std::fs::write(
-                result_directory.join(result_file),
-                serde_json::to_vec(&json!({
-                    "call_id": call_id,
-                    "success": true,
-                    "output": "web bridge ok"
-                })).expect("result JSON"),
-            ).expect("write result");
-            result_directory
-        });
-        let history = Vec::new();
-        let context = ToolContext::new("gpt-6-sol", "session-web-test", "outer-call", &history, 1_000);
-        let execution = timeout(
-            Duration::from_secs(2),
-            runtime.execute_code(
-                r#"const value = await tools.web__run({time:[{utc_offset:"+00:00"}],response_length:"short"}); text(value);"#,
-                context,
-            ),
-        )
-        .await
-        .expect("code mode completed");
-
-        let result_directory = result_sender.await.expect("result sender completed");
-        std::fs::remove_dir_all(result_directory).expect("remove result directory");
-        let execution = execution.expect("Code Mode execution should complete");
-        assert!(execution.success, "{execution:?}");
-        assert_eq!(execution.nested_calls.len(), 1);
+        let value = serde_json::to_value(&prompt).expect("serializes");
+        let content = value["instruction"].as_array().expect("content prompt");
+        assert_eq!(content[0]["type"], "text");
+        assert_eq!(content[1]["type"], "image");
+        assert_eq!(content[1]["image_url"], "data:image/png;base64,AA==");
     }
 }

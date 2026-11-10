@@ -24,6 +24,7 @@ jobs:
       deployable: ${{ steps.filter.outputs.deployable }}
       documentation: ${{ steps.filter.outputs.documentation }}
       infrastructure: ${{ steps.filter.outputs.infrastructure }}
+      native: ${{ steps.filter.outputs.native }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -51,6 +52,7 @@ jobs:
           deployable=false
           documentation=false
           infrastructure=false
+          native=false
           while IFS= read -r path; do
             case "$path" in
               README.md|AGENTS.md|docs/*|.github/pull_request_template.md)
@@ -70,6 +72,11 @@ jobs:
             case "$path" in
               .github/workflows/ci.yml|.github/workflows/deploy-k3s.yml|Dockerfile|.dockerignore|docker-bake.hcl|package.json|package-lock.json|tsconfig.json|vite.console.config.ts|src/*|scripts/*|migrations/*|skills/*|native/*|deploy/helm/*)
                 deployable=true
+                ;;
+            esac
+            case "$path" in
+              native/*|src/agent/nanocodeHost.ts|tests/native/*|tests/support/*|rust-toolchain.toml|.github/workflows/ci.yml)
+                native=true
                 ;;
             esac
             case "$path" in
@@ -94,6 +101,7 @@ jobs:
             printf 'deployable=%s\n' "$deployable"
             printf 'documentation=%s\n' "$documentation"
             printf 'infrastructure=%s\n' "$infrastructure"
+            printf 'native=%s\n' "$native"
           } >>"$GITHUB_OUTPUT"
 
   quality:
@@ -181,6 +189,50 @@ jobs:
       - run: npm run migrate
       - run: npm run test:db:coverage
 
+  native-runtime:
+    # The nanocode host: Rust checks, then the real binary driven end to end
+    # by the TypeScript client against a local fake model and Postgres.
+    needs: changes
+    if: needs.changes.outputs.native == 'true'
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: nanocode
+          POSTGRES_PASSWORD: nanocode
+          POSTGRES_DB: nanocode
+        ports:
+          - 5434:5432
+        options: >-
+          --health-cmd "pg_isready -U nanocode -d nanocode"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 20
+    env:
+      MANIFEST: native/nanocodex-runtime/Cargo.toml
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            native/nanocodex-runtime/target
+          key: native-${{ runner.os }}-${{ hashFiles('rust-toolchain.toml', 'native/nanocodex-runtime/Cargo.lock') }}
+      - run: cargo fmt --check --manifest-path "$MANIFEST"
+      - run: cargo clippy --locked --all-targets --manifest-path "$MANIFEST" -- -D warnings
+      - run: cargo test --locked --manifest-path "$MANIFEST"
+      - run: cargo build --locked --manifest-path "$MANIFEST"
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npx vitest run tests/native
+        env:
+          NANOCODE_TEST_DATABASE_URL: postgres://nanocode:nanocode@127.0.0.1:5434/nanocode
+
   infrastructure:
     needs: changes
     if: >-
@@ -247,7 +299,6 @@ jobs:
           # after a partial publish reuses images already pushed for this tag.
           targets=()
           aws ecr describe-images --repository-name "$ECR_REPOSITORY" --image-ids "imageTag=$TAG" >/dev/null 2>&1 || targets+=(runtime)
-          aws ecr describe-images --repository-name "$ECR_REPOSITORY-sandbox" --image-ids "imageTag=$TAG" >/dev/null 2>&1 || targets+=(codegen)
           echo "targets=$(IFS=,; echo "${targets[*]}")" >>"$GITHUB_OUTPUT"
       - name: Build and publish tree-addressed candidate images
         if: steps.missing.outputs.targets != ''
@@ -259,9 +310,7 @@ jobs:
           targets: ${{ steps.missing.outputs.targets }}
           set: |
             runtime.tags=${{ steps.ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ steps.identity.outputs.tree_tag }}
-            codegen.tags=${{ steps.ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}-sandbox:${{ steps.identity.outputs.tree_tag }}
             runtime.cache-from=type=gha,scope=runtime
-            codegen.cache-from=type=gha,scope=codegen
 
   candidate-security:
     needs: [changes, candidate-images]
@@ -362,6 +411,7 @@ jobs:
       - quality
       - repository-policy
       - verify-db
+      - native-runtime
       - infrastructure
       - candidate-images
       - candidate-security
@@ -416,19 +466,12 @@ jobs:
           REGISTRY: ${{ steps.ecr.outputs.registry }}
           TREE_TAG: ${{ steps.identity.outputs.tree_tag }}
         run: |
-          # The sandbox image is promoted first so a runtime release tag never
-          # exists without its matching sandbox image.
-          docker buildx imagetools create \
-            --tag "$REGISTRY/$ECR_REPOSITORY-sandbox:$IMAGE_TAG" \
-            "$REGISTRY/$ECR_REPOSITORY-sandbox:$TREE_TAG"
           docker buildx imagetools create \
             --tag "$REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" \
             "$REGISTRY/$ECR_REPOSITORY:$TREE_TAG"
-          for repository in "$ECR_REPOSITORY-sandbox" "$ECR_REPOSITORY"; do
-            aws ecr batch-delete-image \
-              --repository-name "$repository" \
-              --image-ids "imageTag=$TREE_TAG" >/dev/null || true
-          done
+          aws ecr batch-delete-image \
+            --repository-name "$ECR_REPOSITORY" \
+            --image-ids "imageTag=$TREE_TAG" >/dev/null || true
       - name: Require the exact verified candidate
         if: vars.CANDIDATE_IMAGE_PUBLISHING_ENABLED == 'true' && steps.promote.outcome != 'success'
         run: |
@@ -444,7 +487,6 @@ jobs:
           # after a partial publish reuses images already pushed for this tag.
           targets=()
           aws ecr describe-images --repository-name "$ECR_REPOSITORY" --image-ids "imageTag=$TAG" >/dev/null 2>&1 || targets+=(runtime)
-          aws ecr describe-images --repository-name "$ECR_REPOSITORY-sandbox" --image-ids "imageTag=$TAG" >/dev/null 2>&1 || targets+=(codegen)
           echo "targets=$(IFS=,; echo "${targets[*]}")" >>"$GITHUB_OUTPUT"
       - name: Build and publish images when no verified candidate exists
         if: vars.CANDIDATE_IMAGE_PUBLISHING_ENABLED != 'true' && steps.missing.outputs.targets != ''
@@ -456,11 +498,8 @@ jobs:
           targets: ${{ steps.missing.outputs.targets }}
           set: |
             runtime.tags=${{ steps.ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ env.IMAGE_TAG }}
-            codegen.tags=${{ steps.ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}-sandbox:${{ env.IMAGE_TAG }}
             runtime.cache-from=type=gha,scope=runtime
-            codegen.cache-from=type=gha,scope=codegen
             runtime.cache-to=type=gha,mode=max,scope=runtime,ignore-error=true
-            codegen.cache-to=type=gha,mode=max,scope=codegen,ignore-error=true
 
   deploy-k3s:
     needs: [changes, verify, publish-images]

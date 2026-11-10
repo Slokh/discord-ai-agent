@@ -1,12 +1,10 @@
 import "dotenv/config";
 import { existsSync } from "node:fs";
 import { z } from "zod";
-import { parseGitHubRepository } from "../github/repository.js";
 import { assertNoRetiredEnvironmentVariables, environmentVariableNames } from "./environment.js";
 import { CONSOLE_PUBLIC_URL } from "../console/constants.js";
-import { SANDBOX_TASK_MODES, sandboxProfileRequires, taskTypeForSandboxMode, type SandboxModeRollout, type SandboxTaskMode } from "../execution/sandboxProfiles.js";
 
-type ProcessRole = "all" | "api" | "bot" | "worker" | "console";
+type ProcessRole = "all" | "bot" | "worker" | "console";
 const PUBLIC_REPOSITORY_URL = "https://github.com/Slokh/discord-ai-agent";
 
 /**
@@ -25,78 +23,21 @@ export const productConfig = {
     appTitle: "Discord AI Agent",
     httpReferer: PUBLIC_REPOSITORY_URL,
     chat: "openai/gpt-6-luna",
-    codegen: "openai/gpt-6-luna",
+    // Used for a turn only when the primary model fails before any tool ran.
+    chatFallback: "openai/gpt-6-sol",
     utility: "openai/gpt-6-luna",
     embedding: "qwen/qwen3-embedding-8b",
     image: "google/gemini-3.1-flash-image",
     transcription: "openai/whisper-large-v3-turbo",
     embeddingDimensions: 1_536
   },
-  github: { repository: new URL(PUBLIC_REPOSITORY_URL).pathname.slice(1), baseBranch: "main" },
-  callback: {
-    host: "0.0.0.0",
-    port: 8_080,
-    internalUrl: "http://discord-ai-agent-api:8080"
-  },
   console: { host: "0.0.0.0", port: 8_081, publicUrl: CONSOLE_PUBLIC_URL },
-  sandbox: {
-    namespace: "discord-ai-agent",
-    image: "discord-ai-agent-sandbox:latest",
-    imagePullPolicy: "IfNotPresent",
-    serviceAccountName: "discord-ai-agent-sandbox",
-    cpuRequest: "500m",
-    cpuLimit: "2",
-    memoryRequest: "512Mi",
-    memoryLimit: "2Gi",
-    // Keep V8's old-space limit below the 2 GiB container limit. Native
-    // allocations and child-process overhead need the remaining headroom.
-    nodeHeapMb: 1_536,
-    // The shared production node is intentionally small. Keep repository
-    // sandboxes serial so bursty repair intake queues instead of competing for
-    // memory and causing unrelated workspaces to be evicted together.
-    maxConcurrentTasks: 1,
-    taskTimeoutSeconds: 1_800,
-    ttlSecondsAfterFinished: 3_600,
-    // Who may start each sandbox task mode: "off", "operators" (the bot owner
-    // and ops allowlist), or "everyone". Every mode shares one sandbox
-    // implementation. The execution subsystem stays dormant while every mode
-    // is off. Computer tasks are paused until their latency and cost are
-    // reviewed; the sandbox pool stays installed and scales to zero.
-    modes: { code_change: "off", diagnosis: "off", computer: "off" } satisfies Record<SandboxTaskMode, SandboxModeRollout> as Record<SandboxTaskMode, SandboxModeRollout>,
-    // Every sandbox Job runs on the dedicated tainted pool under gVisor, never
-    // beside production Postgres. Names match the Helm chart and Terraform.
-    isolation: {
-      nodeSelector: { "discord-ai-agent.dev/pool": "sandbox" },
-      tolerations: [{ key: "discord-ai-agent.dev/sandbox", operator: "Equal", value: "true", effect: "NoSchedule" }],
-      runtimeClassName: "gvisor",
-      priorityClassName: "discord-ai-agent-sandbox",
-    },
-    // Sandboxes hold only public placeholder credentials. The in-cluster
-    // egress proxy swaps them for real ones on verified TLS to the credential
-    // host, and only on the port the profile's egress tier may reach: GitHub
-    // is never injectable from a pod that runs member-supplied programs.
-    egress: {
-      labelKey: "discord-ai-agent.dev/egress",
-      tiers: {
-        credentialed: { label: "credentialed", proxyUrl: "http://discord-ai-agent-egress-proxy:8080" },
-        model: { label: "model", proxyUrl: "http://discord-ai-agent-egress-proxy:8082" },
-      },
-      noProxy: "discord-ai-agent-api,.svc,.cluster.local,localhost,127.0.0.1",
-      placeholders: {
-        openrouter: "discord-ai-agent-egress-placeholder-openrouter",
-        github: "discord-ai-agent-egress-placeholder-github",
-      },
-      ca: { configMap: "discord-ai-agent-egress-proxy-ca", key: "ca.crt", mountDir: "/etc/discord-ai-agent/egress-proxy" },
-    },
-  },
   retention: { runtimeEventsDays: 60, auditDays: 90, runtimeSessionsDays: 90, terminalRemindersDays: 90 },
   memory: { compactionThreshold: 100, compactionKeepRecent: 30 },
   crawl: { batchSize: 100, fetchRetries: 3, retryBaseMs: 1_000, retryMaxMs: 30_000, scheduleCron: "0 6 * * *" },
-  improvements: { reconcileScheduleCron: "*/5 * * * *", stalledAfterMs: 24 * 60 * 60 * 1_000 },
   context: { maxHistoryResults: 10, maxThreadSummaryMessages: 80, agentPromptMaxConcurrency: 4 },
   chatTimeouts: { silenceMs: 120_000, hardMs: 600_000 },
   payments: { balancesPublic: true, network: "mainnet" as "moderato" | "mainnet", usdToken: "USDC.e", initialGrantUsd: 0.1 },
-  spotifyMarket: "US",
   promptOverlayPath: ".discord-ai-agent/prompt-overlay.md"
 };
 
@@ -104,28 +45,14 @@ const envSchema = z.object({
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
   APP_REVISION: z.string().trim().default("unknown"),
   RELEASE_VERIFICATION_ID: z.string().trim().default(""),
-  PREVIOUS_APP_REVISION: z.string().trim().default(""),
-  DISCORD_BOT_CHANNEL_ID: z.string().trim().default("").refine(
-    (value) => value === "" || /^\d{17,20}$/.test(value),
-    "Discord bot channel ID must be a Discord snowflake."
-  ),
 
   DISCORD_TOKEN: z.string().optional(),
   DISCORD_CLIENT_ID: z.string().trim().default(""),
   DISCORD_CLIENT_SECRET: z.string().trim().default(""),
   DISCORD_GUILD_ID: z.string().trim().default(""),
-  DISCORD_PREMIUM_SKU_IDS: z.string().trim().default("").refine(
-    (value) => value === "" || value.split(",").every((id) => /^\d{17,20}$/.test(id.trim())),
-    "DISCORD_PREMIUM_SKU_IDS must be a comma-separated list of Discord snowflakes."
-  ),
   DATABASE_URL: z.string().default(defaultDatabaseUrl()),
   OPENROUTER_API_KEY: z.string().optional(),
 
-  GITHUB_TOKEN: z.string().optional(),
-  GITHUB_APP_ID: z.string().trim().default(""),
-  GITHUB_APP_PRIVATE_KEY: z.string().default(""),
-  GITHUB_APP_INSTALLATION_ID: z.string().trim().default(""),
-  TASK_SIGNING_SECRET: z.string().default(""),
   CONSOLE_SESSION_SECRET: z.string().trim().default("").refine(
     (value) => value === "" || value.length >= 32,
     "CONSOLE_SESSION_SECRET must contain at least 32 characters.",
@@ -133,13 +60,8 @@ const envSchema = z.object({
 
   BOT_OWNER_USER_ID: z.string().trim().default(""),
   OPS_ALLOWLIST_USER_IDS: z.string().default(""),
-  SPOTIFY_CLIENT_ID: z.string().default(""),
-  SPOTIFY_CLIENT_SECRET: z.string().default(""),
   PRIVY_APP_ID: z.string().trim().optional(),
   PRIVY_APP_SECRET: z.string().trim().optional(),
-
-  POD_NAMESPACE: z.string().trim().optional(),
-  SANDBOX_IMAGE: z.string().trim().optional()
 });
 
 const runtimeEnvironmentSchemaNames = new Set(Object.keys(envSchema.shape));
@@ -172,8 +94,7 @@ export function loadConfig(argv = process.argv) {
     nodeEnv: env.NODE_ENV,
     appRevision: env.APP_REVISION || "unknown",
     releaseNotes: {
-      verificationId: env.RELEASE_VERIFICATION_ID || null,
-      previousRevision: env.PREVIOUS_APP_REVISION || null
+      verificationId: env.RELEASE_VERIFICATION_ID || null
     },
     logLevel: defaultLogLevel(env.NODE_ENV),
     processRole,
@@ -183,10 +104,8 @@ export function loadConfig(argv = process.argv) {
       clientId: env.DISCORD_CLIENT_ID,
       clientSecret: env.DISCORD_CLIENT_SECRET,
       guildId: env.DISCORD_GUILD_ID,
-      botChannelId: env.DISCORD_BOT_CHANNEL_ID || null,
       botName: productConfig.discord.botName,
       loadingReaction: productConfig.discord.loadingReaction,
-      premiumSkuIds: parseCsv(env.DISCORD_PREMIUM_SKU_IDS)
     },
     databaseUrl: env.DATABASE_URL,
     embeddingDimensions: productConfig.models.embeddingDimensions,
@@ -196,21 +115,12 @@ export function loadConfig(argv = process.argv) {
       appTitle: productConfig.models.appTitle,
       httpReferer: productConfig.models.httpReferer,
       chatModel: productConfig.models.chat,
-      codegenModel: productConfig.models.codegen,
+      chatFallbackModel: productConfig.models.chatFallback,
       utilityModel: productConfig.models.utility,
       embeddingModel: productConfig.models.embedding,
       imageModel: productConfig.models.image,
       transcriptionModel: productConfig.models.transcription
     },
-    github: {
-      token: env.GITHUB_TOKEN,
-      repository: productConfig.github.repository,
-      baseBranch: productConfig.github.baseBranch,
-      appId: env.GITHUB_APP_ID,
-      appPrivateKey: env.GITHUB_APP_PRIVATE_KEY,
-      appInstallationId: env.GITHUB_APP_INSTALLATION_ID
-    },
-    callbackServer: { host: productConfig.callback.host, port: productConfig.callback.port },
     consoleServer: { host: productConfig.console.host, port: productConfig.console.port },
     consoleAuth: {
       publicUrl: productConfig.console.publicUrl,
@@ -219,35 +129,12 @@ export function loadConfig(argv = process.argv) {
       guildId: env.DISCORD_GUILD_ID,
       sessionSecret: env.CONSOLE_SESSION_SECRET,
     },
-    execution: {
-      taskSigningSecret: env.TASK_SIGNING_SECRET,
-      sandbox: {
-        maxConcurrentTasks: productConfig.sandbox.maxConcurrentTasks,
-        taskTimeoutSeconds: productConfig.sandbox.taskTimeoutSeconds,
-        modes: { ...productConfig.sandbox.modes },
-      },
-      kubernetes: {
-        namespace: env.POD_NAMESPACE || productConfig.sandbox.namespace,
-        sandboxImage: env.SANDBOX_IMAGE || productConfig.sandbox.image,
-        imagePullPolicy: productConfig.sandbox.imagePullPolicy,
-        serviceAccountName: productConfig.sandbox.serviceAccountName,
-        cpuRequest: productConfig.sandbox.cpuRequest,
-        cpuLimit: productConfig.sandbox.cpuLimit,
-        memoryRequest: productConfig.sandbox.memoryRequest,
-        memoryLimit: productConfig.sandbox.memoryLimit,
-        ttlSecondsAfterFinished: productConfig.sandbox.ttlSecondsAfterFinished,
-        isolation: productConfig.sandbox.isolation,
-        egress: productConfig.sandbox.egress,
-      }
-    },
     worker: {
       crawlEnabled: true,
       // Structured and keyword retrieval are the production default. Keep the
       // optional paid embedding consumer dormant unless it is redesigned as an
       // explicit, bounded backfill.
       embeddingEnabled: false,
-      // The sandbox task worker runs only when some sandbox mode is enabled.
-      taskEnabled: Object.values(productConfig.sandbox.modes).some((rollout) => rollout !== "off"),
       agentRuntimeEnabled: true,
       retention: productConfig.retention,
       memoryCompaction: {
@@ -260,8 +147,6 @@ export function loadConfig(argv = process.argv) {
     crawlRetryBaseMs: productConfig.crawl.retryBaseMs,
     crawlRetryMaxMs: productConfig.crawl.retryMaxMs,
     crawlScheduleCron: productConfig.crawl.scheduleCron,
-    improvementReconcileScheduleCron: productConfig.improvements.reconcileScheduleCron,
-    improvementStalledAfterMs: productConfig.improvements.stalledAfterMs,
     maxHistoryResults: productConfig.context.maxHistoryResults,
     maxThreadSummaryMessages: productConfig.context.maxThreadSummaryMessages,
     maxReplyChars: productConfig.discord.maxReplyChars,
@@ -273,7 +158,6 @@ export function loadConfig(argv = process.argv) {
       imageToolsAllowlistOnly: false
     },
     chatTimeouts: productConfig.chatTimeouts,
-    spotify: { clientId: env.SPOTIFY_CLIENT_ID, clientSecret: env.SPOTIFY_CLIENT_SECRET, market: productConfig.spotifyMarket },
     payments: {
       walletEnabled,
       userWalletsEnabled: walletEnabled,
@@ -289,7 +173,7 @@ export function loadConfig(argv = process.argv) {
 }
 
 function processRoleFromArgs(argv = process.argv): ProcessRole {
-  return argv.find((arg): arg is ProcessRole => ["all", "api", "bot", "worker", "console"].includes(arg)) ?? "bot";
+  return argv.find((arg): arg is ProcessRole => ["all", "bot", "worker", "console"].includes(arg)) ?? "bot";
 }
 
 function defaultDatabaseUrl() {
@@ -351,28 +235,4 @@ export function assertOpenRouterConfig(config: AppConfig): asserts config is App
   openRouter: AppConfig["openRouter"] & { apiKey: string };
 } {
   if (!config.openRouter.apiKey) throw new Error("OPENROUTER_API_KEY is required for model calls.");
-}
-
-export function assertTaskCallbackConfig(config: AppConfig): asserts config is AppConfig & {
-  execution: AppConfig["execution"] & { taskSigningSecret: string };
-} {
-  if (!config.execution.taskSigningSecret) throw new Error("TASK_SIGNING_SECRET is required for sandbox task callbacks.");
-}
-
-export function assertExecutionConfig(config: AppConfig): asserts config is AppConfig & {
-  execution: AppConfig["execution"] & { taskSigningSecret: string };
-  openRouter: AppConfig["openRouter"] & { apiKey: string };
-} {
-  assertTaskCallbackConfig(config);
-  const missing: string[] = [];
-  if (!config.openRouter.apiKey) missing.push("OPENROUTER_API_KEY");
-  const repositoryModesEnabled = SANDBOX_TASK_MODES.some((mode) =>
-    config.execution.sandbox.modes[mode] !== "off" && sandboxProfileRequires(taskTypeForSandboxMode(mode), "github"));
-  if (repositoryModesEnabled && !hasGitHubTaskCredential(config)) missing.push("GITHUB_TOKEN or GitHub App credentials");
-  if (missing.length > 0) throw new Error(`Missing required sandbox execution secret/config values: ${missing.join(", ")}`);
-  if (repositoryModesEnabled) parseGitHubRepository(config.github.repository);
-}
-
-export function hasGitHubTaskCredential(config: AppConfig) {
-  return Boolean(config.github.token || (config.github.appId && config.github.appPrivateKey && config.github.appInstallationId));
 }

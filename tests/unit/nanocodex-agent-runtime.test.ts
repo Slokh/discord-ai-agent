@@ -1,118 +1,202 @@
 import { describe, expect, it, vi } from "vitest";
-import { executeNanoCodexAgentRuntime, nanoCodexSnapshotContinuityKey } from "../../src/agent/nanocodexAgentRuntime.js";
+import { buildSessionPrompt, executeNanoCodexAgentRuntime, sessionKeyFor, steerActiveTurn } from "../../src/agent/nanocodexAgentRuntime.js";
+import { nanocodeSessionId, type NanocodeHostClient } from "../../src/agent/nanocodeHost.js";
+import { sessionToolDefinitions } from "../../src/agent/sharedNanocodeHost.js";
 import { loadConfig } from "../../src/config/env.js";
 import { OpenRouterHttpError } from "../../src/models/openrouter.js";
 import { localToolDefinitionsForModel } from "../../src/tools/registry.js";
 
 describe("NanoCodex agent runtime executor", () => {
-  it("keys retained checkpoints to the reply root and current requester", () => {
-    expect(nanoCodexSnapshotContinuityKey({
-      threadKey: "discord:guild:channel",
-      requestMessageId: "current-message",
-      userId: "member-1",
-      replyContext: { rootMessageId: "root-message" },
-    } as never)).toBe("root-message:member-1");
-    expect(nanoCodexSnapshotContinuityKey({
-      threadKey: "discord:guild:channel",
-      requestMessageId: "current-message",
-      userId: "member-2",
-      replyContext: { rootMessageId: "root-message" },
-    } as never)).toBe("root-message:member-2");
-    expect(nanoCodexSnapshotContinuityKey({
-      threadKey: "local-prompt:guild:channel:member-1",
-      requestMessageId: "local-message",
-      userId: "member-1",
-    } as never)).toBeNull();
-  });
-
-  it("keeps the canonical nested tool contract visible to the model", () => {
-    const definitions = localToolDefinitionsForModel();
-    const presentation = definitions.find((tool) => tool.function.name === "composeDiscordResponse");
-    expect(JSON.stringify(presentation?.function.parameters)).toContain('"media_gallery"');
-    expect(presentation?.function.parameters).toBe(
-      localToolDefinitionsForModel().find((tool) => tool.function.name === "composeDiscordResponse")?.function.parameters,
-    );
-  });
-
-  it("runs a retained NanoCodex turn with the full deployment-safe tool contract", async () => {
+  it("runs a session turn with stable instructions and an attributed message", async () => {
     const runtime = agentRuntime();
-    const runRuntime = vi.fn(async (input: any) => {
-      expect(input.model).toBe("openai/gpt-6-luna");
-      expect(input.thinking).toBe("max");
-      expect(input.sessionId).toMatch(/^[0-9a-f-]+$/);
-      expect(input.sessionId).not.toBe("018f1f9a-7b3c-7a01-8000-000000000001");
-      expect(input.hostedWebSearch).toBe(false);
+    const runTurn = vi.fn(async (input: any) => {
+      expect(input.model).toBe("gpt-6-luna");
+      expect(input.thinking).toBe("high");
+      expect(input.sessionId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+      expect(input.requestId).toBe("request-1");
       expect(input.instructions).not.toContain("Current Discord requester: Kartik");
-      expect(input.tools.find((tool: any) => tool.function.name === "inspectDiscordImages")?.function.description)
-        .toContain("pass its direct text result to text(...); do not read .content or repeat the call");
-      expect(input.prompt).toContain("Current Discord requester: Kartik");
-      expect(input.prompt).not.toContain("authorized server override");
-      expect(input.prompt).toContain("USER: hello");
-      expect(input.tools.map((tool: any) => tool.function.name)).toEqual(expect.arrayContaining(["loadSkillContext", "drawRandom", "web__run"]));
+      expect(input.instructions).toContain("<message from=");
+      expect(input.prompt.text).toContain("Current Discord requester: Kartik");
+      expect(input.prompt.text).toContain('<message from="Kartik" user_id="user-1">\nhello\n</message>');
+      expect(input.prompt.images).toEqual([]);
+      expect(input.bootstrap).toBeUndefined();
       await expect(input.executeTool({ callId: "bad-1", name: "notRegistered", arguments: {} })).resolves.toEqual({
         success: false,
         output: "Tool notRegistered is not available for this request.",
       });
       await input.onEvent({
-        protocol_version: 1,
-        request_id: "nano-request-1",
-        seq: 7,
         type: "tool.call",
-        payload: {
-          tool: "exec",
-          call_id: "call-1",
-          arguments: "sensitive arguments are not retained",
-          model_call_index: 1,
-        },
+        seq: 7,
+        payload: { tool: "exec", call_id: "call-1", arguments: "sensitive arguments are not retained", model_call_index: 1 },
       });
-      return result("hello from NanoCodex");
+      return result("hello from nanocode");
     });
 
     await expect(executeNanoCodexAgentRuntime({
       toolContext: toolContext(runtime),
       text: "hello",
       timeoutMs: 1_000,
-      runRuntime: runRuntime as never,
-    })).resolves.toMatchObject({ content: "hello from NanoCodex" });
+      host: fakeHost(runTurn),
+    })).resolves.toMatchObject({ content: "hello from nanocode" });
 
-    expect(runtime.storeBinaryArtifact).toHaveBeenCalledWith(expect.objectContaining({
-      kind: "nanocodex_session_snapshot",
-      sessionId: "018f1f9a-7b3c-7a01-8000-000000000001",
-      executionId: "execution-1",
-    }));
-    expect(runtime.recordEvent).toHaveBeenCalledWith(expect.objectContaining({
-      eventName: "agent.nanocodex.complete",
-    }));
+    expect(runtime.recordEvent).toHaveBeenCalledWith(expect.objectContaining({ eventName: "agent.nanocodex.complete" }));
     expect(runtime.recordEvent).toHaveBeenCalledWith(expect.objectContaining({
       eventName: "agent.nanocodex.tool.call",
-      summary: "NanoCodex tool.call: exec",
-      metadata: expect.objectContaining({ toolName: "exec", callId: "call-1" }),
+      summary: "nanocode tool.call: exec",
+      metadata: expect.objectContaining({ toolName: "exec", callId: "call-1", nanoSequence: 7 }),
     }));
     expect(runtime.recordEvent).not.toHaveBeenCalledWith(expect.objectContaining({
       metadata: expect.objectContaining({ arguments: expect.anything() }),
     }));
   });
 
-  it("advertises only non-mutating tools to scheduled executions", async () => {
+  it("gives the session the deployment's full tool catalog", () => {
+    const names = sessionToolDefinitions(localToolDefinitionsForModel()).map((tool) => tool.name);
+    expect(names).toEqual(expect.arrayContaining(["loadSkillContext", "drawRandom", "web__run"]));
+    const images = sessionToolDefinitions(localToolDefinitionsForModel()).find((tool) => tool.name === "inspectDiscordImages");
+    expect(images?.description).toContain("pass its direct text result to text(...); do not read .content or repeat the call");
+  });
+
+  it("refuses mutating tools in read-only executions without changing the catalog", async () => {
     const runtime = agentRuntime();
     const ctx = toolContext(runtime);
     ctx.readOnlyExecution = true;
     ctx.mutationAuthorizedByCurrentInput = false;
-    const runRuntime = vi.fn(async (input: any) => {
-      const names = input.tools.map((tool: any) => tool.function.name);
-      expect(names).toContain("web__run");
-      expect(names).toContain("searchDiscordHistory");
-      expect(names).not.toContain("setReminder");
-      expect(names).not.toContain("transferWalletFunds");
-      return result("scheduled answer");
+    const runTurn = vi.fn(async (input: any) => {
+      await expect(input.executeTool({ callId: "m-1", name: "transferWalletFunds", arguments: {} })).resolves.toEqual({
+        success: false,
+        output: "Tool transferWalletFunds is not available for this request.",
+      });
+      return result("read-only answer");
     });
 
     await expect(executeNanoCodexAgentRuntime({
       toolContext: ctx,
       text: "summarize yesterday",
       timeoutMs: 1_000,
-      runRuntime: runRuntime as never,
-    })).resolves.toMatchObject({ content: "scheduled answer" });
+      host: fakeHost(runTurn),
+    })).resolves.toMatchObject({ content: "read-only answer" });
+  });
+
+  it("keys sessions to the thread, the requester and the session contract", () => {
+    const tools = sessionToolDefinitions(localToolDefinitionsForModel());
+    const ctx = { threadKey: "discord:g:c", guildId: "g", channelId: "c", userId: "member-1" };
+    const key = sessionKeyFor(ctx, "instructions", tools, "openai/gpt-6-luna");
+    expect(sessionKeyFor(ctx, "instructions", tools, "gpt-6-luna")).toBe(key);
+    expect(sessionKeyFor({ ...ctx, userId: "member-2" }, "instructions", tools, "openai/gpt-6-luna")).not.toBe(key);
+    expect(sessionKeyFor({ ...ctx, threadKey: "discord:g:other" }, "instructions", tools, "openai/gpt-6-luna")).not.toBe(key);
+    expect(sessionKeyFor(ctx, "changed instructions", tools, "openai/gpt-6-luna")).not.toBe(key);
+    expect(sessionKeyFor(ctx, "instructions", tools, "openai/gpt-6-sol")).not.toBe(key);
+    expect(nanocodeSessionId(key)).toBe(nanocodeSessionId(key));
+  });
+
+  it("offers earlier conversation only as bootstrap for a new session", async () => {
+    const ctx = toolContext(agentRuntime());
+    ctx.sessionMessages = [
+      { role: "user", content: "first request", authorDisplayName: "Kartik", metadata: {} },
+      { role: "assistant", content: "first answer", metadata: {} },
+    ] as never;
+    const prompt = await buildSessionPrompt(ctx, "second request", []);
+    expect(prompt.bootstrap).toContain("Kartik: first request");
+    expect(prompt.bootstrap).toContain("You: first answer");
+    expect(prompt.text).not.toContain("first answer");
+    expect(prompt.text).toContain('<message from="Kartik" user_id="user-1">\nsecond request\n</message>');
+    expect(prompt.instructions).not.toContain("first request");
+  });
+
+  it("retries once on the fallback model when the primary fails before any tool ran", async () => {
+    const runtime = agentRuntime();
+    const calls: any[] = [];
+    const runTurn = vi.fn(async (input: any) => {
+      calls.push(input);
+      if (calls.length === 1) throw new Error("provider unavailable");
+      return result("fallback answer");
+    });
+    await expect(executeNanoCodexAgentRuntime({
+      toolContext: toolContext(runtime),
+      text: "hello",
+      timeoutMs: 1_000,
+      host: fakeHost(runTurn),
+    })).resolves.toMatchObject({ content: "fallback answer" });
+    expect(calls.map((call) => call.model)).toEqual(["gpt-6-luna", "gpt-6-sol"]);
+    expect(calls[1].requestId).toBe("request-1:fallback");
+    expect(calls[1].sessionId).not.toBe(calls[0].sessionId);
+    expect(runtime.recordEvent).toHaveBeenCalledWith(expect.objectContaining({ eventName: "agent.nanocodex.fallback_model" }));
+  });
+
+  it("does not retry on the fallback model after a tool ran", async () => {
+    const runtime = agentRuntime();
+    const runTurn = vi.fn(async (input: any) => {
+      await input.executeTool({ callId: "c-1", name: "notRegistered", arguments: {} });
+      throw new Error("provider unavailable");
+    });
+    await expect(executeNanoCodexAgentRuntime({
+      toolContext: toolContext(runtime),
+      text: "hello",
+      timeoutMs: 1_000,
+      host: fakeHost(runTurn),
+    })).rejects.toThrow("provider unavailable");
+    expect(runTurn).toHaveBeenCalledTimes(1);
+  });
+
+  it("steers a requester's follow-up into their running turn only", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const steer = vi.fn(async () => true);
+    const host: NanocodeHostClient = {
+      runTurn: vi.fn(async () => { await gate; return result("answered both"); }) as never,
+      steer,
+      activeRequest: () => undefined,
+      stop: async () => undefined,
+    };
+    const running = executeNanoCodexAgentRuntime({ toolContext: toolContext(agentRuntime()), text: "first", timeoutMs: 5_000, host });
+    await vi.waitFor(() => expect(host.runTurn).toHaveBeenCalled());
+
+    await expect(steerActiveTurn({ threadKey: "discord:guild-1:channel-1", userId: "user-2", userDisplayName: "Other", steerId: "s-0", text: "not mine" }))
+      .resolves.toBeUndefined();
+    await expect(steerActiveTurn({ threadKey: "discord:guild-1:channel-1", userId: "user-1", userDisplayName: "Kartik", steerId: "s-1", text: "also this" }))
+      .resolves.toBe("request-1");
+    expect(steer).toHaveBeenCalledWith(expect.objectContaining({
+      requestId: "request-1",
+      steerId: "s-1",
+      prompt: expect.objectContaining({ text: expect.stringContaining('<message from="Kartik" user_id="user-1">\nalso this\n</message>') }),
+    }));
+
+    release();
+    await expect(running).resolves.toMatchObject({ content: "answered both" });
+    await expect(steerActiveTurn({ threadKey: "discord:guild-1:channel-1", userId: "user-1", userDisplayName: "Kartik", steerId: "s-2", text: "late" }))
+      .resolves.toBeUndefined();
+  });
+
+  it("repairs a turn that ended without a reply in the same session", async () => {
+    const runtime = agentRuntime();
+    const calls: any[] = [];
+    const runTurn = vi.fn(async (input: any) => {
+      calls.push(input);
+      return calls.length === 1 ? result("  ") : result("Here is the answer.");
+    });
+    await expect(executeNanoCodexAgentRuntime({
+      toolContext: toolContext(runtime),
+      text: "hello",
+      timeoutMs: 1_000,
+      host: fakeHost(runTurn),
+    })).resolves.toMatchObject({ content: "Here is the answer." });
+    expect(calls).toHaveLength(2);
+    expect(calls[1].requestId).toBe("request-1:repair");
+    expect(calls[1].sessionId).toBe(calls[0].sessionId);
+    expect(runtime.recordEvent).toHaveBeenCalledWith(expect.objectContaining({
+      eventName: "agent.nanocodex.complete",
+      metadata: expect.objectContaining({ repaired: true, contract: expect.stringMatching(/^[0-9a-f]{16}$/) }),
+    }));
+  });
+
+  it("keeps the canonical nested tool contract visible to the model", () => {
+    const definitions = localToolDefinitionsForModel();
+    const draw = definitions.find((tool) => tool.function.name === "drawRandom");
+    expect(JSON.stringify(draw?.function.parameters)).toContain('"wager"');
+    expect(draw?.function.parameters).toBe(
+      localToolDefinitionsForModel().find((tool) => tool.function.name === "drawRandom")?.function.parameters,
+    );
   });
 
   it("continues final synthesis when a non-mutating tool implementation throws", async () => {
@@ -147,7 +231,7 @@ describe("NanoCodex agent runtime executor", () => {
       toolContext: ctx,
       text: "inspect this image",
       timeoutMs: 1_000,
-      runRuntime: runRuntime as never,
+      host: fakeHost(runRuntime),
     })).resolves.toMatchObject({
       content: "I couldn’t inspect that image because the visual lookup failed.",
     });
@@ -181,7 +265,7 @@ describe("NanoCodex agent runtime executor", () => {
       toolContext: toolContext(runtime),
       text: "summarize this video",
       timeoutMs: 1_000,
-      runRuntime: runRuntime as never,
+      host: fakeHost(runRuntime),
       executeToolRoute: (async () => ({
         content: "The requested content could not be retrieved.",
         status: "error" as const,
@@ -226,126 +310,9 @@ describe("NanoCodex agent runtime executor", () => {
       toolContext: toolContext(runtime),
       text: "find a current answer",
       timeoutMs: 1_000,
-      runRuntime: runRuntime as never,
+      host: fakeHost(runRuntime),
       executeToolRoute: executeToolRoute as never,
     })).resolves.toMatchObject({ content: "Here is the verified answer." });
-  });
-
-  it("starts fresh from legacy checkpoints whose resume contract is unavailable", async () => {
-    const runtime = agentRuntime();
-    runtime.getLatestBinaryArtifactForSession.mockResolvedValue({
-      artifact: {} as never,
-      data: Buffer.from(JSON.stringify(snapshot()), "utf8"),
-    });
-    const runRuntime = vi.fn(async (input: any) => {
-      expect(input.resume).toBeUndefined();
-      expect(input.prompt).toContain("USER: User: old request");
-      expect(input.prompt).toContain("USER: current request");
-      return result("resumed");
-    });
-
-    const ctx = toolContext(runtime);
-    ctx.sessionMessages = [{ role: "user", content: "old request" } as never];
-    await executeNanoCodexAgentRuntime({
-      toolContext: ctx,
-      text: "current request",
-      timeoutMs: 1_000,
-      runRuntime: runRuntime as never,
-    });
-  });
-
-  it("resumes only the checkpoint anchored to an explicit Discord reply chain", async () => {
-    const runtime = agentRuntime();
-    let firstInstructions = "";
-    const firstRun = vi.fn(async (input: any) => {
-      firstInstructions = input.instructions;
-      expect(input.resume).toBeUndefined();
-      return result("first answer");
-    });
-    const firstContext = toolContext(runtime);
-    firstContext.requestId = "root-1";
-    firstContext.requestMessageId = "root-1";
-    firstContext.sessionMessages = [{ role: "user", content: "first request", authorDisplayName: "Kartik", metadata: {} } as never];
-    await executeNanoCodexAgentRuntime({
-      toolContext: firstContext,
-      text: "first request",
-      timeoutMs: 1_000,
-      runRuntime: firstRun as never,
-    });
-
-    const stored = (runtime.storeBinaryArtifact.mock.calls as any[]).at(-1)?.[0] as any;
-    runtime.getLatestBinaryArtifactForSession.mockResolvedValue({
-      artifact: { metadata: stored.metadata } as never,
-      metadata: stored.metadata,
-      data: Buffer.from(JSON.stringify(snapshot()), "utf8"),
-    } as never);
-    const secondRun = vi.fn(async (input: any) => {
-      expect(input.resume).toEqual(snapshot());
-      expect(input.instructions).toBe(firstInstructions);
-      expect(input.instructions).not.toContain("first answer");
-      expect(input.prompt).toContain("first answer");
-      expect(input.prompt).toContain("USER: second request");
-      expect(input.prompt).not.toContain("USER: Kartik: first request");
-      return result("second answer");
-    });
-    const secondContext = toolContext(runtime);
-    secondContext.requestId = "request-2";
-    secondContext.requestMessageId = "request-2";
-    secondContext.agentRuntimeExecutionId = "execution-2";
-    secondContext.sessionMessages = [
-      { role: "user", content: "first request", authorDisplayName: "Kartik", metadata: {} },
-      { role: "assistant", content: "first answer", metadata: {} },
-    ] as never;
-    secondContext.replyContext = {
-      rootMessageId: "root-1",
-      messageId: "parent-1",
-      chain: [{
-        messageId: "parent-1",
-        content: "first answer",
-        authorId: "bot-1",
-        authorDisplayName: "Bot",
-        attachmentSummaries: [],
-        reactionSummaries: [],
-        attachments: [],
-      }],
-    } as never;
-    await executeNanoCodexAgentRuntime({
-      toolContext: secondContext,
-      text: "second request",
-      timeoutMs: 1_000,
-      runRuntime: secondRun as never,
-    });
-    expect(runtime.getLatestBinaryArtifactForSession).toHaveBeenLastCalledWith(expect.objectContaining({
-      metadataMatch: { continuityKey: "root-1:user-1" },
-    }));
-  });
-
-  it("starts a standalone Discord message fresh instead of resuming a channel checkpoint", async () => {
-    const runtime = agentRuntime();
-    runtime.getLatestBinaryArtifactForSession.mockResolvedValue({
-      data: Buffer.from(JSON.stringify(snapshot()), "utf8"),
-      metadata: { continuityKey: "older-root" },
-    });
-    const runRuntime = vi.fn(async (input: any) => {
-      expect(input.resume).toBeUndefined();
-      expect(input.prompt).toContain("USER: standalone request");
-      return result("fresh answer");
-    });
-    const ctx = toolContext(runtime);
-    ctx.requestId = "new-root";
-    ctx.requestMessageId = "new-root";
-
-    await executeNanoCodexAgentRuntime({
-      toolContext: ctx,
-      text: "standalone request",
-      timeoutMs: 1_000,
-      runRuntime: runRuntime as never,
-    });
-
-    expect(runtime.getLatestBinaryArtifactForSession).not.toHaveBeenCalled();
-    expect(runtime.storeBinaryArtifact).toHaveBeenCalledWith(expect.objectContaining({
-      metadata: expect.objectContaining({ continuityKey: "new-root:user-1" }),
-    }));
   });
 
   it("returns a successful mutating tool result when NanoCodex exits before its final message", async () => {
@@ -367,7 +334,7 @@ describe("NanoCodex agent runtime executor", () => {
       toolContext: ctx,
       text: "flip a coin",
       timeoutMs: 1_000,
-      runRuntime: runRuntime as never,
+      host: fakeHost(runRuntime),
       executeToolRoute: executeToolRoute as never,
     })).resolves.toMatchObject({
       content: expect.stringContaining("Provably fair draw complete"),
@@ -392,7 +359,7 @@ describe("NanoCodex agent runtime executor", () => {
       toolContext: toolContext(runtime),
       text: "flip then poll",
       timeoutMs: 1_000,
-      runRuntime: runRuntime as never,
+      host: fakeHost(runRuntime),
       executeToolRoute: executeToolRoute as never,
     })).resolves.toMatchObject({ content: "Coin: heads" });
   });
@@ -412,7 +379,7 @@ describe("NanoCodex agent runtime executor", () => {
 
     await expect(executeNanoCodexAgentRuntime({
       toolContext: toolContext(runtime), text: "react and poll", timeoutMs: 1_000,
-      runRuntime: runRuntime as never, executeToolRoute: executeToolRoute as never,
+      host: fakeHost(runRuntime), executeToolRoute: executeToolRoute as never,
     })).resolves.toMatchObject({
       content: "Added 👍.\n\nPosted the poll.",
       outcome: { kind: "mutation_batch", state: "succeeded" },
@@ -436,7 +403,7 @@ describe("NanoCodex agent runtime executor", () => {
       toolContext: toolContext(runtime),
       text: "generate an image of a gnome",
       timeoutMs: 1_000,
-      runRuntime: runRuntime as never,
+      host: fakeHost(runRuntime),
       executeToolRoute: executeToolRoute as never,
     })).resolves.toMatchObject({
       content: "Generated image for: a gnome",
@@ -460,7 +427,7 @@ describe("NanoCodex agent runtime executor", () => {
 
     await expect(executeNanoCodexAgentRuntime({
       toolContext: toolContext(runtime), text: "generate an image of a gnome", timeoutMs: 1_000,
-      runRuntime: runRuntime as never, executeToolRoute: executeToolRoute as never,
+      host: fakeHost(runRuntime), executeToolRoute: executeToolRoute as never,
     })).resolves.toMatchObject({ content: "done", files: [expect.objectContaining({ name: "generated.png" })] });
     expect(executeToolRoute).toHaveBeenCalledTimes(1);
     expect(runtime.recordEvent).toHaveBeenCalledWith(expect.objectContaining({
@@ -474,7 +441,7 @@ describe("NanoCodex agent runtime executor", () => {
     }));
     expect(runtime.recordEvent).toHaveBeenCalledWith(expect.objectContaining({
       eventName: "agent.nanocodex.complete",
-      summary: "NanoCodex completed with 1 executed tool call; 1 duplicate call reused",
+      summary: "Turn completed with 1 executed tool call; 1 duplicate call reused",
       metadata: expect.objectContaining({ toolCalls: 1, toolAttempts: 2, reusedToolCalls: 1 }),
     }));
   });
@@ -504,7 +471,7 @@ describe("NanoCodex agent runtime executor", () => {
 
     await expect(executeNanoCodexAgentRuntime({
       toolContext: toolContext(runtime), text: "inspect this image", timeoutMs: 1_000,
-      runRuntime: runRuntime as never, executeToolRoute: executeToolRoute as never,
+      host: fakeHost(runRuntime), executeToolRoute: executeToolRoute as never,
     })).resolves.toMatchObject({ content: "done" });
     expect(executeToolRoute).toHaveBeenCalledTimes(1);
     expect(runtime.recordEvent).toHaveBeenCalledWith(expect.objectContaining({
@@ -528,7 +495,7 @@ describe("NanoCodex agent runtime executor", () => {
       // Leave enough time for prompt/session setup on slower CI runners while
       // still forcing the hard timeout after the mocked tool has produced its file.
       timeoutMs: 250,
-      runRuntime: runRuntime as never,
+      host: fakeHost(runRuntime),
       executeToolRoute: (async () => ({ content: "Generated image for: a gnome", files: [image] })) as never,
     })).resolves.toMatchObject({
       content: "Done — the generated file is attached.",
@@ -552,7 +519,7 @@ describe("NanoCodex agent runtime executor", () => {
       toolContext: toolContext(runtime),
       text: "add the reaction",
       timeoutMs: 250,
-      runRuntime: runRuntime as never,
+      host: fakeHost(runRuntime),
       executeToolRoute: (async () => ({
         content: "Added 👍 to the Discord message.",
         status: "ok" as const,
@@ -582,7 +549,7 @@ describe("NanoCodex agent runtime executor", () => {
 
     await expect(executeNanoCodexAgentRuntime({
       toolContext: toolContext(runtime), text: "make a wager", timeoutMs: 250,
-      runRuntime: runRuntime as never, executeToolRoute: executeToolRoute as never,
+      host: fakeHost(runRuntime), executeToolRoute: executeToolRoute as never,
     })).rejects.toThrow(/timed out/i);
     expect(runtime.recordEvent).not.toHaveBeenCalledWith(expect.objectContaining({
       eventName: "agent.nanocodex.timeout_output_recovered",
@@ -631,18 +598,15 @@ function agentRuntime() {
   };
 }
 
-function snapshot() {
-  return {
-    version: 1,
-    model: "gpt-5.6-sol",
-    lineage_id: "lineage-1",
-    prompt_cache_key: "cache-1",
-    workspace: "/workspace",
-    canonical_context: {},
-    history: [],
-  };
+function result(finalMessage: string) {
+  return { finalMessage, usage: { total_tokens: 12 }, resumed: false };
 }
 
-function result(finalMessage: string) {
-  return { finalMessage, usage: { total_tokens: 12 }, snapshot: snapshot() };
+function fakeHost(runTurn: (input: any) => Promise<unknown>): NanocodeHostClient {
+  return {
+    runTurn: runTurn as NanocodeHostClient["runTurn"],
+    steer: vi.fn(async () => false),
+    activeRequest: () => undefined,
+    stop: async () => undefined,
+  };
 }

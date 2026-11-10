@@ -40,7 +40,6 @@ export type DiscordAgentExecutionRequest = {
   requestKind?: "message" | "component" | "modal" | "scheduled";
   userId?: string;
   userDisplayName?: string;
-  interaction?: AgentRuntimeTurnEnvelope["interaction"];
   requestAttachments?: AgentRuntimeTurnEnvelope["requestAttachments"];
   requestEmbeds?: AgentRuntimeTurnEnvelope["requestEmbeds"];
 };
@@ -79,26 +78,6 @@ export async function markDiscordDeliveryDelivered(
     statusMessageId: message.id,
     metadata: { replyUrl: message.url }
   }).catch((error) => requestLogger.warn({ err: error, executionId }, "Failed to mark Discord delivery obligation delivered"));
-}
-
-export async function attachPromptTasksToDiscordReply(
-  input: DiscordAgentRequestInput,
-  traceId: string,
-  finalReply: Message,
-  requestLogger: Logger
-) {
-  const attachedTasks = await input.repo
-    .attachAgentTasksToDiscordResponse({
-      traceId,
-      channelId: finalReply.channelId,
-      messageId: finalReply.id
-    })
-    .catch((error) => {
-      requestLogger.warn({ err: error, traceId, replyMessageId: finalReply.id }, "Failed to attach prompt agent tasks to Discord reply");
-      return 0;
-    });
-  if (attachedTasks <= 0) return;
-  requestLogger.info({ traceId, replyMessageId: finalReply.id, attachedTasks }, "Attached prompt agent tasks to Discord reply");
 }
 
 export async function recordAgentRuntimeSpan(input: {

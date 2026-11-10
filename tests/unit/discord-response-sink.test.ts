@@ -313,53 +313,6 @@ describe("DiscordResponseSink", () => {
     });
   });
 
-  it("delivers a prepared Components V2 response through the shared sink", async () => {
-    const sourceMessage = fakeMessage();
-    const sink = new DiscordResponseSink({ client: fakeClient(), sourceMessage: sourceMessage as any, maxReplyChars: 2_000, logger: fakeLogger() as any });
-
-    const result = await sink.sendFinal({
-      content: "fallback",
-      presentation: {
-        payload: { content: null, flags: 32768, components: [{ type: 10, content: "rich" }] as any },
-        fallbackPayload: { content: null, flags: 32768, components: [{ type: 10, content: "fallback" }] as any },
-        registrations: [],
-      },
-    });
-
-    expect(sourceMessage.reply).toHaveBeenCalledWith(expect.objectContaining({ content: null, flags: 32768 }));
-    expect(result.usedRichPresentation).toBe(true);
-  });
-
-  it("keeps plain follow-up output in Components V2 when editing a rich interaction message", async () => {
-    const statusMessage = fakeMessage({
-      id: "rich-message",
-      flags: { has: vi.fn(() => true) },
-    });
-    const sourceMessage = fakeMessage();
-    const sink = new DiscordResponseSink({ client: fakeClient(), sourceMessage: sourceMessage as any, statusMessage: statusMessage as any, maxReplyChars: 2_000, logger: fakeLogger() as any });
-
-    const result = await sink.sendFinal({ content: "plain follow-up" });
-
-    expect(statusMessage.edit).toHaveBeenCalledWith(expect.objectContaining({
-      content: null,
-      flags: 32768,
-      components: [expect.objectContaining({ type: 10, content: "plain follow-up" })],
-    }));
-    expect(result.usedRichPresentation).toBe(false);
-  });
-
-  it("renders progress updates as Text Display components for Components V2 targets", async () => {
-    const statusMessage = fakeMessage({ flags: { has: vi.fn(() => true) } });
-    const sink = new DiscordResponseSink({ client: fakeClient(), sourceMessage: fakeMessage() as any, statusMessage: statusMessage as any, maxReplyChars: 2_000, logger: fakeLogger() as any });
-
-    await sink.updateStatus("still working");
-
-    expect(statusMessage.edit).toHaveBeenCalledWith(expect.objectContaining({
-      flags: 32768,
-      components: [expect.objectContaining({ type: 10, content: "still working" })],
-    }));
-  });
-
   it("suppresses status edits until the final replacement is ready", async () => {
     const statusMessage = fakeMessage({ id: "marked-reply" });
     const sink = new DiscordResponseSink({
@@ -378,23 +331,6 @@ describe("DiscordResponseSink", () => {
     expect(statusMessage.edit).toHaveBeenCalledWith({
       content: "corrected answer",
       allowedMentions: suppressedMentions,
-    });
-  });
-
-  it("removes inactive controls with the compiled non-interactive fallback", async () => {
-    const statusMessage = fakeMessage({ flags: { has: vi.fn(() => true) } });
-    const sink = new DiscordResponseSink({ client: fakeClient(), sourceMessage: fakeMessage() as any, statusMessage: statusMessage as any, maxReplyChars: 2_000, logger: fakeLogger() as any });
-    const fallbackPayload = { content: null, flags: 32768, components: [{ type: 10, content: "safe fallback" }] as any };
-
-    await sink.replaceRichPresentationWithFallback({
-      payload: { content: null, flags: 32768, components: [{ type: 1, components: [{ type: 2 }] }] as any },
-      fallbackPayload,
-      registrations: [],
-    });
-
-    expect(statusMessage.edit).toHaveBeenCalledWith({
-      ...fallbackPayload,
-      allowedMentions: suppressedMentions
     });
   });
 

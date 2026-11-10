@@ -87,7 +87,7 @@ function deploymentRevision(spec: Record<string, unknown> | null) {
 }
 
 function componentOrder(component: string) {
-  const order = ["bot", "worker", "api", "console"].indexOf(component);
+  const order = ["bot", "worker", "console"].indexOf(component);
   return order === -1 ? Number.MAX_SAFE_INTEGER : order;
 }
 

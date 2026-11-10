@@ -1,9 +1,6 @@
 import { Client, GatewayIntentBits, Partials } from "discord.js";
-import { assertConsoleAuthConfig, assertDiscordConfig, assertExecutionConfig, assertOpenRouterConfig, assertPaymentConfig, assertTaskCallbackConfig, loadConfig } from "./config/env.js";
-import { startSandboxCallbackServer } from "./execution/callbackServer.js";
+import { assertConsoleAuthConfig, assertDiscordConfig, assertOpenRouterConfig, assertPaymentConfig, loadConfig } from "./config/env.js";
 import { runMigrations } from "./db/migrate.js";
-import { createExecutionBackend } from "./execution/backend.js";
-import { startSandboxReconciler } from "./execution/reconciler.js";
 import { embedStoredMessage, embedStoredMessages } from "./memory/embedding.js";
 import { DiscordCrawler } from "./discord/crawler.js";
 import { createDiscordAiAgentBot } from "./discord/client.js";
@@ -14,27 +11,22 @@ import { startPaymentReconciler } from "./payments/reconciler.js";
 import { createApplicationServices } from "./runtime/applicationServices.js";
 import { startOperatorConsole } from "./console/server.js";
 import { startServiceHeartbeat } from "./runtime/serviceHeartbeat.js";
+import { stopSharedNanocodeHost } from "./agent/sharedNanocodeHost.js";
 import type { ServiceComponent } from "./db/serviceHeartbeatRepository.js";
 
 async function main() {
   const config = loadConfig();
-  const startsApi = config.processRole === "all" || config.processRole === "api";
   const startsBot = config.processRole === "all" || config.processRole === "bot";
   const startsWorker = config.processRole === "all" || config.processRole === "worker";
   const startsConsole = config.processRole === "all" || config.processRole === "console";
   const startsCrawlWorker = startsWorker && config.worker.crawlEnabled;
   const startsEmbeddingWorker = startsWorker && config.worker.embeddingEnabled;
-  const startsTaskWorker = startsWorker && config.worker.taskEnabled;
   const startsAgentRuntimeWorker = startsWorker && config.worker.agentRuntimeEnabled;
-  const startsImprovementWorker = false;
-  const startsReminderWorker = false;
   const startsDiscordClient = startsBot || startsCrawlWorker || startsAgentRuntimeWorker;
   const startsPaymentRuntime = startsBot || startsAgentRuntimeWorker;
-  const startsJobRuntime = startsApi || startsBot || startsWorker;
+  const startsJobRuntime = startsBot || startsWorker;
   if (startsBot || startsCrawlWorker || startsAgentRuntimeWorker) assertDiscordConfig(config);
-  if (startsBot || startsEmbeddingWorker || startsTaskWorker || startsAgentRuntimeWorker) assertOpenRouterConfig(config);
-  if (startsApi) assertTaskCallbackConfig(config);
-  if (startsTaskWorker) assertExecutionConfig(config);
+  if (startsBot || startsEmbeddingWorker || startsAgentRuntimeWorker) assertOpenRouterConfig(config);
   if (startsPaymentRuntime && config.payments.walletEnabled) assertPaymentConfig(config);
   if (startsConsole && config.nodeEnv === "production") assertConsoleAuthConfig(config);
 
@@ -54,17 +46,10 @@ async function main() {
         imageModel: config.openRouter.imageModel,
         transcriptionModel: config.openRouter.transcriptionModel
       },
-      github: {
-        repository: config.github.repository,
-        baseBranch: config.github.baseBranch
-      },
       worker: {
         crawlEnabled: startsCrawlWorker,
         embeddingEnabled: startsEmbeddingWorker,
-        taskEnabled: startsTaskWorker,
         agentRuntimeEnabled: startsAgentRuntimeWorker,
-        improvementEnabled: startsImprovementWorker,
-        reminderEnabled: startsReminderWorker
       },
       payments: {
         walletEnabled: config.payments.walletEnabled,
@@ -100,10 +85,8 @@ async function main() {
   const components: ServiceComponent[] = [];
   if (startsBot) components.push("bot");
   if (startsWorker) components.push("worker");
-  if (startsApi) components.push("api");
   if (startsConsole) components.push("console");
   const serviceHeartbeat = await startServiceHeartbeat({ components, config, repository: serviceHeartbeats });
-  const executionBackend = startsTaskWorker ? createExecutionBackend(config) : undefined;
   const client =
     startsDiscordClient
       ? new Client({
@@ -138,18 +121,12 @@ async function main() {
         }
       };
   if (startsJobRuntime) logger.info(
-    { startsApi, startsBot, startsWorker, startsCrawlWorker, startsEmbeddingWorker, startsTaskWorker, startsAgentRuntimeWorker, startsImprovementWorker, startsReminderWorker },
+    { startsBot, startsWorker, startsCrawlWorker, startsEmbeddingWorker, startsAgentRuntimeWorker },
     "Starting job runtime"
   );
   const jobs = startsJobRuntime ? await startJobs({
     config,
     crawler,
-    agentTask: executionBackend
-      ? {
-          name: executionBackend.name,
-          start: async (job, context) => executionBackend.start(job, context)
-        }
-      : undefined,
     embedding: {
       embedMessages: async (messageIds, context) => {
         return embedStoredMessages({ repo, openRouter, config, messageIds, runtime: context?.runtime });
@@ -161,11 +138,7 @@ async function main() {
     agentRuntime: client && startsWorker ? createAgentRuntimeRunner({ config, repo, budgetRepo, rngRepo, walletService, agentRuntimeRepo, deliveryObligations: deliveryObligationsRepo, openRouter, client }) : undefined,
     crawlWorker: startsCrawlWorker,
     embeddingWorker: startsEmbeddingWorker,
-    taskWorker: startsTaskWorker,
     agentRuntimeWorker: startsAgentRuntimeWorker,
-    improvementWorker: startsImprovementWorker,
-    reminderWorker: startsReminderWorker,
-    reminders: undefined,
     repo,
     agentRuntimeRepo,
     deliveryObligations: deliveryObligationsRepo,
@@ -174,18 +147,14 @@ async function main() {
   }) : null;
   jobRuntimeRef.current = jobs ?? undefined;
   if (startsJobRuntime) logger.info(
-    { startsApi, startsBot, startsWorker, startsCrawlWorker, startsEmbeddingWorker, startsTaskWorker, startsAgentRuntimeWorker, startsImprovementWorker, startsReminderWorker },
+    { startsBot, startsWorker, startsCrawlWorker, startsEmbeddingWorker, startsAgentRuntimeWorker },
     "Job runtime ready"
   );
-  const callbackServer = startsApi ? await startSandboxCallbackServer({ config, repo, agentRuntime: agentRuntimeRepo }) : null;
   const operatorConsole = startsConsole ? await startOperatorConsole({
     config,
     repository: operatorDashboard,
     liveReload: config.nodeEnv === "development",
   }) : null;
-  const sandboxReconciler = startsTaskWorker && executionBackend
-    ? startSandboxReconciler({ repo, backend: executionBackend, agentRuntime: agentRuntimeRepo })
-    : null;
   const paymentReconciler = walletService && startsWorker ? startPaymentReconciler({ walletService }) : null;
   const runtime =
     startsBot && client && crawler instanceof DiscordCrawler && jobs
@@ -198,11 +167,11 @@ async function main() {
     shuttingDown = true;
     logger.info("Shutting down Discord AI Agent");
     await runtime?.drain(30_000).catch((error) => logger.warn({ err: error }, "Timed out draining Discord bot handlers"));
-    sandboxReconciler?.stop();
     paymentReconciler?.stop();
     await operatorConsole?.close().catch(() => undefined);
-    await callbackServer?.close().catch(() => undefined);
     await jobs?.stop().catch(() => undefined);
+    // After jobs drain, so no turn is still using the host.
+    await stopSharedNanocodeHost().catch(() => undefined);
     runtime?.destroy();
     if (!runtime) client?.destroy();
     await serviceHeartbeat.stop().catch(() => undefined);
@@ -220,10 +189,6 @@ async function main() {
     logger.info("Logging into Discord as Discord-enabled worker process");
     await client.login(config.discord.token);
     logger.info("Discord AI Agent worker is online");
-  } else if (startsApi && startsConsole) {
-    logger.info("Discord AI Agent callback server and operator console are online");
-  } else if (startsApi) {
-    logger.info("Discord AI Agent sandbox callback server is online");
   } else if (startsConsole) {
     logger.info("Discord AI Agent operator console is online");
   } else {

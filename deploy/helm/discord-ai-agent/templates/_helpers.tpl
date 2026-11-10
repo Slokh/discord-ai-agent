@@ -26,10 +26,6 @@ helm.sh/chart: {{ .Chart.Name }}-{{ .Chart.Version | replace "+" "_" }}
 - name: RELEASE_VERIFICATION_ID
   value: {{ .Values.config.releaseVerificationId | quote }}
 {{- end }}
-{{- if .Values.config.previousAppRevision }}
-- name: PREVIOUS_APP_REVISION
-  value: {{ .Values.config.previousAppRevision | quote }}
-{{- end }}
 - name: BOT_OWNER_USER_ID
   valueFrom: { secretKeyRef: { name: {{ .Values.secret.existingSecretName }}, key: BOT_OWNER_USER_ID, optional: true } }
 - name: OPS_ALLOWLIST_USER_IDS
@@ -41,18 +37,6 @@ helm.sh/chart: {{ .Chart.Name }}-{{ .Chart.Version | replace "+" "_" }}
   valueFrom: { secretKeyRef: { name: {{ .Values.secret.existingSecretName }}, key: DATABASE_URL } }
 {{- end -}}
 
-{{- define "discord-ai-agent.sandboxCallbackEnv" -}}
-- name: TASK_SIGNING_SECRET
-  valueFrom: { secretKeyRef: { name: {{ .Values.secret.existingSecretName }}, key: TASK_SIGNING_SECRET } }
-{{- end -}}
-
-{{- define "discord-ai-agent.sandboxLauncherEnv" -}}
-- name: POD_NAMESPACE
-  valueFrom: { fieldRef: { fieldPath: metadata.namespace } }
-- name: SANDBOX_IMAGE
-  value: {{ .Values.sandbox.image | quote }}
-{{- end -}}
-
 {{- define "discord-ai-agent.discordEnv" -}}
 - name: DISCORD_TOKEN
   valueFrom: { secretKeyRef: { name: {{ .Values.secret.existingSecretName }}, key: DISCORD_TOKEN } }
@@ -60,12 +44,6 @@ helm.sh/chart: {{ .Chart.Name }}-{{ .Chart.Version | replace "+" "_" }}
   valueFrom: { secretKeyRef: { name: {{ .Values.secret.existingSecretName }}, key: DISCORD_CLIENT_ID } }
 - name: DISCORD_GUILD_ID
   valueFrom: { secretKeyRef: { name: {{ .Values.secret.existingSecretName }}, key: DISCORD_GUILD_ID } }
-{{- if .Values.config.botChannelId }}
-- name: DISCORD_BOT_CHANNEL_ID
-  value: {{ .Values.config.botChannelId | quote }}
-{{- end }}
-- name: DISCORD_PREMIUM_SKU_IDS
-  valueFrom: { secretKeyRef: { name: {{ .Values.secret.existingSecretName }}, key: DISCORD_PREMIUM_SKU_IDS, optional: true } }
 {{- end -}}
 
 {{- define "discord-ai-agent.discordIdentityEnv" -}}
@@ -88,27 +66,9 @@ helm.sh/chart: {{ .Chart.Name }}-{{ .Chart.Version | replace "+" "_" }}
   valueFrom: { secretKeyRef: { name: {{ .Values.secret.existingSecretName }}, key: OPENROUTER_API_KEY } }
 {{- end -}}
 
-{{- define "discord-ai-agent.spotifyEnv" -}}
-- name: SPOTIFY_CLIENT_ID
-  valueFrom: { secretKeyRef: { name: {{ .Values.secret.existingSecretName }}, key: SPOTIFY_CLIENT_ID, optional: true } }
-- name: SPOTIFY_CLIENT_SECRET
-  valueFrom: { secretKeyRef: { name: {{ .Values.secret.existingSecretName }}, key: SPOTIFY_CLIENT_SECRET, optional: true } }
-{{- end -}}
-
 {{- define "discord-ai-agent.paymentEnv" -}}
 - name: PRIVY_APP_ID
   valueFrom: { secretKeyRef: { name: {{ .Values.secret.existingSecretName }}, key: PRIVY_APP_ID, optional: true } }
 - name: PRIVY_APP_SECRET
   valueFrom: { secretKeyRef: { name: {{ .Values.secret.existingSecretName }}, key: PRIVY_APP_SECRET, optional: true } }
-{{- end -}}
-
-{{- define "discord-ai-agent.githubEnv" -}}
-- name: GITHUB_TOKEN
-  valueFrom: { secretKeyRef: { name: {{ .Values.secret.existingSecretName }}, key: GITHUB_TOKEN, optional: true } }
-- name: GITHUB_APP_ID
-  valueFrom: { secretKeyRef: { name: {{ .Values.secret.existingSecretName }}, key: GITHUB_APP_ID, optional: true } }
-- name: GITHUB_APP_PRIVATE_KEY
-  valueFrom: { secretKeyRef: { name: {{ .Values.secret.existingSecretName }}, key: GITHUB_APP_PRIVATE_KEY, optional: true } }
-- name: GITHUB_APP_INSTALLATION_ID
-  valueFrom: { secretKeyRef: { name: {{ .Values.secret.existingSecretName }}, key: GITHUB_APP_INSTALLATION_ID, optional: true } }
 {{- end -}}

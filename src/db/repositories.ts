@@ -1,24 +1,15 @@
 import type { DbPool } from "./pool.js";
 import * as agentSettings from "./agentSettingsRepository.js";
-import * as agentTasks from "./agentTaskRepository.js";
-import * as agentTaskPublications from "./agentTaskPublicationRepository.js";
+import * as agentRuntimeChatReads from "./agentRuntimeChatReadRepository.js";
 import * as audit from "./auditRepository.js";
 import * as conversationMemory from "./conversationMemoryRepository.js";
-import * as deploymentAnnouncements from "./deploymentAnnouncementRepository.js";
+import * as deploymentVerifications from "./deploymentVerificationRepository.js";
 import * as discordArchive from "./discordArchiveRepository.js";
-import * as discordComponentActions from "./discordComponentActionRepository.js";
 import * as discordEmojiUsage from "./discordEmojiUsageRepository.js";
-import * as discordRetryReactions from "./discordRetryReactionRepository.js";
 import * as embeddings from "./embeddingRepository.js";
-import * as improvements from "./improvementRepository.js";
-import * as improvementHealth from "./improvementHealthRepository.js";
-import * as improvementEffectiveness from "./improvementEffectivenessRepository.js";
-import * as improvementProofProducers from "./improvementProofProducerRepository.js";
-import * as improvementReporterConversations from "./improvementReporterConversationRepository.js";
-import * as improvementWork from "./improvementWorkRepository.js";
-import * as improvementVerifications from "./improvementVerificationRepository.js";
 import * as retrieval from "./retrievalRepository.js";
-import * as reminders from "./reminderRepository.js";
+import { clearRetiredFeatureDataForUser } from "./retiredFeatureDataRepository.js";
+import * as nanocodeSessions from "./nanocodeSessionRepository.js";
 import * as serverOverlays from "./serverOverlayRepository.js";
 import * as userPreferences from "./userPreferenceRepository.js";
 import type { PersistedMessage } from "./types.js";
@@ -27,7 +18,6 @@ export type * from "./types.js";
 export type { DiscordEmojiCultureProfile, DiscordEmojiUsageExample } from "./discordEmojiUsageRepository.js";
 export type { GuildAgentSettings } from "./agentSettingsRepository.js";
 export type { UserPreference } from "./userPreferenceRepository.js";
-export type { ScheduledReminder, ReminderDeliveryKind, ReminderStatus, ScheduleRunStatus } from "./reminderRepository.js";
 
 type PoolFunction = (pool: DbPool, ...args: any[]) => any;
 type BoundRepository<T extends Record<string, unknown>> = {
@@ -48,24 +38,15 @@ export function createAppDatabase(pool: DbPool) {
   const archive = bindRepository(pool, discordArchive);
   return {
     ...bindRepository(pool, agentSettings),
-    ...bindRepository(pool, agentTasks),
-    ...bindRepository(pool, agentTaskPublications),
+    ...bindRepository(pool, agentRuntimeChatReads),
     ...bindRepository(pool, audit),
     ...bindRepository(pool, conversationMemory),
-    ...bindRepository(pool, deploymentAnnouncements),
+    ...bindRepository(pool, deploymentVerifications),
     ...archive,
-    ...bindRepository(pool, discordComponentActions),
-    ...bindRepository(pool, discordRetryReactions),
     ...bindRepository(pool, embeddings),
-    ...bindRepository(pool, improvements),
-    ...bindRepository(pool, improvementHealth),
-    ...bindRepository(pool, improvementEffectiveness),
-    ...bindRepository(pool, improvementProofProducers),
-    ...bindRepository(pool, improvementReporterConversations),
-    ...bindRepository(pool, improvementWork),
-    ...bindRepository(pool, improvementVerifications),
     ...bindRepository(pool, retrieval),
-    ...bindRepository(pool, reminders),
+    recordNanocodeSession: (input: Parameters<typeof nanocodeSessions.recordNanocodeSession>[1]) =>
+      nanocodeSessions.recordNanocodeSession(pool, input),
     ...bindRepository(pool, serverOverlays),
     ...bindRepository(pool, userPreferences),
 
@@ -80,9 +61,9 @@ export function createAppDatabase(pool: DbPool) {
       await discordEmojiUsage.clearDiscordEmojiUsageForMessage(pool, messageId);
     },
     async requestUserDeletion(userId: string) {
-      await improvements.clearImprovementDataForUser(pool, userId);
+      await clearRetiredFeatureDataForUser(pool, userId);
+      await nanocodeSessions.deleteNanocodeSessionsForUser(pool, userId);
       await userPreferences.clearUserPreferences(pool, userId);
-      await reminders.clearRemindersForUser(pool, userId);
       await discordArchive.requestUserDeletion(pool, userId);
       await discordEmojiUsage.clearDiscordEmojiUsageForAuthor(pool, userId);
     },

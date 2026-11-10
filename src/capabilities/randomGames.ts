@@ -62,7 +62,6 @@ export class RandomGameCapability {
       storedContent: undefined,
       files: undefined,
       tables: undefined,
-      discordPresentation: undefined,
     };
   }
 }

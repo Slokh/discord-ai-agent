@@ -1,11 +1,8 @@
 import {
-  adminSetWalletStarterAmount,
-  adminTransferWalletFunds,
   getWagerHistory,
   getWalletBalance,
   getWalletFeeSummary,
   listWalletBalances,
-  reconcileWalletTransfers,
   requestStarterFunds,
   transferWalletFunds,
 } from "../walletTools.js";
@@ -48,24 +45,9 @@ export const walletToolHandlers = {
     }), ctx.config.maxReplyChars),
   "requestStarterFunds": async (ctx, _route, _originalText) =>
     cleanWalletAction(requestStarterFunds(ctx), ctx.config.maxReplyChars),
-  "adminTransferWalletFunds": async (ctx, route, _originalText) => cleanWalletAction(adminTransferWalletFunds(ctx, {
-      source: stringArgument(route.arguments, "source") as "bot" | "user" | undefined,
-      sourceUserId: stringArgument(route.arguments, "sourceUserId"),
-      destination: stringArgument(route.arguments, "destination") as "bot" | "user" | undefined,
-      destinationUserId: stringArgument(route.arguments, "destinationUserId"),
-      amountUsd: numberArgument(route.arguments, "amountUsd"),
-      reason: stringArgument(route.arguments, "reason"),
-    }), ctx.config.maxReplyChars),
-  "adminSetWalletStarterAmount": async (ctx, route, _originalText) => cleanWalletAction(adminSetWalletStarterAmount(ctx, {
-      amountUsd: numberArgument(route.arguments, "amountUsd"),
-      rebalanceExisting: route.arguments?.rebalanceExisting === true,
-      reason: stringArgument(route.arguments, "reason"),
-    }), ctx.config.maxReplyChars),
   "getWalletFeeSummary": async (ctx, _route, _originalText) => ({
     content: cleanToolResponse(await getWalletFeeSummary(ctx), ctx.config.maxReplyChars),
   }),
-  "reconcileWalletTransfers": async (ctx, _route, _originalText) =>
-    cleanWalletAction(reconcileWalletTransfers(ctx), ctx.config.maxReplyChars),
 } satisfies Partial<Record<ToolName, LocalToolHandler>>;
 
 async function cleanWalletAction(response: Promise<AgentResponse>, maxChars: number) {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { assertConsoleAuthConfig, assertExecutionConfig, assertOpenRouterConfig, assertPaymentConfig, loadConfig, productConfig } from "../../src/config/env.js";
+import { assertConsoleAuthConfig, assertOpenRouterConfig, assertPaymentConfig, loadConfig } from "../../src/config/env.js";
 
 describe("config", () => {
   it("keeps stable product and architecture choices in source", () => {
@@ -10,13 +10,16 @@ describe("config", () => {
         appRevision: "unknown",
         runMigrations: true,
         embeddingDimensions: 1536,
-        github: expect.objectContaining({ repository: productConfig.github.repository, baseBranch: "main" }),
-        callbackServer: { host: "0.0.0.0", port: 8080 },
         consoleServer: { host: "0.0.0.0", port: 8081 },
         discordAgentResponseTimeoutMs: 1_800_000,
         agentPromptMaxConcurrency: 4
       }));
-      expect(config.discord).toEqual(expect.objectContaining({ botName: "ai", loadingReaction: "⏳", premiumSkuIds: [] }));
+      expect(config.discord).toEqual(expect.objectContaining({ botName: "ai", loadingReaction: "⏳" }));
+      expect(config.discord).not.toHaveProperty("botChannelId");
+      expect(config.discord).not.toHaveProperty("premiumSkuIds");
+      for (const retired of ["execution", "github", "callbackServer", "spotify"]) {
+        expect(config).not.toHaveProperty(retired);
+      }
       expect(config.consoleAuth).toEqual({
         publicUrl: "https://console.mindcool.dev",
         clientId: "",
@@ -26,17 +29,12 @@ describe("config", () => {
       });
       expect(config.openRouter).toEqual(expect.objectContaining({
         chatModel: "openai/gpt-6-luna",
-        codegenModel: "openai/gpt-6-luna",
         utilityModel: "openai/gpt-6-luna"
       }));
-      expect(config.execution).not.toHaveProperty("codegenBackend");
-      expect(config.execution).not.toHaveProperty("codegenLease");
-      // Every sandbox mode is paused, so the sandbox task tool stays hidden.
-      expect(config.execution.sandbox.modes).toEqual({ code_change: "off", diagnosis: "off", computer: "off" });
+      expect(config.openRouter).not.toHaveProperty("codegenModel");
       expect(config.worker).toEqual(expect.objectContaining({
         crawlEnabled: true,
         embeddingEnabled: false,
-        taskEnabled: false,
         agentRuntimeEnabled: true
       }));
       expect(config.payments).toEqual({
@@ -56,33 +54,37 @@ describe("config", () => {
     withEnv({
       APP_REVISION: "abc123",
       RELEASE_VERIFICATION_ID: "run-1",
-      PREVIOUS_APP_REVISION: "def456",
-      DISCORD_BOT_CHANNEL_ID: "123456789012345678",
-      DISCORD_PREMIUM_SKU_IDS: "123456789012345678,111111111111111111",
-      POD_NAMESPACE: "test-namespace",
-      SANDBOX_IMAGE: "registry.example/sandbox:abc123",
-      SPOTIFY_CLIENT_ID: "spotify-client",
-      SPOTIFY_CLIENT_SECRET: "spotify-secret",
       PRIVY_APP_ID: "privy-app",
       PRIVY_APP_SECRET: "privy-secret"
     }, () => {
       const config = loadConfig();
-      expect(config.releaseNotes).toEqual({ verificationId: "run-1", previousRevision: "def456" });
-      expect(config.discord.botChannelId).toBe("123456789012345678");
-      expect(config.discord.premiumSkuIds).toEqual(["123456789012345678", "111111111111111111"]);
-      expect(config.execution.kubernetes).toEqual(expect.objectContaining({
-        namespace: "test-namespace",
-        sandboxImage: "registry.example/sandbox:abc123"
-      }));
-      expect(config.spotify).toEqual({ clientId: "spotify-client", clientSecret: "spotify-secret", market: "US" });
+      expect(config.releaseNotes).toEqual({ verificationId: "run-1" });
       expect(config.payments).toEqual(expect.objectContaining({ walletEnabled: true, userWalletsEnabled: true }));
       expect(() => assertPaymentConfig(config)).not.toThrow();
+    });
+  });
+
+  it("ignores stale retired variables outside production", () => {
+    withEnv({
+      NODE_ENV: "development",
+      DISCORD_BOT_CHANNEL_ID: "123456789012345678",
+      DISCORD_PREMIUM_SKU_IDS: "123456789012345678",
+      SPOTIFY_CLIENT_ID: "spotify-client",
+      TASK_SIGNING_SECRET: "secret",
+    }, () => {
+      const config = loadConfig();
+      expect(config.discord).not.toHaveProperty("botChannelId");
+      expect(config).not.toHaveProperty("spotify");
+      expect(config).not.toHaveProperty("execution");
     });
   });
 
   it("rejects removed tuning variables so deployment drift is visible", () => {
     withEnv({
       NODE_ENV: "production",
+      DISCORD_BOT_CHANNEL_ID: "123456789012345678",
+      SPOTIFY_CLIENT_ID: "spotify-client",
+      TASK_SIGNING_SECRET: "secret",
       OPENROUTER_CHAT_MODEL: "anthropic/claude-sonnet-5",
       GITHUB_REPOSITORY: "somewhere/else",
       CODEGEN_EXECUTION_BACKEND: "local-process",
@@ -93,28 +95,15 @@ describe("config", () => {
       TEMPO_NETWORK: "moderato"
     }, () => {
       expect(() => loadConfig()).toThrow(
-        /Removed environment variables.*CODEGEN_EXECUTION_BACKEND.*GITHUB_REPOSITORY.*IMPROVEMENT_REPORT_CHANNEL_ID.*OPENROUTER_CHAT_MODEL.*RELEASE_NOTES_CHANNEL_ID/,
+        /Removed environment variables.*CODEGEN_EXECUTION_BACKEND.*DISCORD_BOT_CHANNEL_ID.*GITHUB_REPOSITORY.*IMPROVEMENT_REPORT_CHANNEL_ID.*OPENROUTER_CHAT_MODEL.*RELEASE_NOTES_CHANNEL_ID.*SPOTIFY_CLIENT_ID.*TASK_SIGNING_SECRET/,
       );
     });
   });
 
-  it("validates Discord premium SKU identifiers", () => {
-    withEnv({ DISCORD_PREMIUM_SKU_IDS: "not-a-snowflake" }, () => {
-      expect(() => loadConfig()).toThrow(/premium.*snowflakes/i);
-    });
-  });
-
-  it("validates the canonical bot channel identifier", () => {
-    withEnv({ DISCORD_BOT_CHANNEL_ID: "not-a-snowflake" }, () => {
-      expect(() => loadConfig()).toThrow(/bot channel.*snowflake/i);
-    });
-  });
-
-  it("requires model and execution credentials at their capability boundaries", () => {
+  it("requires model and console credentials at their capability boundaries", () => {
     withCleanEnv(() => {
       const config = loadConfig();
       expect(() => assertOpenRouterConfig(config)).toThrow(/OPENROUTER_API_KEY/);
-      expect(() => assertExecutionConfig(config)).toThrow(/TASK_SIGNING_SECRET/);
       expect(() => assertConsoleAuthConfig(config)).toThrow(/DISCORD_CLIENT_SECRET.*CONSOLE_SESSION_SECRET/);
     });
   });
@@ -132,21 +121,11 @@ describe("config", () => {
 function withCleanEnv(callback: () => void) {
   withEnv({
     APP_REVISION: "",
-    PREVIOUS_APP_REVISION: "",
-    DISCORD_BOT_CHANNEL_ID: "",
-    DISCORD_PREMIUM_SKU_IDS: "",
     DISCORD_CLIENT_SECRET: "",
     CONSOLE_SESSION_SECRET: "",
     PRIVY_APP_ID: "",
     PRIVY_APP_SECRET: "",
-    POD_NAMESPACE: "",
-    SANDBOX_IMAGE: "",
-    OPENROUTER_API_KEY: "",
-    TASK_SIGNING_SECRET: "",
-    GITHUB_TOKEN: "",
-    GITHUB_APP_ID: "",
-    GITHUB_APP_PRIVATE_KEY: "",
-    GITHUB_APP_INSTALLATION_ID: ""
+    OPENROUTER_API_KEY: ""
   }, callback);
 }
 

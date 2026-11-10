@@ -370,91 +370,6 @@ export async function requestStarterFunds(ctx: ToolContext): Promise<AgentRespon
   return walletActionSuccess("starter_funds", content);
 }
 
-export async function adminTransferWalletFunds(
-  ctx: ToolContext,
-  input: {
-    source?: WalletEndpointInput;
-    sourceUserId?: string;
-    destination?: WalletEndpointInput;
-    destinationUserId?: string;
-    amountUsd?: number;
-    reason?: string;
-  }
-): Promise<AgentResponse> {
-  const actor = paymentRequester(ctx);
-  if (!isPaymentAdmin(ctx)) return walletActionError("not_authorized", "Wallet administration is restricted to the bot owner or payment ops allowlist.");
-  if (!ctx.config.payments.userWalletsEnabled || !ctx.walletService) {
-    return walletActionError("not_configured", "Per-user USD wallets are not enabled in this deployment.");
-  }
-  const amountUsd = positiveAmount(input.amountUsd);
-  if (amountUsd == null) return walletActionError("invalid_amount", "amountUsd must be a positive USD amount.");
-  const reason = input.reason?.trim();
-  if (!reason) return walletActionError("missing_reason", "reason is required for an admin transfer.");
-  const source = await adminEndpoint(ctx, input.source, input.sourceUserId);
-  if (typeof source === "string") return walletActionError("source_not_resolved", source);
-  const destination = await adminEndpoint(ctx, input.destination, input.destinationUserId);
-  if (typeof destination === "string") return walletActionError("destination_not_resolved", destination);
-  const result = await ctx.walletService.transferAsAdmin({
-    guildId: actor.guildId,
-    requestedByUserId: actor.userId,
-    source: source.endpoint,
-    destination: destination.endpoint,
-    amountUsd,
-    requestId: actor.requestId,
-    reason
-  }, paymentRecorder(ctx));
-  const content = formatManagedTransfer(result, amountUsd, source.label, destination.label, reason);
-  await audit(ctx, "adminTransferWalletFunds", `$${amountUsd} ${source.label} -> ${destination.label}; ${reason}`, content).catch(() => undefined);
-  return walletActionSuccess("admin_wallet_transfer", content);
-}
-
-export async function adminSetWalletStarterAmount(
-  ctx: ToolContext,
-  input: {
-    amountUsd?: number;
-    rebalanceExisting?: boolean;
-    reason?: string;
-  }
-): Promise<AgentResponse> {
-  const actor = paymentRequester(ctx);
-  if (!isPaymentAdmin(ctx)) return walletActionError("not_authorized", "Wallet administration is restricted to the bot owner or payment ops allowlist.");
-  if (!ctx.config.payments.userWalletsEnabled || !ctx.walletService) {
-    return walletActionError("not_configured", "Per-user USD wallets are not enabled in this deployment.");
-  }
-  const amountUsd = typeof input.amountUsd === "number" && Number.isFinite(input.amountUsd) && input.amountUsd >= 0 && input.amountUsd <= 100
-    ? Number(input.amountUsd.toFixed(6))
-    : null;
-  if (amountUsd == null) return walletActionError("invalid_amount", "amountUsd must be between 0 and 100 USD.");
-  const reason = input.reason?.trim();
-  if (!reason) return walletActionError("missing_reason", "reason is required when changing the starter amount.");
-  const rebalanceExisting = input.rebalanceExisting === true;
-  const result = await ctx.walletService.setStarterTargetAndRebalance({
-    guildId: actor.guildId,
-    requestedByUserId: actor.userId,
-    requestId: actor.requestId,
-    targetUsd: amountUsd,
-    rebalanceExisting,
-    reason
-  }, paymentRecorder(ctx));
-  const content = [
-    `Server starter amount is now $${money(result.targetUsd)} USD.`,
-    rebalanceExisting
-      ? result.rebalanceError
-        ? `The starter amount was saved, but existing wallets were not rebalanced: ${result.rebalanceError}`
-        : `Existing wallets: inspected ${result.inspected}, transferred ${result.transferred}, unchanged ${result.unchanged}, failed ${result.failed}.`
-      : "Existing wallet balances were left unchanged because the current request did not explicitly ask to rebalance them.",
-    rebalanceExisting ? `Returned to AI treasury: $${result.totalToTreasuryUsd} USD.` : null,
-    rebalanceExisting ? `Added from AI treasury: $${result.totalFromTreasuryUsd} USD.` : null,
-    `Reason: ${reason}`
-  ].filter((line): line is string => line !== null).join("\n");
-  await audit(ctx, "adminSetWalletStarterAmount", `$${money(result.targetUsd)}; rebalance=${rebalanceExisting}; ${reason}`, content).catch(() => undefined);
-  return {
-    ...walletActionSuccess("starter_amount_update", content),
-    status: result.rebalanceError ? "partial" : "ok",
-    limitation: result.rebalanceError ? "starter_target_saved_rebalance_not_started" : undefined,
-  };
-}
-
 export async function getWalletFeeSummary(ctx: ToolContext): Promise<string> {
   const actor = paymentRequester(ctx);
   if (!isPaymentAdmin(ctx)) return "Server-wide wallet fee history is restricted to the bot owner or payment ops allowlist.";
@@ -474,16 +389,6 @@ export async function getWalletFeeSummary(ctx: ToolContext): Promise<string> {
   ].filter((line): line is string => line !== null).join("\n");
   await audit(ctx, "getWalletFeeSummary", "all confirmed managed-wallet transfers", content);
   return content;
-}
-
-export async function reconcileWalletTransfers(ctx: ToolContext): Promise<AgentResponse> {
-  paymentRequester(ctx);
-  if (!isPaymentAdmin(ctx)) return walletActionError("not_authorized", "Wallet reconciliation is restricted to the bot owner or payment ops allowlist.");
-  if (!ctx.config.payments.walletEnabled || !ctx.walletService) return walletActionError("not_configured", "Managed USD wallets are not enabled in this deployment.");
-  const result = await ctx.walletService.reconcile(paymentRecorder(ctx));
-  const content = `Reconciliation: checked ${result.checked}, confirmed ${result.confirmed}, failed ${result.failed}.`;
-  await audit(ctx, "reconcileWalletTransfers", "managed USD wallets", content);
-  return walletActionSuccess("wallet_reconciliation", content);
 }
 
 function walletActionSuccess(kind: string, content: string): AgentResponse {
@@ -604,21 +509,6 @@ function liveDiscordGuildMembers(ctx: ToolContext): Promise<DiscordGuildMembers>
   });
   liveGuildMembersByTurn.set(ctx, lookup);
   return lookup;
-}
-
-async function adminEndpoint(
-  ctx: ToolContext,
-  kind: WalletEndpointInput | undefined,
-  rawUserId: string | undefined
-): Promise<{ endpoint: { kind: "bot" } | { kind: "user"; userId: string }; label: string } | string> {
-  if (kind === "bot") return { endpoint: { kind: "bot" }, label: "bot wallet" };
-  if (kind !== "user") return "Admin transfer source and destination must each be bot or user.";
-  const userId = normalizedUserId(rawUserId);
-  if (!userId) return "A user endpoint requires its Discord user ID or mention.";
-  const resolved = await resolveWalletUser(ctx, userId);
-  if (!resolved.ok) return resolved.message;
-  const target = resolved.target;
-  return { endpoint: { kind: "user", userId: target.userId }, label: `${target.displayName}'s wallet` };
 }
 
 function normalizedUserId(value: string | undefined): string | null {

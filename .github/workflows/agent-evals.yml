@@ -1,0 +1,119 @@
+name: Agent Evals
+
+# Replays the public eval suite against the PR's base and head and fails when
+# answer quality drops. It calls a paid model, so it runs only when a PR that
+# touches prompts, tools or the agent runtime carries the `evals` label, or by
+# hand. Private production replays (npm run eval:replay) stay on operator
+# machines because they contain member content.
+on:
+  pull_request:
+    types: [labeled, synchronize]
+    paths:
+      - "src/agent/**"
+      - "src/tools/**"
+      - "src/capabilities/**"
+      - "skills/**"
+      - "native/**"
+      - "evals/**"
+      - "scripts/eval.ts"
+      - "scripts/evalJudge.ts"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: agent-evals-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  evals:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.pull_request.labels.*.name, 'evals')
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: discord_ai_agent
+          POSTGRES_PASSWORD: discord_ai_agent
+          POSTGRES_DB: discord_ai_agent
+        ports:
+          - 5433:5432
+        options: >-
+          --health-cmd "pg_isready -U discord_ai_agent -d discord_ai_agent"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 20
+    env:
+      OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+      DATABASE_URL: postgres://discord_ai_agent:discord_ai_agent@localhost:5433/discord_ai_agent
+      REPEAT: "3"
+      # Fail when pass@1 drops by more than this many points.
+      MAX_PASS_AT_1_DROP: "0.05"
+    steps:
+      - name: Require the model credential
+        run: |
+          if [ -z "$OPENROUTER_API_KEY" ]; then
+            echo "::error::Set the OPENROUTER_API_KEY repository secret to run agent evals."
+            exit 1
+          fi
+      - name: Use a synthetic guild ID
+        # Built at runtime: the release scan rejects snowflake-shaped literals.
+        run: echo "DISCORD_GUILD_ID=1$(printf '%017d' 0)" >> "$GITHUB_ENV"
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Check out the base revision beside the head
+        if: github.event_name == 'pull_request'
+        run: git worktree add ../base "${{ github.event.pull_request.base.sha }}"
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: evals-cargo-${{ runner.os }}-${{ hashFiles('native/nanocodex-runtime/Cargo.lock') }}
+      - name: Prepare the database
+        run: |
+          npm ci
+          npm run migrate
+          npx tsx scripts/seedEvalGuild.ts
+      - name: Run the suite at the base revision
+        if: github.event_name == 'pull_request'
+        working-directory: ../base
+        run: |
+          npm ci
+          cargo build --locked --manifest-path native/nanocodex-runtime/Cargo.toml
+          PATH="$PWD/native/nanocodex-runtime/target/debug:$PATH" npm run eval -- --repeat "$REPEAT" --output-dir "$GITHUB_WORKSPACE/.eval-base" --safe-summary || true
+          cp "$(ls -t "$GITHUB_WORKSPACE"/.eval-base/*.json | head -1)" "$GITHUB_WORKSPACE/base-report.json"
+      - name: Run the suite at the head revision
+        run: |
+          cargo build --locked --manifest-path native/nanocodex-runtime/Cargo.toml
+          compare=()
+          [ -f base-report.json ] && compare=(--compare base-report.json)
+          PATH="$PWD/native/nanocodex-runtime/target/debug:$PATH" npm run eval -- --repeat "$REPEAT" --output-dir .eval-head "${compare[@]}" --safe-summary > head-summary.json || true
+          cp "$(ls -t .eval-head/*.json | head -1)" head-report.json
+          jq '{totals, consistency}' head-summary.json >> "$GITHUB_STEP_SUMMARY"
+      - name: Fail on a quality drop
+        if: github.event_name == 'pull_request'
+        run: |
+          base=$(jq -r '.consistency.passAt1 // 0' base-report.json)
+          head=$(jq -r '.consistency.passAt1 // 0' head-report.json)
+          echo "pass@1 base=$base head=$head" | tee -a "$GITHUB_STEP_SUMMARY"
+          awk -v base="$base" -v head="$head" -v drop="$MAX_PASS_AT_1_DROP" 'BEGIN { exit !(head + drop >= base) }' \
+            || { echo "::error::pass@1 fell from $base to $head."; exit 1; }
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: agent-evals
+          # Public suite only: prompts and answers here contain no member content.
+          path: |
+            base-report.json
+            head-report.json
+            head-summary.json
+          if-no-files-found: warn
+          retention-days: 14

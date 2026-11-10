@@ -25,64 +25,6 @@ export async function executionActivityTrace(pool: DbPool, executionId: string) 
   return trace.rows.map(dashboardTraceEvent);
 }
 
-export async function taskActivityTrace(pool: DbPool, taskId: string) {
-  const trace = await pool.query(
-    `WITH RECURSIVE lineage AS (
-       SELECT task_id,retried_from_task_id,0 AS depth
-       FROM agent_tasks WHERE task_id = $1
-       UNION ALL
-       SELECT parent.task_id,parent.retried_from_task_id,child.depth + 1
-       FROM lineage child
-       JOIN agent_tasks parent ON parent.task_id = child.retried_from_task_id
-       WHERE child.depth < 15
-     ), events AS (
-       SELECT event.*,lineage.depth,max(lineage.depth) OVER () - lineage.depth + 1 AS task_attempt
-       FROM lineage
-       JOIN agent_runtime_executions execution USING (task_id)
-       JOIN agent_runtime_events event USING (execution_id)
-     )
-     SELECT id,sequence,kind,level,event_name,summary,
-            coalesce(metadata,'{}'::jsonb) || jsonb_build_object('attempt',task_attempt) AS metadata,
-            duration_ms,span_id,parent_span_id,created_at
-     FROM events
-     ORDER BY created_at ASC,id ASC
-     LIMIT 400`,
-    [taskId],
-  );
-  return trace.rows.map(dashboardTraceEvent);
-}
-
-export async function codeChangeActivityTrace(
-  pool: DbPool,
-  reference: { improvementCaseId?: string | null; rootTaskId?: string | null },
-) {
-  const trace = await pool.query(
-    `WITH RECURSIVE direct_lineage AS (
-       SELECT task_id FROM agent_tasks WHERE task_id = $2::text
-       UNION ALL
-       SELECT child.task_id FROM agent_tasks child
-       JOIN direct_lineage parent ON child.retried_from_task_id = parent.task_id
-     ), selected AS (
-       SELECT task.*,
-              dense_rank() OVER (ORDER BY task.created_at,task.task_id) AS task_attempt
-       FROM agent_tasks task
-       WHERE task.task_type <> 'improvement_report'
-         AND (($1::text IS NOT NULL AND task.improvement_case_id = $1)
-           OR ($2::text IS NOT NULL AND task.task_id IN (SELECT task_id FROM direct_lineage)))
-     )
-     SELECT event.id,event.sequence,event.kind,event.level,event.event_name,event.summary,
-            coalesce(event.metadata,'{}'::jsonb) || jsonb_build_object('attempt',selected.task_attempt) AS metadata,
-            event.duration_ms,event.span_id,event.parent_span_id,event.created_at
-     FROM selected
-     JOIN agent_runtime_executions execution USING (task_id)
-     JOIN agent_runtime_events event USING (execution_id)
-     ORDER BY event.created_at ASC,event.id ASC
-     LIMIT 800`,
-    [reference.improvementCaseId ?? null, reference.rootTaskId ?? null],
-  );
-  return trace.rows.map(dashboardTraceEvent);
-}
-
 export function dashboardTraceEvent(row: Record<string, unknown>) {
   const eventName = String(row.event_name);
   const level = String(row.level || "info");

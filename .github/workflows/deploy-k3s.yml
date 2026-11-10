@@ -45,7 +45,6 @@ jobs:
       ECR_REPOSITORY: ${{ vars.ECR_REPOSITORY }}
       HELM_RELEASE: ${{ vars.HELM_RELEASE || 'discord-ai-agent' }}
       K8S_NAMESPACE: ${{ vars.K8S_NAMESPACE || 'discord-ai-agent' }}
-      DISCORD_BOT_CHANNEL_ID: ${{ vars.DISCORD_BOT_CHANNEL_ID }}
       IMAGE_TAG: ${{ inputs.image_tag }}
       BOT_REPLICAS: ${{ inputs.bot_replicas }}
     steps:
@@ -82,7 +81,7 @@ jobs:
           command="curl -fsSL https://raw.githubusercontent.com/Slokh/discord-ai-agent/$IMAGE_TAG/scripts/deployK3s.sh -o $remote_script"
           command+=" && printf '$script_sha  $remote_script\\n' | sha256sum --check --status"
           command+=" && chmod 0700 $remote_script"
-          command+=" && DISCORD_BOT_CHANNEL_ID='$DISCORD_BOT_CHANNEL_ID' $remote_script '$IMAGE_TAG' '$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT' '$BOT_REPLICAS' '$K8S_NAMESPACE' '$HELM_RELEASE' '$registry' '$ECR_REPOSITORY'"
+          command+=" && $remote_script '$IMAGE_TAG' '$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT' '$BOT_REPLICAS' '$K8S_NAMESPACE' '$HELM_RELEASE' '$registry' '$ECR_REPOSITORY'"
           command+="; status=\$?; rm -f $remote_script; exit \$status"
           parameters="$(jq -cn --arg command "$command" '{commands:[$command]}')"
           command_id="$(aws ssm send-command \

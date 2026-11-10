@@ -1,9 +1,7 @@
 import { createHash } from "node:crypto";
 import { z } from "zod";
-import type { DiscordResponseFooter } from "./responseSink.js";
-import { discordPresentationSchema, type DiscordPresentation } from "./components/validation.js";
+import { validateDiscordAttachmentNames, type DiscordResponseFooter } from "./responseSink.js";
 import type { AgentFile } from "../tools/types.js";
-import { validateDiscordAttachmentNames } from "./components/renderer.js";
 
 export const DISCORD_DELIVERY_INTENT_ARTIFACT_KIND = "discord_delivery_intent";
 export const DISCORD_DELIVERY_FILE_ARTIFACT_KIND = "discord_delivery_file";
@@ -23,7 +21,9 @@ const commonFields = {
     reasoningEffort: z.string().max(50).optional(),
     extraLines: z.array(z.string()).optional(),
   }).nullable(),
-  presentation: discordPresentationSchema.nullable(),
+  // Intents written before Components V2 was removed may still carry a
+  // presentation; it is accepted and ignored so they can still be recovered.
+  presentation: z.unknown().optional(),
   sourceMessageReaction: z.string().nullable(),
 };
 
@@ -52,7 +52,6 @@ export function createDiscordDeliveryIntent(input: {
   content: string;
   storedContent?: string;
   footer?: DiscordResponseFooter | null;
-  presentation?: DiscordPresentation | null;
   files?: DiscordDeliveryFileReference[];
   sourceMessageReaction?: string | null;
 }): DiscordDeliveryIntent {
@@ -69,7 +68,6 @@ export function createDiscordDeliveryIntent(input: {
     storedContent: input.storedContent ?? input.content,
     responseRedacted: input.storedContent !== undefined,
     footer: input.footer ?? null,
-    presentation: input.presentation ?? null,
     files: input.files ?? [],
     sourceMessageReaction: input.sourceMessageReaction ?? null,
   });

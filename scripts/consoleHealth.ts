@@ -106,7 +106,7 @@ export async function checkConsoleHealth(input: ConsoleHealthInput): Promise<Con
       const code = payload?.revision !== input.expectedRevision ? "revision_mismatch" : !fresh ? "projection_stale" : "invalid_overview";
       record("production_overview", overview.durationMs, valid, code, overview.slow);
     }
-    const activity = await request("production_activity", new URL("/api/activity?types=conversation,improvement,code_change&limit=1", internalBase));
+    const activity = await request("production_activity", new URL("/api/activity?types=conversation&limit=1", internalBase));
     if (activity) {
       const payload = await activity.response.json().catch(() => null) as Record<string, unknown> | null;
       const rows = [...array(payload?.active), ...array(payload?.recent)];

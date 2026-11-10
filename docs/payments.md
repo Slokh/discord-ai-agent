@@ -8,21 +8,20 @@ The payment runtime uses Privy application wallets on Tempo and one configured s
 
 `src/payments/privyTempoWalletProvider.ts` owns provider interaction: wallet provisioning, token resolution, balances, fee sponsorship, transfers, receipt verification, fee accounting, and confirmed-block balance snapshots. `walletService.ts` owns product lifecycle and orchestration. `src/db/paymentRepository.ts` and focused payment repositories own durable wallets, transfers, reservations, wagers, and locks.
 
-Never expose Privy secrets, signing credentials, private keys, or signed transactions to Discord, model context, logs, or sandboxes.
+Never expose Privy secrets, signing credentials, private keys, or signed transactions to Discord, model context, or logs.
 
 ## Enablement
 
 Supplying both `PRIVY_APP_ID` and `PRIVY_APP_SECRET` enables the complete wallet capability: the shared bot wallet, automatic member wallets, grants, transfers, and wallet-backed wagers. The product uses Tempo mainnet and `USDC.e`; changing that rail is a reviewed code and migration decision, not a deployment toggle.
 
-The bot wallet sponsors member-wallet fees and acts as the treasury for grants and games. The managed identity-to-wallet balance directory is visible to members; protected administrative operations still require owner/ops authority.
+The bot wallet sponsors member-wallet fees and acts as the treasury for grants and games. The managed identity-to-wallet balance directory is visible to members. The only restricted wallet tool, `getWalletFeeSummary`, is limited to the owner and ops allowlists; treasury operations such as rebalancing run from the `npm run payments:*` commands, which attribute changes to `BOT_OWNER_USER_ID`.
 
 ## Authority model
 
 - The current Discord requester is the only ordinary user authorized to spend from their managed wallet.
 - Recipients must resolve to a verified Discord member or the bot wallet; arbitrary external addresses are unsupported.
-- A new transfer, grant, correction, or wager requires explicit current-turn intent.
+- A new transfer, grant, or wager requires explicit current-turn intent.
 - Reply chains can clarify a prior request but cannot turn another user's instruction into authority.
-- Owner/ops corrections use a dedicated administrative tool and require an explicit reason.
 - Tool/model arguments are proposals. Code resolves canonical wallets, requester identity, network, and token.
 
 Starter funding tops an eligible requester toward the configured target; it is not a repeatable fixed giveaway. The service prevents concurrent or duplicate grants and records the durable transfer.
@@ -100,6 +99,6 @@ npm run payments:provision-bot
 npm run verify:rng -- --session <session-id>
 ```
 
-Before enabling a real-value network, verify provisioning, requester transfers, whole-balance sends, fee sponsorship, starter grants, administrative corrections, reservation concurrency, win/loss/push settlement, restart recovery, and reconciliation.
+Before enabling a real-value network, verify provisioning, requester transfers, whole-balance sends, fee sponsorship, starter grants, reservation concurrency, win/loss/push settlement, restart recovery, and reconciliation.
 
 Payment, wager, RNG, or migration changes require focused unit tests and `npm run verify:db`. Include duplicate submission, concurrent reservation/action, post-commit failure, expiry, and exactly-once settlement cases in proportion to the change.

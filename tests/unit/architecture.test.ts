@@ -14,7 +14,6 @@ const requiredArchitectureGuides = [
   "docs/agent-system.md",
   "docs/data.md",
   "docs/payments.md",
-  "docs/code-updates.md",
   "docs/operations.md",
   "docs/development.md",
 ];
@@ -79,16 +78,14 @@ describe("architecture guardrails", () => {
     expect(terraform).not.toContain("candidate_repository_subjects");
   });
 
-  it("does not mount Kubernetes API credentials into app or sandbox service accounts", async () => {
+  it("does not mount Kubernetes API credentials into the shared app service account", async () => {
     const serviceAccounts = await fs.readFile(path.join(process.cwd(), "deploy/helm/discord-ai-agent/templates/serviceaccounts.yaml"), "utf8");
-    expect(serviceAccounts.match(/automountServiceAccountToken: false/g)).toHaveLength(2);
-  });
-
-  it("limits sandbox failure diagnostics to read-only pod access", async () => {
-    const rbac = await fs.readFile(path.join(process.cwd(), "deploy/helm/discord-ai-agent/templates/rbac.yaml"), "utf8");
-    expect(rbac).toContain('resources: ["pods"]\n    verbs: ["get", "list"]');
-    expect(rbac).toContain('resources: ["pods/log"]\n    verbs: ["get"]');
-    expect(rbac).not.toMatch(/resources: \["pods(?:\/log)?"\]\n\s+verbs: \[[^\]]*(?:create|update|patch|delete)/);
+    expect(serviceAccounts.match(/kind: ServiceAccount/g)).toHaveLength(1);
+    expect(serviceAccounts.match(/automountServiceAccountToken: false/g)).toHaveLength(1);
+    for (const workload of ["bot.yaml", "worker.yaml", "console.yaml"]) {
+      const template = await fs.readFile(path.join(process.cwd(), "deploy/helm/discord-ai-agent/templates", workload), "utf8");
+      expect(template).toContain('serviceAccountName: {{ include "discord-ai-agent.fullname" . }}-app');
+    }
   });
 
   it("allows the Console to finish cold startup before liveness restarts it", async () => {
@@ -105,109 +102,8 @@ describe("architecture guardrails", () => {
     expect(deploymentWorkflow).not.toContain("console-public");
   });
 
-  it("keeps broad sandbox HTTPS egress away from private and metadata networks", async () => {
-    const policy = await fs.readFile(path.join(process.cwd(), "deploy/helm/discord-ai-agent/templates/networkpolicy.yaml"), "utf8");
-    for (const cidr of ["10.0.0.0/8", "100.64.0.0/10", "127.0.0.0/8", "169.254.0.0/16", "172.16.0.0/12", "192.168.0.0/16"]) {
-      expect(policy).toContain(`- ${cidr}`);
-    }
-  });
-
-  it("confines sandbox egress to the egress proxy, callback API, and DNS", async () => {
-    const policy = await fs.readFile(path.join(process.cwd(), "deploy/helm/discord-ai-agent/templates/networkpolicy.yaml"), "utf8");
-    const documents = policy.split(/^---$/m);
-    const sandboxPolicies = documents.filter((document) => /name: .*-sandbox(?:-credentialed|-model)?-egress\n/.test(document));
-    expect(sandboxPolicies).toHaveLength(3);
-    for (const document of sandboxPolicies) {
-      expect(document).toContain('policyTypes: ["Egress"]');
-      expect(document).not.toContain("ipBlock");
-      expect(document).not.toContain("namespaceSelector: {}");
-    }
-    expect(sandboxPolicies[0]).toContain("app.kubernetes.io/component: api");
-    expect(sandboxPolicies[0]).toContain("app.kubernetes.io/component: egress-proxy");
-    expect(sandboxPolicies[0]).toContain("port: {{ $proxy.publicPort }}");
-    expect(sandboxPolicies[0]).toContain("k8s-app: kube-dns");
-    expect(sandboxPolicies[1]).toContain("{{ $proxy.credentialedPodLabel.key }}");
-    expect(sandboxPolicies[1]).toContain("port: {{ $proxy.credentialedPort }}");
-    expect(sandboxPolicies[1]).not.toContain("modelPort");
-    expect(sandboxPolicies[2]).toContain("{{ $proxy.modelPodLabel.key }}");
-    expect(sandboxPolicies[2]).toContain("port: {{ $proxy.modelPort }}");
-    expect(sandboxPolicies[2]).not.toContain("credentialedPort");
-  });
-
-  it("injects only the model credential on the computer-profile proxy port", async () => {
-    const policy = await fs.readFile(path.join(process.cwd(), "deploy/helm/discord-ai-agent/templates/networkpolicy.yaml"), "utf8");
-    const proxyPolicy = policy.split(/^---$/m).find((document) => /name: .*-egress-proxy\n/.test(document)) ?? "";
-    const values = await fs.readFile(path.join(process.cwd(), "deploy/helm/discord-ai-agent/values.yaml"), "utf8");
-    const proxy = await fs.readFile(path.join(process.cwd(), "deploy/helm/discord-ai-agent/templates/egress-proxy.yaml"), "utf8");
-    const addon = await fs.readFile(path.join(process.cwd(), "deploy/helm/discord-ai-agent/files/egress_proxy.py"), "utf8");
-    expect(values).toMatch(/credentialedPodLabel:\n\s+key: discord-ai-agent\.dev\/egress\n\s+value: credentialed/);
-    expect(values).toMatch(/modelPodLabel:\n\s+key: discord-ai-agent\.dev\/egress\n\s+value: model/);
-    expect(values).toMatch(/credentialedPort: 8080\n\s+publicPort: 8081\n\s+modelPort: 8082/);
-    expect(proxyPolicy).toMatch(/\{\{ \$proxy\.credentialedPodLabel\.key \}\}[^\n]*\n\s+ports:\n\s+- protocol: TCP\n\s+port: \{\{ \$proxy\.credentialedPort \}\}/);
-    expect(proxyPolicy).toMatch(/\{\{ \$proxy\.modelPodLabel\.key \}\}[^\n]*\n\s+ports:\n\s+- protocol: TCP\n\s+port: \{\{ \$proxy\.modelPort \}\}/);
-    for (const port of ["credentialedPort", "publicPort", "modelPort"]) {
-      expect(proxy).toContain(`--mode regular@{{ $proxy.${port} }}`);
-    }
-    expect(proxy).toContain("key: SANDBOX_OPENROUTER_API_KEY, optional: true");
-    const modelListener = addon.slice(addon.indexOf("MODEL_PORT: ["), addon.indexOf("],", addon.indexOf("MODEL_PORT: [")));
-    expect(modelListener).toContain("openrouter_hosts");
-    expect(modelListener).toContain("model_key");
-    expect(modelListener).not.toMatch(/github/i);
-    expect(addon).toContain('os.environ.get("SANDBOX_OPENROUTER_API_KEY", "") or openrouter_key');
-    expect(addon).toContain("self._credential(listener, sni) is None");
-  });
-
-  it("keeps the egress proxy away from private and metadata networks after name resolution", async () => {
-    const policy = await fs.readFile(path.join(process.cwd(), "deploy/helm/discord-ai-agent/templates/networkpolicy.yaml"), "utf8");
-    const proxyPolicy = policy.split(/^---$/m).find((document) => /name: .*-egress-proxy\n/.test(document)) ?? "";
-    const values = await fs.readFile(path.join(process.cwd(), "deploy/helm/discord-ai-agent/values.yaml"), "utf8");
-    const addon = await fs.readFile(path.join(process.cwd(), "deploy/helm/discord-ai-agent/files/egress_proxy.py"), "utf8");
-    const denyCidrs = values
-      .slice(values.indexOf("  denyCidrs:\n") + "  denyCidrs:\n".length)
-      .split("\n")
-      .filter((_line, index, lines) => lines.slice(0, index + 1).every((entry) => entry.startsWith("    - ")))
-      .map((line) => line.slice("    - ".length));
-    expect(proxyPolicy).toContain('policyTypes: ["Ingress", "Egress"]');
-    for (const cidr of ["10.0.0.0/8", "100.64.0.0/10", "127.0.0.0/8", "169.254.0.0/16", "172.16.0.0/12", "192.168.0.0/16"]) {
-      expect(proxyPolicy).toContain(`- ${cidr}`);
-      expect(denyCidrs).toContain(cidr);
-    }
-    expect(addon).toContain("ip.is_global and not ip.is_multicast");
-    expect(addon).toContain("data.server.address = (addresses[0], port)");
-    expect(addon).toContain("data.ignore_connection = True");
-  });
-
-  it("runs sandboxes only under gVisor on the tainted sandbox node pool", async () => {
-    const isolation = await fs.readFile(path.join(process.cwd(), "deploy/helm/discord-ai-agent/templates/sandbox-isolation.yaml"), "utf8");
-    const values = await fs.readFile(path.join(process.cwd(), "deploy/helm/discord-ai-agent/values.yaml"), "utf8");
-    const agent = await fs.readFile(path.join(process.cwd(), "deploy/terraform/aws/templates/k3s-sandbox-agent-user-data.sh.tftpl"), "utf8");
-    const terraform = await fs.readFile(path.join(process.cwd(), "deploy/terraform/aws/k3s.tf"), "utf8");
-    expect(values).toMatch(/runtimeClassName: gvisor\n\s+runtimeHandler: runsc/);
-    expect(values).toMatch(/key: discord-ai-agent\.dev\/pool\n\s+value: sandbox/);
-    expect(values).toMatch(/key: discord-ai-agent\.dev\/sandbox\n\s+value: "true"\n\s+effect: NoSchedule/);
-    expect(agent).toContain("--node-label=discord-ai-agent.dev/pool=sandbox");
-    expect(agent).toContain("--node-taint=discord-ai-agent.dev/sandbox=true:NoSchedule");
-    expect(agent).toContain("printf '%s  %s\\n' '${gvisor_archive_sha256}' /tmp/gvisor.tar.bz2 | sha256sum --check --status");
-    expect(agent).toContain('runtime_type = "io.containerd.runsc.v1"');
-    // runsc refuses to start a sandbox without its gvisor-bin sidecars beside it.
-    expect(agent).toContain("install -m 0755 /tmp/gvisor/gvisor-bin/* /usr/local/bin/gvisor-bin/");
-    expect(isolation).toContain("kind: RuntimeClass");
-    expect(isolation).toContain("scheduling:");
-    expect(isolation).toContain("preemptionPolicy: Never");
-    expect(isolation).toContain("validationActions: [Deny]");
-    expect(isolation).toContain("failurePolicy: Fail");
-    expect(isolation).toContain("object.spec.runtimeClassName ==");
-    expect(isolation).toContain("has(s.serviceAccountToken)");
-    expect(terraform).toMatch(/resource "aws_autoscaling_group" "k3s_sandbox" \{[\s\S]*?min_size\s+= 0\n\s+max_size\s+= 1\n\s+desired_capacity\s+= 0/);
-    expect(terraform).toMatch(/test\s+= "ArnNotEquals"\n\s+variable\s+= "aws:PrincipalArn"\n\s+values\s+= \[aws_iam_role\.k3s_sandbox\.arn\]/);
-    const sandboxRole = terraform.slice(terraform.indexOf('resource "aws_iam_role" "k3s_sandbox"'));
-    expect(sandboxRole).not.toMatch(/AttachVolume|application_kubernetes|postgres_kubernetes|AmazonEC2ContainerRegistryReadOnly/);
-  });
-
-  it("never changes K3s server token flags and joins sandbox agents with expiring bootstrap tokens", async () => {
+  it("never changes K3s server token flags", async () => {
     const server = await fs.readFile(path.join(process.cwd(), "deploy/terraform/aws/templates/k3s-user-data.sh.tftpl"), "utf8");
-    const agent = await fs.readFile(path.join(process.cwd(), "deploy/terraform/aws/templates/k3s-sandbox-agent-user-data.sh.tftpl"), "utf8");
-    const installer = await fs.readFile(path.join(process.cwd(), "scripts/installK3sSandboxServerUnits.sh"), "utf8");
     // Adding a token flag to the existing cluster rewrote cred/passwd, after
     // which K3s refused to start because the file was newer than the datastore.
     const serverUnit = heredoc(server, "/etc/systemd/system/k3s.service");
@@ -223,121 +119,27 @@ describe("architecture guardrails", () => {
       "--secrets-encryption",
       "--write-kubeconfig-mode=0600",
     ]);
-    const refresh = heredoc(server, "/usr/local/sbin/discord-ai-agent-refresh-agent-join");
-    expect(refresh).toContain("k3s token create --ttl 24h --usages authentication --description sandbox-agent");
-    expect(refresh).toContain("k3s token delete");
-    expect(refresh).toContain("{server_url:$url,token:env.AGENT_JOIN_TOKEN}");
-    expect(heredoc(server, "/etc/systemd/system/discord-ai-agent-agent-join-refresh.timer")).toContain("OnUnitActiveSec=6h");
-    // The operator installer copies these blocks verbatim from the template.
-    for (const target of ["/usr/local/sbin/discord-ai-agent-refresh-agent-join", "/etc/systemd/system/discord-ai-agent-agent-join-refresh.service", "/etc/systemd/system/discord-ai-agent-agent-join-refresh.timer"]) {
-      expect(heredoc(server, target)).not.toMatch(/\$\{|%\{/);
-      expect(installer).toContain(`block ${target}`);
-    }
-    expect(installer).not.toMatch(/>\s*"?\$unit"?|>\s*\/etc\/systemd\/system\/k3s\.service|sed -i|systemctl (?:restart|stop) k3s/);
-    expect(agent).toContain("grep -Eq '^K10[0-9a-f]{64}::[a-z0-9]{6}\\.[a-z0-9]{16}$'");
-    expect(heredoc(agent, "/etc/systemd/system/k3s-agent.service")).toContain("ExecStartPre=/usr/local/sbin/discord-ai-agent-agent-join");
-  });
-
-  it("removes only stale sandbox Nodes whose EC2 instance is gone", async () => {
-    const server = await fs.readFile(path.join(process.cwd(), "deploy/terraform/aws/templates/k3s-user-data.sh.tftpl"), "utf8");
-    const installer = await fs.readFile(path.join(process.cwd(), "scripts/installK3sSandboxServerUnits.sh"), "utf8");
-    const terraform = await fs.readFile(path.join(process.cwd(), "deploy/terraform/aws/k3s.tf"), "utf8");
-    const cleanup = heredoc(server, "/usr/local/sbin/discord-ai-agent-clean-sandbox-nodes");
-    expect(cleanup).toContain("get nodes --selector discord-ai-agent.dev/pool=sandbox -o json");
-    expect(cleanup).toContain('select(.metadata.name != "discord-ai-agent-production")');
-    expect(cleanup).toContain('select(.metadata.labels["node-role.kubernetes.io/control-plane"] == null)');
-    expect(cleanup).toContain('select(($ready.status // "Unknown") != "True")');
-    expect(cleanup).toContain("fromdateiso8601) > 600)");
-    // Only an instance that launched before the Node registered can own it.
-    expect(cleanup).toContain("Name=instance-state-name,Values=pending,running,shutting-down,stopping,stopped");
-    expect(cleanup).toContain('select(. <= ($created | fromdateiso8601))');
-    expect(cleanup).toMatch(/owners="\$\(aws ec2 describe-instances [\s\S]*?\)"\n\s+\[ "\$owners" = 0 \] \|\| continue\n\s+[^\n]*kubectl delete node "\$node"/);
-    expect(cleanup).toContain('delete secret "$node.node-password.k3s" --ignore-not-found');
-    expect(cleanup).not.toMatch(/k3s\.service|systemctl|--all\b|delete nodes?\s+--selector/);
-    const service = heredoc(server, "/etc/systemd/system/discord-ai-agent-sandbox-node-cleanup.service");
-    expect(service).toContain("Requisite=k3s.service");
-    expect(service).not.toContain("Requires=");
-    expect(heredoc(server, "/etc/systemd/system/discord-ai-agent-sandbox-node-cleanup.timer")).toContain("OnUnitActiveSec=5min");
-    expect(server).toMatch(/systemctl enable [^\n]*discord-ai-agent-sandbox-node-cleanup\.timer/);
-    for (const target of ["/usr/local/sbin/discord-ai-agent-clean-sandbox-nodes", "/etc/systemd/system/discord-ai-agent-sandbox-node-cleanup.service", "/etc/systemd/system/discord-ai-agent-sandbox-node-cleanup.timer"]) {
-      expect(heredoc(server, target)).not.toMatch(/\$\{|%\{/);
-      expect(installer).toContain(`block ${target}`);
-    }
-    // The server role already describes instances; the sandbox role must not.
-    expect(terraform.match(/"ec2:DescribeInstances"/g)).toHaveLength(1);
-    expect(terraform.slice(terraform.indexOf('resource "aws_iam_role" "k3s_sandbox"'))).not.toContain("ec2:");
   });
 
   it("keeps launch-template user data under the EC2 16 KiB raw limit", async () => {
     const terraform = await fs.readFile(path.join(process.cwd(), "deploy/terraform/aws/k3s.tf"), "utf8");
     const server = await fs.readFile(path.join(process.cwd(), "deploy/terraform/aws/templates/k3s-user-data.sh.tftpl"));
-    const agent = await fs.readFile(path.join(process.cwd(), "deploy/terraform/aws/templates/k3s-sandbox-agent-user-data.sh.tftpl"));
     // The server script outgrew 16 KiB, so it ships gzip-compressed. Interpolated
     // ARNs and IDs add well under the remaining headroom.
     expect(terraform).toContain('user_data = base64gzip(templatefile("${path.module}/templates/k3s-user-data.sh.tftpl"');
     expect(gzipSync(server, { level: 9 }).length).toBeLessThan(12_288);
-    expect(terraform).toContain('user_data = base64encode(templatefile("${path.module}/templates/k3s-sandbox-agent-user-data.sh.tftpl"');
-    expect(agent.length).toBeLessThan(12_288);
   });
 
-  it("scales the sandbox pool on demand without touching K3s or other groups", async () => {
-    const server = await fs.readFile(path.join(process.cwd(), "deploy/terraform/aws/templates/k3s-user-data.sh.tftpl"), "utf8");
-    const installer = await fs.readFile(path.join(process.cwd(), "scripts/installK3sSandboxServerUnits.sh"), "utf8");
-    const terraform = await fs.readFile(path.join(process.cwd(), "deploy/terraform/aws/k3s.tf"), "utf8");
-    const scaler = heredoc(server, "/usr/local/sbin/discord-ai-agent-scale-sandbox");
-    expect(heredoc(server, "/etc/discord-ai-agent/runtime.env")).toContain("SANDBOX_AUTOSCALING_GROUP=${sandbox_autoscaling_group}");
-    expect(terraform).toContain("sandbox_autoscaling_group = aws_autoscaling_group.k3s_sandbox.name");
-    expect(scaler).toContain('[[ "$SANDBOX_AUTOSCALING_GROUP" =~ ^[A-Za-z0-9_-]+-k3s-sandbox$ ]] || exit 1');
-    expect(scaler).toContain("selector=app.kubernetes.io/name=discord-ai-agent,app.kubernetes.io/component=sandbox");
-    expect(scaler).toContain('select(.status.phase != "Succeeded" and .status.phase != "Failed")');
-    expect(scaler).toContain('(.type == "Complete" or .type == "Failed") and .status == "True"');
-    // Every read is parsed before any capacity change, and demand always wins.
-    expect(scaler).toMatch(/\]\] \|\| exit 1\n\nset_desired\(\) \{[\s\S]*?\}\n\nif \[ "\$jobs" -gt 0 \] \|\| \[ "\$pods" -gt 0 \]; then\n\s+rm -f "\$idle_file"\n\s+if \[ "\$desired" -eq 0 \]; then\n\s+set_desired 1\n/);
-    expect(scaler).toContain("idle_seconds=600");
-    expect(scaler).toContain("idle_file=/var/lib/discord-ai-agent/sandbox-idle-since");
-    expect(scaler).toContain("--no-honor-cooldown");
-    expect(scaler).not.toMatch(/k3s\.service|systemctl|--desired-capacity [2-9]/);
-    const service = heredoc(server, "/etc/systemd/system/discord-ai-agent-sandbox-scaler.service");
-    expect(service).toContain("After=k3s.service");
-    expect(service).not.toMatch(/Requires=|Requisite=|BindsTo=|Wants=/);
-    expect(service).toContain("do /usr/local/sbin/discord-ai-agent-scale-sandbox || echo");
-    expect(server).toMatch(/systemctl enable [^\n]*discord-ai-agent-sandbox-scaler\.service/);
-    for (const target of ["/usr/local/sbin/discord-ai-agent-scale-sandbox", "/etc/systemd/system/discord-ai-agent-sandbox-scaler.service"]) {
-      expect(heredoc(server, target)).not.toMatch(/\$\{|%\{/);
-      expect(installer).toContain(`block ${target}`);
-    }
-    expect(installer).toContain("printf 'SANDBOX_AUTOSCALING_GROUP=%s-k3s-sandbox\\n' \"$prefix\" >>/etc/discord-ai-agent/runtime.env");
-    // The server may change only the sandbox group's capacity; Terraform never reverts it.
-    expect(terraform).toMatch(/actions\s+= \["autoscaling:SetDesiredCapacity"\]\n\s+resources = \[aws_autoscaling_group\.k3s_sandbox\.arn\]/);
-    expect(terraform.match(/autoscaling:SetDesiredCapacity/g)).toHaveLength(1);
-    expect(terraform).toMatch(/resource "aws_autoscaling_group" "k3s_sandbox" \{[\s\S]*?ignore_changes = \[desired_capacity\]/);
-    expect(terraform.slice(terraform.indexOf('resource "aws_iam_role" "k3s_sandbox"'))).not.toContain("autoscaling:");
-  });
-
-  it("rolls out server sandbox units only from main through a checked, confirmed plan", async () => {
-    const rollout = await fs.readFile(path.join(process.cwd(), "scripts/rolloutK3sSandboxServerUnits.sh"), "utf8");
-    expect(rollout).toContain('[ "$(git -C "$root" rev-parse HEAD)" != "$(git -C "$root" rev-parse origin/main)" ]');
-    expect(rollout).toContain("-target=aws_launch_template.k3s -target=aws_launch_template.k3s_sandbox \\\n  -target=aws_iam_role_policy.k3s_runtime -out=");
-    expect(rollout).toContain('elif .change.actions != ["update"] then');
-    expect(rollout).toContain('terraform -chdir="$terraform_dir" apply -input=false "$work/k3s-join.tfplan"');
-    expect(rollout).toMatch(/confirm "Apply this plan\?[^\n]*" apply\n\s+terraform -chdir/);
-    expect(rollout).toMatch(/confirm "Run the installer[^\n]*" install\n"\$root\/scripts\/installK3sSandboxServerUnits\.sh" \|/);
-    expect(rollout).not.toMatch(/auto-approve|sed -i|systemctl/);
-  });
-
-  it("gives only the worker the sandbox-launcher identity", async () => {
+  it("runs every workload under the app identity without Kubernetes write authority", async () => {
     const worker = await fs.readFile(path.join(process.cwd(), "deploy/helm/discord-ai-agent/templates/worker.yaml"), "utf8");
-    const proxy = await fs.readFile(path.join(process.cwd(), "deploy/helm/discord-ai-agent/templates/egress-proxy.yaml"), "utf8");
     const verification = await fs.readFile(path.join(process.cwd(), "scripts/deployK3s.sh"), "utf8");
-    expect(worker).toMatch(/if \.Values\.api\.enabled \}\}\n[^\n]*\n\s+serviceAccountName: \{\{ include "discord-ai-agent\.fullname" \. \}\}-worker/);
-    expect(worker).toContain('include "discord-ai-agent.sandboxLauncherEnv"');
-    expect(proxy.match(/automountServiceAccountToken: false/g)).toHaveLength(2);
-    expect(verification).toContain('--set "sandbox.image=$registry/$sandbox_repository:$image_tag"');
+    expect(worker).not.toContain("sandboxLauncherEnv");
+    expect(worker).not.toMatch(/serviceAccountName: [^\n]*-worker/);
+    expect(verification).toContain('[ "$worker_account" = "$release-app" ]');
+    expect(verification).toMatch(/for verb in "create jobs\.batch" "get secrets" "create pods"; do[\s\S]*?--as="system:serviceaccount:\$namespace:\$release-app" \|\| true\)"\n\s+\[ "\$permission" = "no" \]/);
     for (const flag of ["api.enabled", "sandbox.isolation.enabled", "egressProxy.enabled", "networkPolicy.enabled"]) {
-      expect(verification).toContain(`--set ${flag}=true`);
+      expect(verification).not.toContain(`--set ${flag}=true`);
     }
-    expect(verification).toMatch(/permission="\$\(kubectl auth can-i create jobs\.batch [^\n]+:\$release-worker" \|\| true\)"\n\[ "\$permission" = "yes" \]/);
-    expect(verification).toMatch(/for account in "\$release-app" discord-ai-agent-sandbox "\$release-egress-proxy"/);
   });
 
   it("keeps deployment verification content-free and free of paid canaries", async () => {
@@ -354,35 +156,9 @@ describe("architecture guardrails", () => {
     expect(verification).not.toContain("--private-only");
     expect(verification).not.toContain("--record-improvement-results");
     expect(verification).toContain("sleep 30");
-    expect(verification).toContain("kubectl auth can-i create jobs.batch");
-    expect(verification).toMatch(/permission="\$\(kubectl auth can-i create jobs\.batch[^\n]+\|\| true\)"/);
+    expect(verification).toContain("kubectl auth can-i $verb");
     expect(verification).toContain("markReleaseVerified.js");
     expect(deployment).not.toContain("upload-artifact");
-  });
-
-  it("replays improvement contracts as the original requester rather than the reporter", async () => {
-    const exporter = await fs.readFile(
-      path.join(process.cwd(), "scripts/exportImprovementEvals.ts"),
-      "utf8",
-    );
-    expect(exporter).toContain("turn.envelope->>'userId' AS user_id");
-    expect(exporter).not.toContain("candidate.reporter_id AS user_id");
-  });
-
-  it("runs the improvement watchdog independently on the cluster cadence", async () => {
-    const watchdog = await fs.readFile(
-      path.join(process.cwd(), "deploy/helm/discord-ai-agent/templates/improvement-watchdog.yaml"),
-      "utf8",
-    );
-    const values = await fs.readFile(path.join(process.cwd(), "deploy/helm/discord-ai-agent/values.yaml"), "utf8");
-
-    expect(watchdog).toContain("kind: CronJob");
-    expect(watchdog).toContain("concurrencyPolicy: Forbid");
-    expect(watchdog).toContain("dist/scripts/improvementWatchdog.js");
-    expect(watchdog).toContain("--record-detection");
-    expect(watchdog).toContain("--enforce");
-    expect(values).toContain('schedule: "*/15 * * * *"');
-    expect(values).toContain("activeDeadlineSeconds: 300");
   });
 
   it("keeps the post-deploy canary invisible to Discord members", async () => {
@@ -496,7 +272,7 @@ describe("architecture guardrails", () => {
 
   it("centralizes production environment access", async () => {
     const sourceFiles = await listSourceFiles(path.join(process.cwd(), "src"));
-    const allowedPrefixes = ["src/config/", "src/execution/"];
+    const allowedPrefixes = ["src/config/"];
     const offenders: string[] = [];
     for (const file of sourceFiles) {
       const relative = normalizePath(path.relative(process.cwd(), file));

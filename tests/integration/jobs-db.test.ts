@@ -3,20 +3,13 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { PgBoss } from "pg-boss";
 import {
   AGENT_RUNTIME_EXECUTION_JOB,
-  AGENT_TASK_JOB,
   CRAWL_GUILD_JOB,
   EMBED_MESSAGE_JOB,
-  IMPROVEMENT_RECONCILIATION_JOB,
   startJobs,
   type JobRuntime
 } from "../../src/jobs/queue.js";
 import { createPool } from "../../src/db/pool.js";
-import { createAppDatabase } from "../../src/db/repositories.js";
-import { AgentRuntimeRepository } from "../../src/db/agentRuntimeRepository.js";
-import { DeliveryObligationsRepository } from "../../src/db/deliveryObligationsRepository.js";
-import { agentRuntimeSessionId } from "../../src/db/agentRuntimeRepository.js";
 import { createIsolatedTestDatabase, type IsolatedTestDatabase } from "./testDatabase.js";
-import { REMINDER_DELIVERY_JOB, REMINDER_RECONCILIATION_CRON, REMINDER_RECONCILIATION_JOB } from "../../src/jobs/reminderJobs.js";
 
 const runDbTests = process.env.DISCORD_AI_AGENT_DB_TESTS === "true";
 let jobsDatabase: IsolatedTestDatabase;
@@ -24,7 +17,6 @@ let jobsDatabase: IsolatedTestDatabase;
 describe.skipIf(!runDbTests)("pg-boss database behavior", () => {
   const bosses: PgBoss[] = [];
   const runtimes: JobRuntime[] = [];
-  const createdTaskIds = new Set<string>();
   beforeAll(async () => {
     jobsDatabase = await createIsolatedTestDatabase("jobs");
   });
@@ -35,13 +27,6 @@ describe.skipIf(!runDbTests)("pg-boss database behavior", () => {
     const pool = jobsDatabase.pool;
     try {
       await pool.query("DROP SCHEMA IF EXISTS pgboss_test CASCADE");
-      const taskIds = [...createdTaskIds];
-      if (taskIds.length > 0) {
-        await pool.query("DELETE FROM agent_runtime_sessions WHERE thread_key = ANY($1::text[])", [
-          taskIds.map((taskId) => `agent-task:${taskId}`)
-        ]);
-        await pool.query("DELETE FROM agent_tasks WHERE task_id = ANY($1::text[])", [taskIds]);
-      }
     } finally {
       await jobsDatabase.cleanup();
     }
@@ -181,146 +166,6 @@ describe.skipIf(!runDbTests)("pg-boss database behavior", () => {
     await runtime.stop();
   });
 
-  it("starts agent task sandboxes when the task worker is enabled", async () => {
-    const config = testConfig();
-    const pool = createPool(config);
-    const repo = createAppDatabase(pool);
-    const agentRuntimeRepo = new AgentRuntimeRepository(pool);
-    const processedRequests: string[] = [];
-    const processedJobs: unknown[] = [];
-    const runtime = await startJobs({
-      config,
-      repo,
-      agentRuntimeRepo,
-      pgBossSchema: "pgboss_test",
-      crawlWorker: false,
-      embeddingWorker: false,
-      taskWorker: true,
-      crawler: {
-        crawlConfiguredGuild: async () => undefined
-      },
-      agentTask: {
-        name: "test-sandbox-backend",
-        start: async (job, context) => {
-          processedRequests.push(job.request);
-          processedJobs.push(job);
-          await context?.progress?.({ step: "test-step", message: "Starting test sandbox." });
-          return {
-            sandboxRunId: "sandbox-run-1",
-            backendJobName: "agent-task-test"
-          };
-        }
-      }
-    });
-    runtimes.push(runtime);
-
-    try {
-      const { jobId, taskId } = await runtime.enqueueAgentTask({
-        request: "add a calendar integration",
-        title: "calendar integration",
-        requestedBy: "test",
-        parentAgentSessionId: "agent-session-parent",
-        parentAgentExecutionId: "agent-execution-parent",
-        parentAgentThreadKey: "discord:guild:channel"
-      });
-      expect(jobId).toEqual(expect.any(String));
-      expect(taskId).toEqual(expect.any(String));
-      createdTaskIds.add(taskId);
-
-      await waitFor(() => processedRequests.includes("add a calendar integration"), 10_000);
-      expect(processedJobs).toEqual([
-        expect.objectContaining({
-          parentAgentSessionId: "agent-session-parent",
-          parentAgentExecutionId: "agent-execution-parent",
-          parentAgentThreadKey: "discord:guild:channel"
-        })
-      ]);
-      await waitFor(async () => {
-        const job = await repo.getAgentTask(taskId);
-        return job?.status === "running" && job.currentStep === "sandbox_running";
-      }, 10_000);
-      const job = await repo.getAgentTask(taskId);
-      expect(job).toEqual(
-        expect.objectContaining({
-          status: "running",
-          backend: "test-sandbox-backend",
-          currentStep: "sandbox_running",
-          statusMessage: "Codegen sandbox is running the task."
-        })
-      );
-      const sessionId = agentRuntimeSessionId(`agent-task:${taskId}`);
-      const session = await agentRuntimeRepo.getSession({ sessionId });
-      expect(session).toEqual(
-        expect.objectContaining({
-          status: "running",
-          harness: "runSandboxAgent",
-          metadata: expect.objectContaining({
-            runtime: "agent",
-            codegenModel: "openai/gpt-6-luna",
-            codegenReasoningEffort: "max",
-            parentAgentSessionId: "agent-session-parent",
-            parentAgentExecutionId: "agent-execution-parent"
-          })
-        })
-      );
-      await expect(agentRuntimeRepo.listMessages({ sessionId })).resolves.toEqual([
-        expect.objectContaining({
-          clientMessageId: taskId,
-          role: "tool",
-          parts: [expect.objectContaining({ type: "tool_result", toolName: "runSandboxAgent", taskId })]
-        })
-      ]);
-      await expect(agentRuntimeRepo.listExecutions({ sessionId })).resolves.toEqual([
-        expect.objectContaining({
-          executionId: `agent-task-execution-${taskId}`,
-          taskId,
-          status: "running",
-          harness: "runSandboxAgent",
-          reasoningEffort: "max",
-          sandboxRunId: "sandbox-run-1",
-          metadata: expect.objectContaining({
-            runtime: "agent",
-            codegenModel: "openai/gpt-6-luna",
-            codegenReasoningEffort: "max",
-            parentAgentSessionId: "agent-session-parent",
-            parentAgentExecutionId: "agent-execution-parent"
-          })
-        })
-      ]);
-    } finally {
-      await runtime.stop();
-      await pool.end();
-    }
-  }, 20_000);
-
-  it("can enqueue agent tasks without running the task worker", async () => {
-    const config = testConfig();
-    const runtime = await startJobs({
-      config,
-      pgBossSchema: "pgboss_test",
-      worker: false,
-      crawlWorker: false,
-      embeddingWorker: false,
-      taskWorker: false,
-      crawler: {
-        crawlConfiguredGuild: async () => undefined
-      }
-    });
-    runtimes.push(runtime);
-
-    const { jobId, taskId } = await runtime.enqueueAgentTask({
-      request: "add a calendar integration",
-      title: "calendar integration",
-      requestedBy: "test"
-    });
-    expect(jobId).toEqual(expect.any(String));
-    createdTaskIds.add(taskId);
-
-    await new Promise((resolve) => setTimeout(resolve, 300));
-    await runtime.boss.deleteJob(AGENT_TASK_JOB, jobId!);
-    await runtime.stop();
-  });
-
   it("processes queued agent runtime executions when the runtime worker is enabled", async () => {
     const config = testConfig();
     const processedRunIds: string[] = [];
@@ -329,7 +174,6 @@ describe.skipIf(!runDbTests)("pg-boss database behavior", () => {
       pgBossSchema: "pgboss_test",
       crawlWorker: false,
       embeddingWorker: false,
-      taskWorker: false,
       agentRuntimeWorker: true,
       crawler: {
         crawlConfiguredGuild: async () => undefined
@@ -372,7 +216,6 @@ describe.skipIf(!runDbTests)("pg-boss database behavior", () => {
       pgBossSchema: "pgboss_test",
       crawlWorker: false,
       embeddingWorker: false,
-      taskWorker: false,
       agentRuntimeWorker: false,
       crawler: {
         crawlConfiguredGuild: async () => undefined
@@ -418,7 +261,6 @@ describe.skipIf(!runDbTests)("pg-boss database behavior", () => {
       pgBossSchema: "pgboss_test",
       crawlWorker: false,
       embeddingWorker: false,
-      taskWorker: false,
       agentRuntimeWorker: false,
       crawler: { crawlConfiguredGuild: async () => undefined },
     });
@@ -435,7 +277,6 @@ describe.skipIf(!runDbTests)("pg-boss database behavior", () => {
       pgBossSchema: "pgboss_test",
       crawlWorker: false,
       embeddingWorker: false,
-      taskWorker: false,
       agentRuntimeWorker: true,
       crawler: { crawlConfiguredGuild: async () => undefined },
       agentRuntime: { run: async (job) => { processedRunIds.push(job.runId); } },
@@ -503,46 +344,6 @@ describe.skipIf(!runDbTests)("pg-boss database behavior", () => {
     await runtime.stop();
   });
 
-  it("registers and runs the improvement reconciliation schedule only on the worker", async () => {
-    const config = { ...testConfig(), improvementReconcileScheduleCron: "*/7 * * * *" };
-    const pool = createPool(config);
-    const runtime = await startJobs({
-      config,
-      pgBossSchema: "pgboss_test",
-      crawlWorker: false,
-      embeddingWorker: false,
-      taskWorker: false,
-      agentRuntimeWorker: false,
-      improvementWorker: true,
-      crawler: { crawlConfiguredGuild: async () => undefined },
-      repo: createAppDatabase(pool),
-      agentRuntimeRepo: new AgentRuntimeRepository(pool),
-      deliveryObligations: new DeliveryObligationsRepository(pool),
-    });
-    runtimes.push(runtime);
-
-    try {
-      const scheduled = await pool.query(
-        "SELECT cron FROM pgboss_test.schedule WHERE name = $1",
-        [IMPROVEMENT_RECONCILIATION_JOB],
-      );
-      expect(scheduled.rows).toEqual([{ cron: "*/7 * * * *" }]);
-      await waitFor(async () => {
-        const jobs = await pool.query(
-          "SELECT state FROM pgboss_test.job WHERE name = $1 ORDER BY created_on DESC LIMIT 1",
-          [IMPROVEMENT_RECONCILIATION_JOB],
-        );
-        return jobs.rows[0]?.state === "completed";
-      }, 10_000);
-      await expect(pool.query(
-        "SELECT status,revision FROM improvement_proof_producer_runs WHERE trigger = 'improvement_reconciliation' ORDER BY started_at DESC LIMIT 1",
-      )).resolves.toEqual(expect.objectContaining({ rows: [expect.objectContaining({ status: "succeeded", revision: config.appRevision })] }));
-    } finally {
-      await pool.end();
-    }
-    await runtime.stop();
-  });
-
   it("deduplicates repeated crawl enqueue requests for the configured guild", async () => {
     const config = testConfig();
     const runtime = await startJobs({
@@ -565,47 +366,6 @@ describe.skipIf(!runDbTests)("pg-boss database behavior", () => {
     await runtime.stop();
   });
 
-  it("preserves delayed reminders across producer restart and reconciles them", async () => {
-    const config = testConfig();
-    const reminderId = `reminder-${randomUUID()}`;
-    const producer = await startJobs({
-      config,
-      worker: false,
-      pgBossSchema: "pgboss_test",
-      crawler: { crawlConfiguredGuild: async () => undefined },
-    });
-    runtimes.push(producer);
-    await expect(producer.enqueueReminderDelivery(reminderId, new Date())).resolves.toEqual(expect.any(String));
-    await producer.stop();
-
-    const delivered: string[] = [];
-    const worker = await startJobs({
-      config,
-      crawlWorker: false,
-      embeddingWorker: false,
-      reminderWorker: true,
-      reminders: {
-        deliver: async (id) => { delivered.push(id); return null; },
-        listDueReminderWakeups: async () => [],
-      },
-      pgBossSchema: "pgboss_test",
-      crawler: { crawlConfiguredGuild: async () => undefined },
-    });
-    runtimes.push(worker);
-
-    await waitFor(() => delivered.includes(reminderId), 10_000);
-    const scheduled = await jobsDatabase.pool.query(
-      "SELECT cron FROM pgboss_test.schedule WHERE name = $1",
-      [REMINDER_RECONCILIATION_JOB],
-    );
-    expect(scheduled.rows).toEqual([{ cron: REMINDER_RECONCILIATION_CRON }]);
-    const queues = await jobsDatabase.pool.query(
-      "SELECT name FROM pgboss_test.queue WHERE name = ANY($1::text[]) ORDER BY name",
-      [[REMINDER_DELIVERY_JOB, REMINDER_RECONCILIATION_JOB]],
-    );
-    expect(queues.rows).toHaveLength(2);
-    await worker.stop();
-  }, 15_000);
 });
 
 function testConfig() {

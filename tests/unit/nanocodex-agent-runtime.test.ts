@@ -27,10 +27,10 @@ describe("NanoCodex agent runtime executor", () => {
 
   it("keeps the canonical nested tool contract visible to the model", () => {
     const definitions = localToolDefinitionsForModel();
-    const presentation = definitions.find((tool) => tool.function.name === "composeDiscordResponse");
-    expect(JSON.stringify(presentation?.function.parameters)).toContain('"media_gallery"');
-    expect(presentation?.function.parameters).toBe(
-      localToolDefinitionsForModel().find((tool) => tool.function.name === "composeDiscordResponse")?.function.parameters,
+    const draw = definitions.find((tool) => tool.function.name === "drawRandom");
+    expect(JSON.stringify(draw?.function.parameters)).toContain('"wager"');
+    expect(draw?.function.parameters).toBe(
+      localToolDefinitionsForModel().find((tool) => tool.function.name === "drawRandom")?.function.parameters,
     );
   });
 

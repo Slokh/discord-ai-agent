@@ -18,7 +18,7 @@ describe.skipIf(!runDbTests)("operator dashboard database projection", () => {
 
   afterAll(async () => database.cleanup());
 
-  it("projects liveness, active work, improvements, proof, and release activity", async () => {
+  it("projects liveness, active work, messages, and release activity", async () => {
     const heartbeat = new ServiceHeartbeatRepository(pool);
     await heartbeat.pulse({
       component: "worker", instanceId: "worker-1", revision: "revision-a",
@@ -143,141 +143,9 @@ describe.skipIf(!runDbTests)("operator dashboard database projection", () => {
           '{"executionId":"agent-execution-attempt-2","toolCallId":"call-dashboard","toolName":"readData","responseRedacted":false}',now())`,
     );
     await pool.query(
-      `INSERT INTO agent_tasks(task_id,task_type,title,request,requested_by,status,current_step)
-       VALUES
-         ('task-dashboard','code_update','Build the dashboard','Implement it','operator','queued','queued'),
-         ('task-canary-active','post-deploy-canary','Active sandbox canary','Verify callback','system','running','callback_canary'),
-         ('task-canary-complete','post-deploy-canary','Completed sandbox canary','Verify callback','system','completed','completed')`,
-    );
-    await pool.query(
-      `INSERT INTO agent_tasks(
-         task_id,task_type,title,request,requested_by,status,error,created_at,started_at,completed_at,updated_at
-       ) VALUES
-         (
-           'task-legacy-orphan','code_update','Legacy orphaned failure','Old private request','operator','failed','old failure',
-           (SELECT applied_at - interval '2 minutes' FROM schema_migrations WHERE version = '039_improvement_cases'),
-           (SELECT applied_at - interval '90 seconds' FROM schema_migrations WHERE version = '039_improvement_cases'),
-           (SELECT applied_at - interval '1 minute' FROM schema_migrations WHERE version = '039_improvement_cases'),
-           now()
-         ),
-         (
-           'task-current-orphan','code_update','Current standalone failure','Current private request','operator','failed','current failure',
-           now(),now(),now(),now()
-         )`,
-    );
-    await pool.query(
-      `INSERT INTO agent_tasks(
-         task_id,task_type,title,request,requested_by,status,retried_from_task_id,created_at,started_at,completed_at,updated_at
-       ) VALUES
-         ('task-retry-root','code_update','Retried change','private request','operator','failed',NULL,now(),now() - interval '3 minutes',now() - interval '2 minutes',now() - interval '2 minutes'),
-         ('task-retry-middle','code_update','Retried change','private request','operator','failed','task-retry-root',now(),now() - interval '2 minutes',now() - interval '1 minute',now() - interval '1 minute'),
-         ('task-retry-leaf','code_update','Retried change','private request','operator','succeeded','task-retry-middle',now(),now() - interval '1 minute',now(),now())`,
-    );
-    await pool.query(
-      `INSERT INTO agent_runtime_sessions(session_id,thread_key,title,request,requested_by,status,started_at,completed_at,updated_at)
-       VALUES ('task-current-session','task-current','Current standalone failure','private task request','operator','failed',now(),now(),now())`,
-    );
-    await pool.query(
-      `INSERT INTO agent_runtime_executions(execution_id,session_id,task_id,status,started_at,completed_at,updated_at)
-       VALUES ('task-current-execution','task-current-session','task-current-orphan','failed',now(),now(),now())`,
-    );
-    await pool.query(
-      `INSERT INTO agent_runtime_events(session_id,execution_id,sequence,kind,level,event_name,summary,metadata,duration_ms)
-       VALUES (
-         'task-current-session','task-current-execution',1,'command','error','agent.task.command',
-         'Repository verification failed','{"status":"failed","argumentsPreview":"private task secret"}',900
-       )`,
-    );
-    await pool.query(
-      `INSERT INTO improvement_cases(case_id,scope,privacy,title,status,classification,severity,automation_state,automation_blocker)
-       VALUES ('imp-dashboard','repository','private','Dashboard visibility','actionable','product_gap','high','blocked','waiting_for_proof')`,
-    );
-    await pool.query(
-      `INSERT INTO improvement_signals(
-         signal_id,case_id,source,source_key,reporter_kind,reporter_id,app_revision,summary,
-         severity_hint,classification_hint,owning_domain_hint,metadata
-       ) VALUES (
-         'signal-dashboard','imp-dashboard','developer_report','developer:dashboard','developer','developer-a',
-         'revision-previous','Dashboard visibility needs improvement','high','product_gap','console',
-         '{"detectionCode":"dashboard-context"}'
-       )`,
-    );
-    await pool.query(
-      `INSERT INTO improvement_signals(
-         signal_id,case_id,source,source_key,reporter_kind,reporter_id,guild_id,channel_id,message_id,
-         execution_id,app_revision,summary,severity_hint,classification_hint,owning_domain_hint
-       ) VALUES (
-         'signal-dashboard-member','imp-dashboard','member_report','discord-reaction:guild-a:parent-a:member-a:bug',
-         'member','member-a','guild-a','channel-a','parent-a',NULL,'revision-a',
-         'A member reported a Discord assistant interaction','high','product_gap','agent-replies'
-       )`,
-    );
-    await pool.query(
-      `INSERT INTO improvement_evidence(
-         evidence_id,case_id,signal_id,kind,disposition,summary,privacy
-       ) VALUES (
-         'evidence-dashboard','imp-dashboard','signal-dashboard','runtime_trace','supports',
-         'The detail view begins with repair attempts and omits the originating context.','private'
-       )`,
-    );
-    await pool.query(
-      `INSERT INTO improvement_contracts(
-         contract_id,case_id,version,expected_behavior,checks,executable,source_revision,created_by
-       ) VALUES (
-         'contract-dashboard','imp-dashboard',1,
-         'Improvement detail presents the trigger, evidence, expectation, repair, and proof in one trace.',
-         '[{"kind":"test","reference":"release-verify"}]',true,'revision-previous','developer-a'
-       )`,
-    );
-    await pool.query(
-      `INSERT INTO agent_tasks(
-         task_id,task_type,title,request,requested_by,status,current_step,error,improvement_case_id,
-         created_at,started_at,completed_at,updated_at
-       ) VALUES (
-         'task-improvement-repair','code_update','Repair dashboard visibility','private repair request','automation',
-         'failed','failed','Job has reached specified backoff limit: private secret output','imp-dashboard',
-         now() - interval '30 minutes',now() - interval '29 minutes',now() - interval '20 minutes',now() - interval '20 minutes'
-       )`,
-    );
-    await pool.query(
-      `INSERT INTO improvement_case_events(case_id,event_name,actor_kind,summary)
-       VALUES
-         ('imp-dashboard','case.created','operator','Improvement created'),
-         ('imp-dashboard','triage.applied','agent','Improvement triaged')`,
-    );
-    await pool.query(
-      `INSERT INTO improvement_reporter_conversations(
-         conversation_id,case_id,guild_id,source_channel_id,source_message_id,
-         delivery_kind,delivery_channel_id,delivery_message_id
-       ) VALUES ('conversation-dashboard','imp-dashboard','guild-a','channel-a','report-a','channel','channel-a','reply-message-a')`,
-    );
-    await pool.query(
-      `INSERT INTO improvement_work_attempts(
-         work_id,case_id,source,source_key,status,repository,pull_request_number,pull_request_url
-       ) VALUES ('work-dashboard','imp-dashboard','github_pull_request','github:pr:1','in_progress','owner/repo',1,'https://github.com/owner/repo/pull/1')`,
-    );
-    await pool.query(
-      `INSERT INTO improvement_work_attempts(
-         work_id,case_id,source,source_key,status,task_id,started_at,completed_at,created_at,updated_at
-       ) VALUES (
-         'work-improvement-repair','imp-dashboard','agent_task','agent_task:task-improvement-repair','failed','task-improvement-repair',
-         now() - interval '29 minutes',now() - interval '20 minutes',now() - interval '30 minutes',now() - interval '20 minutes'
-       )`,
-    );
-    await pool.query(
       `INSERT INTO deployment_verifications(revision,deployment_id,verified_at) VALUES
          ('revision-previous','deployment-previous',now() - interval '1 day'),
          ('revision-a','deployment-a',now())`,
-    );
-    await pool.query(
-      `INSERT INTO improvement_verification_receipts(
-         receipt_id,case_id,contract_id,contract_version,revision,deployment_id,status,checks,
-         application_key,applied,actor_id
-       ) VALUES (
-         'receipt-dashboard','imp-dashboard','contract-dashboard',1,'revision-a','deployment-a','passed',
-         '[{"index":0,"status":"passed","summary":"The deployed Console passed its focused verification.","check":{"kind":"test","reference":"release-verify"}}]',
-         'dashboard-receipt-application',true,'release-verifier'
-       )`,
     );
     await pool.query(
       `INSERT INTO deployment_announcements(
@@ -288,78 +156,45 @@ describe.skipIf(!runDbTests)("operator dashboard database projection", () => {
        )`,
     );
     await pool.query(
-      `INSERT INTO improvement_proof_producer_runs(
-         run_id,trigger,run_key,status,revision,deployment_id,started_at,completed_at
-       ) VALUES (
-         'release-run-a','release_promotion','release-a','succeeded','revision-a','deployment-a',
-         now() - interval '4 seconds',now()
-       )`,
-    );
-    await pool.query(
       `INSERT INTO agent_runtime_sessions(
          session_id,thread_key,trace_id,title,request,requested_by,status,harness,metadata,started_at,completed_at,updated_at
        ) VALUES
          ('embedding-session-a','embedding:a',NULL,'Embedding batch (3 messages)','Embed messages','system','succeeded','background_job','{"kind":"background_job","jobKind":"embedding"}',now() - interval '10 minutes',now() - interval '9 minutes',now() - interval '9 minutes'),
-         ('embedding-session-b','embedding:b','mention-source','Embedding batch (5 messages)','Embed messages','system','succeeded','background_job','{"kind":"background_job","jobKind":"embedding"}',now() - interval '5 minutes',now() - interval '4 minutes',now() - interval '4 minutes'),
-         ('improvement-repair-session','repair:dashboard',NULL,'Repair dashboard visibility','private repair request','automation','failed','sandbox','{}',now() - interval '29 minutes',now() - interval '20 minutes',now() - interval '20 minutes')`,
+         ('embedding-session-b','embedding:b','mention-source','Embedding batch (5 messages)','Embed messages','system','succeeded','background_job','{"kind":"background_job","jobKind":"embedding"}',now() - interval '5 minutes',now() - interval '4 minutes',now() - interval '4 minutes')`,
     );
     await pool.query(
       `INSERT INTO agent_runtime_executions(
          execution_id,session_id,status,metadata,started_at,completed_at,updated_at
        ) VALUES
          ('embedding-a','embedding-session-a','succeeded','{"jobKind":"embedding","messageCount":3,"jobCount":3}',now() - interval '10 minutes',now() - interval '9 minutes',now() - interval '9 minutes'),
-         ('embedding-b','embedding-session-b','succeeded','{"jobKind":"embedding","messageCount":5,"jobCount":5}',now() - interval '5 minutes',now() - interval '4 minutes',now() - interval '4 minutes'),
-         ('improvement-repair-execution','improvement-repair-session','failed','{}',now() - interval '29 minutes',now() - interval '20 minutes',now() - interval '20 minutes')`,
-    );
-    await pool.query(
-      `UPDATE agent_runtime_executions SET task_id = 'task-improvement-repair'
-       WHERE execution_id = 'improvement-repair-execution'`,
+         ('embedding-b','embedding-session-b','succeeded','{"jobKind":"embedding","messageCount":5,"jobCount":5}',now() - interval '5 minutes',now() - interval '4 minutes',now() - interval '4 minutes')`,
     );
     await pool.query(
       `INSERT INTO agent_runtime_events(session_id,execution_id,sequence,kind,level,event_name,summary,duration_ms) VALUES
          ('embedding-session-a','embedding-a',1,'status','info','background.job.completed','Embedded batch',60000),
-         ('embedding-session-b','embedding-b',1,'status','info','background.job.completed','Embedded batch',60000),
-         ('improvement-repair-session','improvement-repair-execution',1,'status','info','agent.task.started','private branch path',NULL),
-         ('improvement-repair-session','improvement-repair-execution',2,'command','info','agent.task.command','private command',1200),
-         ('improvement-repair-session','improvement-repair-execution',3,'command','error','agent.task.command','private failing command',800),
-         ('improvement-repair-session','improvement-repair-execution',4,'status','error','agent.task.completed','private secret output',NULL)`,
-    );
-    await pool.query(
-      `INSERT INTO agent_runtime_artifacts(
-         artifact_id,session_id,execution_id,kind,name,size_bytes,preview,redacted
-       ) VALUES (
-         'improvement-repair-artifact','improvement-repair-session','improvement-repair-execution',
-         'command_output','private-command.log',2048,'private secret output',true
-       )`,
+         ('embedding-session-b','embedding-b',1,'status','info','background.job.completed','Embedded batch',60000)`,
     );
 
     const repository = new OperatorDashboardRepository(pool);
     const snapshot = await repository.snapshot({ revision: "revision-a" });
 
-    expect(snapshot.summary).toMatchObject({ serviceTelemetryAvailable: true, activeRuns: 1, activeTasks: 1, openImprovements: 1, needsAttention: 1 });
+    expect(snapshot.summary).toMatchObject({ serviceTelemetryAvailable: true, activeRuns: 1 });
+    expect(snapshot.summary).not.toHaveProperty("activeTasks");
+    expect(snapshot.summary).not.toHaveProperty("openImprovements");
+    expect(snapshot.services.map((service) => service.component)).toEqual(["bot", "worker", "console"]);
     expect(snapshot.services.find((service) => service.component === "worker")).toMatchObject({ status: "healthy", instances: 1, revision: "revision-a" });
     expect(snapshot.executions[0]).toMatchObject({ title: "Answer a member", requestPreview: "Private prompt content", latestEvent: "agent.execution.context_ready" });
-    expect(snapshot.tasks[0]).toMatchObject({ taskId: "task-dashboard", currentStep: "queued" });
-    expect(snapshot.improvements.cases[0]).toMatchObject({ caseId: "imp-dashboard", automationState: "blocked", pullRequestUrl: "https://github.com/owner/repo/pull/1" });
-    expect(snapshot.improvements.cases[0]).toMatchObject({ title: "Reported reply: Earlier assistant reply" });
     expect(snapshot.deployments[0]).toMatchObject({ revision: "revision-a", deploymentId: "deployment-a" });
-    expect(snapshot.producers).toHaveLength(6);
+    expect(snapshot).not.toHaveProperty("producers");
+    expect(snapshot).not.toHaveProperty("tasks");
+    expect(snapshot).not.toHaveProperty("improvements");
     expect(snapshot.messages).not.toContainEqual(expect.objectContaining({ id: "source-b" }));
     expect(snapshot.messages).toContainEqual(expect.objectContaining({
       id: "mention-source", preview: "@AI @AI role balances", authorLabel: "Member A", embedded: true,
     }));
-    expect(snapshot.activity.map((story) => story.kind)).toEqual(expect.arrayContaining(["runtime", "improvement"]));
+    expect([...new Set(snapshot.activity.map((story) => story.kind))].sort()).toEqual(["runtime", "system"]);
     expect(snapshot.activity.filter((story) => story.kind === "runtime")).toHaveLength(2);
-    expect(snapshot.activity).toContainEqual(expect.objectContaining({
-      id: "code-change-task:task-current-orphan", kind: "code_change", status: "failed",
-    }));
-    expect(snapshot.activity).toContainEqual(expect.objectContaining({
-      id: "code-change-task:task-retry-root", kind: "code_change", status: "succeeded", attempts: 3,
-    }));
-    expect(snapshot.activity).not.toContainEqual(expect.objectContaining({ id: "code-change-task:task-retry-middle" }));
-    expect(snapshot.activity).not.toContainEqual(expect.objectContaining({ id: "code-change-task:task-retry-leaf" }));
-    expect(snapshot.activity).not.toContainEqual(expect.objectContaining({ id: "code-change-task:task-legacy-orphan" }));
-    expect(JSON.stringify({ executions: snapshot.executions, tasks: snapshot.tasks, activity: snapshot.activity })).not.toContain("canary");
+    expect(JSON.stringify({ executions: snapshot.executions, activity: snapshot.activity })).not.toContain("canary");
     expect(JSON.stringify({ executions: snapshot.executions, activity: snapshot.activity })).not.toContain("legacy-cli");
     expect(snapshot.activity.find((story) => story.id === "runtime-agent-execution-attempt-2")).toMatchObject({
       title: "@AI role Current member prompt",
@@ -375,29 +210,18 @@ describe.skipIf(!runDbTests)("operator dashboard database projection", () => {
         expect.objectContaining({ name: "agent.tool.complete" }),
       ],
     });
-    expect(snapshot.activity.filter((story) => story.kind === "improvement")).toHaveLength(1);
-    expect(snapshot.activity.find((story) => story.id === "improvement-imp-dashboard")).toMatchObject({
-      title: "Reported reply: Earlier assistant reply",
-      eventCount: 2,
-      sourceUrl: "https://discord.com/channels/guild-a/channel-a/report-a",
-      responseUrl: "https://discord.com/channels/guild-a/channel-a/reply-message-a",
-      responseKind: "channel",
-      events: [
-        expect.objectContaining({ name: "triage.applied" }),
-      ],
-    });
     expect(JSON.stringify(snapshot.activity)).not.toContain("Executing prompt");
     expect(JSON.stringify(snapshot)).not.toContain('"requestedBy"');
 
     await expect(repository.overview({ revision: "revision-a" })).resolves.toMatchObject({
       revision: "revision-a",
-      summary: { serviceTelemetryAvailable: true, activeRuns: 1, activeTasks: 1 },
+      summary: { serviceTelemetryAvailable: true, activeRuns: 1 },
       services: expect.arrayContaining([expect.objectContaining({ component: "worker", status: "healthy" })]),
     });
     const issuePage = await repository.activityPage({
       revision: "revision-a",
       filter: "issues",
-      types: ["conversation", "improvement", "code_change"],
+      types: ["conversation"],
       limit: 1,
     });
     expect(issuePage).toMatchObject({
@@ -481,19 +305,6 @@ describe.skipIf(!runDbTests)("operator dashboard database projection", () => {
       kind: "conversation", id: "runtime-agent-execution-attempt-2", callId: "missing", revision: "revision-a",
     })).resolves.toBeNull();
 
-    const codeChange = await new OperatorDashboardRepository(pool).activityDetail({
-      kind: "code_change", id: "code-change-task:task-current-orphan", revision: "revision-a",
-    });
-    expect(codeChange).toMatchObject({
-      codeChange: expect.objectContaining({ attempts: 1, failedAttempts: 1 }),
-      traceEvents: [expect.objectContaining({
-        type: "task", code: "agent.task.command",
-        summary: "Sandbox command recorded; command and output remain private.",
-        durationMs: 900, metadata: { status: "failed", attempt: 1 },
-      })],
-    });
-    expect(JSON.stringify(codeChange)).not.toContain("private task secret");
-
     const release = await new OperatorDashboardRepository(pool).activityDetail({
       kind: "release", id: "release-deployment-a", revision: "revision-a",
     });
@@ -503,13 +314,10 @@ describe.skipIf(!runDbTests)("operator dashboard database projection", () => {
         previous: { revision: "revision-previous", deploymentId: "deployment-previous" },
         comparisonUrl: "https://github.com/owner/repo/compare/revision-previous...revision-a",
         announcements: { total: 1, posted: 1, failed: 0, attempts: 1 },
-        checks: [expect.objectContaining({ name: "release_promotion", status: "succeeded", durationMs: 4000 })],
-        verifications: [expect.objectContaining({
-          id: "receipt-dashboard", status: "passed",
-          summary: "The deployed Console passed its focused verification.",
-        })],
       },
     });
+    expect(release).not.toHaveProperty("release.checks");
+    expect(release).not.toHaveProperty("release.verifications");
 
     const mentionedMessage = await new OperatorDashboardRepository(pool).activityDetail({
       kind: "message", id: "message-mention-source", revision: "revision-a",
@@ -530,49 +338,6 @@ describe.skipIf(!runDbTests)("operator dashboard database projection", () => {
     expect(projectedActivity.active.concat(projectedActivity.recent)).not.toContainEqual(
       expect.objectContaining({ rollupKey: "embedding" }),
     );
-
-    const improvement = await new OperatorDashboardRepository(pool).activityDetail({
-      kind: "improvement",
-      id: "improvement-imp-dashboard",
-      revision: "revision-a",
-    });
-    expect(improvement).toMatchObject({
-      traceEvents: expect.arrayContaining([
-        expect.objectContaining({ title: "Triage completed", code: "triage.applied" }),
-        expect.objectContaining({ title: "Repair attempt 1 started", type: "task" }),
-        expect.objectContaining({
-          title: "Sandbox command", type: "command", code: "attempt.1.agent.task.command", recordCount: 2,
-          summary: "2 records in repair attempt 1; at least one command failed.",
-        }),
-        expect.objectContaining({ title: "1 retained evidence item", type: "artifact" }),
-        expect.objectContaining({
-          title: "Repair attempt 1 failed",
-          summary: "The repair retries reached their limit.",
-          durationMs: 540000,
-        }),
-      ]),
-      improvement: {
-        case: expect.objectContaining({ classification: "product_gap", severity: "high", owningDomain: null }),
-        signals: expect.arrayContaining([expect.objectContaining({
-          source: "developer_report", detectionCode: "dashboard-context", appRevision: "revision-previous",
-        })]),
-        evidence: [expect.objectContaining({
-          kind: "runtime_trace", disposition: "supports",
-          summary: "The detail view begins with repair attempts and omits the originating context.",
-        })],
-        contract: expect.objectContaining({
-          expectedBehavior: "Improvement detail presents the trigger, evidence, expectation, repair, and proof in one trace.",
-          checks: [{ kind: "test", reference: "release-verify" }],
-        }),
-        work: expect.objectContaining({ pullRequestNumber: 1, pullRequestUrl: "https://github.com/owner/repo/pull/1" }),
-        verification: expect.objectContaining({
-          status: "passed", revision: "revision-a", deploymentId: "deployment-a",
-          checks: [expect.objectContaining({ status: "passed", kind: "test" })],
-        }),
-      },
-    });
-    expect(JSON.stringify(improvement)).not.toContain("private secret");
-    expect(JSON.stringify(improvement)).not.toContain("private command");
   });
 
   it("keeps the production projection available before heartbeat storage is deployed", async () => {
@@ -580,14 +345,14 @@ describe.skipIf(!runDbTests)("operator dashboard database projection", () => {
 
     const snapshot = await new OperatorDashboardRepository(pool).snapshot({ revision: "revision-a" });
 
-    expect(snapshot.services).toHaveLength(4);
+    expect(snapshot.services).toHaveLength(3);
     expect(snapshot.services.map((service) => service.status)).toEqual([
-      "unavailable", "unavailable", "unavailable", "unavailable",
+      "unavailable", "unavailable", "unavailable",
     ]);
-    expect(snapshot.summary).toMatchObject({ serviceCount: 4, serviceTelemetryAvailable: false });
+    expect(snapshot.summary).toMatchObject({ serviceCount: 3, serviceTelemetryAvailable: false });
   });
 
-  it("projects every eligible source before semantic folding", async () => {
+  it("projects every eligible source before system rollups", async () => {
     await pool.query(
       `INSERT INTO agent_runtime_sessions(
          session_id,thread_key,title,request,requested_by,status,started_at,completed_at,updated_at
@@ -623,35 +388,13 @@ describe.skipIf(!runDbTests)("operator dashboard database projection", () => {
               jsonb_build_object('jobKind','bulk_system'),now() - item * interval '1 minute',now(),now() - item * interval '1 minute'
        FROM generate_series(1,14) item`,
     );
-    await pool.query(
-      `INSERT INTO agent_tasks(task_id,task_type,title,request,requested_by,status,current_step,updated_at)
-       SELECT 'bulk-code-task-' || item,'code_update','Bulk code task ' || item,'Implement change','test',
-              'completed','completed',now()
-       FROM generate_series(1,45) item`,
-    );
-    await pool.query(
-      `INSERT INTO improvement_cases(
-         case_id,scope,privacy,title,status,classification,severity,automation_state,first_seen_at,last_seen_at
-       )
-       SELECT 'bulk-case-' || item,'repository','private','Bulk case ' || item,'resolved','product_gap','low','complete',
-              now() - item * interval '1 minute',now() - item * interval '1 minute'
-       FROM generate_series(1,25) item`,
-    );
-    await pool.query(
-      `INSERT INTO improvement_case_events(case_id,event_name,actor_kind,summary,created_at)
-       SELECT 'bulk-case-' || item,'case.created','system','Created',now() - item * interval '1 minute'
-       FROM generate_series(1,25) item`,
-    );
 
     const snapshot = await new OperatorDashboardRepository(pool).snapshot({ revision: "revision-a" });
     const activity = deriveOperatorActivity(snapshot);
 
     expect(snapshot.activity.filter((story) => story.id.startsWith("runtime-bulk-prompt-execution-"))).toHaveLength(30);
-    expect(snapshot.activity.filter((story) => story.id.startsWith("code-change-task:bulk-code-task-"))).toHaveLength(45);
-    expect(snapshot.activity.filter((story) => story.id.startsWith("improvement-bulk-case-"))).toHaveLength(25);
+    expect(snapshot.activity.filter((story) => story.id.startsWith("runtime-bulk-system-execution-"))).toHaveLength(14);
     expect(activity.recent.filter((story) => story.id.startsWith("runtime-bulk-prompt-execution-"))).toHaveLength(30);
-    expect(activity.recent.filter((story) => story.id.startsWith("code-change-task:bulk-code-task-"))).toHaveLength(45);
-    expect(activity.recent.filter((story) => story.id.startsWith("improvement-bulk-case-"))).toHaveLength(25);
     expect(activity.recent).toEqual(expect.arrayContaining([
       expect.objectContaining({ id: "runtime-bulk-system-execution-14", tone: "danger" }),
       expect.objectContaining({ id: "system-rollup-bulk_system", runCount: 13 }),

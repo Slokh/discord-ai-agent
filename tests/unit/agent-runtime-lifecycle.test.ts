@@ -1,6 +1,4 @@
 import { describe, expect, it, vi } from "vitest";
-import { loadConfig } from "../../src/config/env.js";
-import { enqueueAgentRuntimeCodeUpdateTask } from "../../src/capabilities/codeUpdates.js";
 import {
   enqueueAgentRuntimeSessionExecution,
   missingAgentRuntimeExecutionJobContext,
@@ -142,143 +140,6 @@ describe("agent runtime lifecycle", () => {
     );
   });
 
-  it("persists code-update task rows before creating task-linked runtime executions", async () => {
-    const repo = fakeTaskRepo();
-    const agentRuntime = fakeAgentRuntime();
-    const jobs = {
-      enqueueAgentTask: vi.fn(async () => ({
-        jobId: "job-task-1",
-        taskId: "task-runtime-first",
-        queueName: "agent.task",
-        backendName: "local-process-sandbox",
-        codegenBackend: "kubernetes-job" as const,
-        codegenModel: "openai/gpt-6-luna" as const,
-        codegenReasoningEffort: "max" as const,
-        codegenProvider: "openrouter"
-      }))
-    };
-
-    const result = await enqueueAgentRuntimeCodeUpdateTask({
-      config: fakeConfig(),
-      repo: repo as never,
-      agentRuntime: agentRuntime as never,
-      jobs,
-      session: fakeSession(),
-      taskId: "task-runtime-first",
-      traceId: "message-1",
-      request: "make code updates runtime-first",
-      title: "Runtime-first code updates",
-      requestedBy: "Kartik",
-      threadKey: "discord:guild:channel",
-      discordResponseChannelId: "channel",
-      discordResponseMessageId: "thinking-1",
-      parentExecutionId: "agent-execution-parent",
-      targetBranch: "ai/reuse-existing-pr-branch-follow-up-7ad0",
-      targetPullRequestNumber: 120,
-      targetPullRequestUrl: "https://github.com/example/discord-ai-agent/pull/120"
-    });
-
-    expect(result).toEqual({ taskId: "task-runtime-first", jobId: "job-task-1" });
-    expect(repo.upsertAgentTaskQueued).toHaveBeenCalledWith(
-      expect.objectContaining({
-        taskId: "task-runtime-first",
-        traceId: "message-1",
-        taskType: "code_update",
-        title: "Runtime-first code updates",
-        request: "make code updates runtime-first",
-        requestedBy: "Kartik",
-        backend: "kubernetes-sandbox",
-        parentAgentSessionId: "agent-session-1",
-        parentAgentExecutionId: "agent-execution-parent",
-        parentAgentThreadKey: "discord:guild:channel"
-      })
-    );
-    expect(repo.upsertAgentTaskQueued.mock.invocationCallOrder[0]).toBeLessThan(
-      agentRuntime.createExecution.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY
-    );
-    expect(agentRuntime.appendMessage).toHaveBeenCalledWith(
-      expect.objectContaining({
-        sessionId: "agent-session-1",
-        messageId: "agent-task-message-task-runtime-first",
-        role: "tool",
-        metadata: expect.objectContaining({
-          parentAgentSessionId: "agent-session-1",
-          parentAgentExecutionId: "agent-execution-parent",
-          parentAgentThreadKey: "discord:guild:channel",
-          targetBranch: "ai/reuse-existing-pr-branch-follow-up-7ad0",
-          targetPullRequestNumber: 120,
-          targetPullRequestUrl: "https://github.com/example/discord-ai-agent/pull/120"
-        }),
-        parts: [
-          expect.objectContaining({
-            type: "tool_result",
-            toolName: "runSandboxAgent",
-            taskId: "task-runtime-first",
-            status: "queued",
-            targetBranch: "ai/reuse-existing-pr-branch-follow-up-7ad0",
-            targetPullRequestNumber: 120,
-            targetPullRequestUrl: "https://github.com/example/discord-ai-agent/pull/120"
-          })
-        ]
-      })
-    );
-    expect(agentRuntime.createExecution).toHaveBeenCalledWith(
-      expect.objectContaining({
-        executionId: "agent-task-execution-task-runtime-first",
-        sessionId: "agent-session-1",
-        taskId: "task-runtime-first",
-        status: "queued",
-        harness: "runSandboxAgent",
-        model: "openai/gpt-6-luna",
-        reasoningEffort: "max",
-        metadata: expect.objectContaining({
-          queue: "agent.task",
-          parentAgentSessionId: "agent-session-1",
-          parentAgentExecutionId: "agent-execution-parent",
-          parentAgentThreadKey: "discord:guild:channel",
-          codegenBackend: "kubernetes-job",
-          codegenModel: "openai/gpt-6-luna",
-          codegenReasoningEffort: "max",
-          codegenProvider: "openrouter",
-          targetBranch: "ai/reuse-existing-pr-branch-follow-up-7ad0",
-          targetPullRequestNumber: 120,
-          targetPullRequestUrl: "https://github.com/example/discord-ai-agent/pull/120"
-        })
-      })
-    );
-    expect(jobs.enqueueAgentTask).toHaveBeenCalledWith(
-      expect.objectContaining({
-        taskId: "task-runtime-first",
-        runtimeMirror: "external",
-        request: "make code updates runtime-first",
-        title: "Runtime-first code updates",
-        discordResponseMessageId: "thinking-1",
-        parentAgentSessionId: "agent-session-1",
-        parentAgentExecutionId: "agent-execution-parent",
-        parentAgentThreadKey: "discord:guild:channel",
-        targetBranch: "ai/reuse-existing-pr-branch-follow-up-7ad0",
-        targetPullRequestNumber: 120,
-        targetPullRequestUrl: "https://github.com/example/discord-ai-agent/pull/120"
-      })
-    );
-    expect(agentRuntime.recordEvent).toHaveBeenCalledWith(expect.objectContaining({ eventName: "agent.task.queued" }));
-    expect(agentRuntime.recordEvent).toHaveBeenCalledWith(
-      expect.objectContaining({
-        eventName: "agent.task.enqueued",
-        metadata: expect.objectContaining({
-          taskId: "task-runtime-first",
-          jobId: "job-task-1",
-          backend: "local-process-sandbox",
-          parentAgentSessionId: "agent-session-1",
-          parentAgentExecutionId: "agent-execution-parent",
-          targetBranch: "ai/reuse-existing-pr-branch-follow-up-7ad0",
-          targetPullRequestNumber: 120,
-          targetPullRequestUrl: "https://github.com/example/discord-ai-agent/pull/120"
-        })
-      })
-    );
-  });
-
   it("marks executions failed when the queue handoff fails", async () => {
     const agentRuntime = fakeAgentRuntime();
     const jobs = {
@@ -335,12 +196,6 @@ describe("agent runtime lifecycle", () => {
   });
 });
 
-function fakeTaskRepo() {
-  return {
-    upsertAgentTaskQueued: vi.fn(async () => undefined)
-  };
-}
-
 function fakeAgentRuntime() {
   return {
     appendMessage: vi.fn(async () => undefined),
@@ -383,20 +238,5 @@ function fakeExecution(): Pick<AgentRuntimeExecutionRecord, "executionId" | "tra
   return {
     executionId: "agent-execution-1",
     traceId: "message-1"
-  };
-}
-
-function fakeConfig() {
-  const config = loadConfig();
-  return {
-    ...config,
-    openRouter: {
-      ...config.openRouter,
-      codegenModel: "openai/gpt-6-luna" as const
-    },
-    execution: {
-      ...config.execution,
-      codegenBackend: "kubernetes-job" as const,
-    }
   };
 }

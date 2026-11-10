@@ -4,27 +4,19 @@ import type { AppConfig } from "../config/env.js";
 /** The complete model-facing surface, grouped by the capability that owns it. */
 export const TOOL_NAMES_BY_CAPABILITY = {
   foundation: ["loadSkillContext", "setMyTimezone"],
-  reminders: ["setReminder", "listMyReminders"],
   discordContext: [
-    "composeDiscordResponse", "findDiscordUsers", "findDiscordChannels", "searchDiscordHistory",
+    "findDiscordUsers", "findDiscordChannels", "searchDiscordHistory",
     "getRecentAgentMemory", "getAgentMemoryStats", "getRecentDiscordMessages", "getDiscordMessageContext",
-    "listMyImprovementSignals", "searchDiscordAttachments", "inspectDiscordFile", "getDiscordStats",
+    "searchDiscordAttachments", "inspectDiscordFile", "getDiscordStats",
     "getDiscordChannelTopics", "summarizeDiscordHistory", "summarizeDiscordThread",
   ],
   images: ["inspectDiscordImages", "getDiscordUserAvatar", "generateImage"],
   generatedData: ["readGeneratedFile", "queryGeneratedCsv", "queryGeneratedTable"],
-  operations: ["getDeploymentStatus", "getSpendSummary", "reportStatus", "setAgentModel"],
-  improvements: ["reportImprovementSignal"],
-  sandboxTasks: ["runSandboxAgent", "getAgentTaskStatus", "listAgentTasks", "retryAgentTask", "cancelAgentTask"],
-  discordActions: ["undoConversationTurns", "addDiscordReaction", "createDiscordPoll", "createDiscordEmoji", "updateBotAvatar"],
+  discordActions: ["addDiscordReaction", "createDiscordPoll"],
   randomGames: ["drawRandom", "awaitRandomWagerAction", "settleRandomWager", "revealRandomness"],
   wallets: [
     "getWalletBalance", "listWalletBalances", "getWagerHistory", "transferWalletFunds", "requestStarterFunds",
-    "adminTransferWalletFunds", "adminSetWalletStarterAmount", "getWalletFeeSummary", "reconcileWalletTransfers",
-  ],
-  spotify: [
-    "getSpotifyPlaylistTracks", "getSpotifyAlbumTracks", "getSpotifyArtistDiscography", "getSpotifyPlaylistStats",
-    "compareSpotifyPlaylists", "searchSpotify", "getSpotifyItem",
+    "getWalletFeeSummary",
   ],
   externalResearch: ["web__run"],
 } as const;
@@ -33,36 +25,25 @@ export type ToolName = (typeof TOOL_NAMES_BY_CAPABILITY)[keyof typeof TOOL_NAMES
 export const TOOL_NAMES: readonly ToolName[] = Object.values(TOOL_NAMES_BY_CAPABILITY).flat();
 export const MUTATING_TOOL_NAMES = [
   "setMyTimezone",
-  "setReminder",
-  "setAgentModel",
-  "runSandboxAgent",
-  "retryAgentTask",
-  "cancelAgentTask",
-  "undoConversationTurns",
   "addDiscordReaction",
   "createDiscordPoll",
-  "createDiscordEmoji",
-  "updateBotAvatar",
   "drawRandom",
   "awaitRandomWagerAction",
   "settleRandomWager",
   "revealRandomness",
   "transferWalletFunds",
   "requestStarterFunds",
-  "adminTransferWalletFunds",
-  "adminSetWalletStarterAmount",
-  "reconcileWalletTransfers",
 ] as const satisfies readonly ToolName[];
 
-export type ToolGroup = "core" | "discord-retrieval" | "generated-data" | "presentation" | "discord-action" | "image" | "spotify" | "codegen" | "ops" | "external";
+export type ToolGroup = "core" | "discord-retrieval" | "generated-data" | "discord-action" | "image" | "ops" | "external";
 
-export type ToolClass = "resolver" | "retrieval" | "memory" | "stats" | "summary" | "image" | "generation" | "coding" | "ops" | "external";
+export type ToolClass = "resolver" | "retrieval" | "memory" | "stats" | "summary" | "image" | "generation" | "ops" | "external";
 
 export type ToolRegistryEntry = {
   name: ToolName;
   description: string;
   mutates: boolean;
-  category: "discord" | "generation" | "memory" | "ops" | "coding" | "external";
+  category: "discord" | "generation" | "memory" | "ops" | "external";
   group: ToolGroup;
   available?: (config: AppConfig) => boolean;
   accessPolicy: "default" | "strict_ops";
@@ -89,7 +70,6 @@ const outputContractByToolClass: Record<ToolClass, string[]> = {
   summary: ["question or focus", "sample window", "grounded summary", "coverage limits"],
   image: ["image URLs or attachment IDs", "visual observations", "uncertainty when the image is unclear"],
   generation: ["generation prompt", "reference image count", "attached output file or URL"],
-  coding: ["task ID and status", "PR link or failure reason", "progress summary"],
   ops: ["requested diagnostic", "current status", "recent failures or next action"],
   external: ["external request", "returned source data", "source URLs when available"]
 };
@@ -102,7 +82,6 @@ const latencyBudgetMsByToolClass: Record<ToolClass, number> = {
   summary: 60_000,
   image: 60_000,
   generation: 120_000,
-  coding: 10_000,
   ops: 15_000,
   external: 30_000,
 };

@@ -1,67 +1,7 @@
 import { summarizeForAudit } from "../util/text.js";
-import type { AgentResponse, ToolContext } from "./types.js";
+import type { ToolContext } from "./types.js";
 import { extractDiscordMessageId } from "./toolContext.js";
-import { boundedLimit, formatAgentMemoryStats, formatRecentAgentMemory, formatRowCount, formatTurnCount } from "./discordToolShared.js";
-
-const MAX_UNDO_TURNS = 10;
-
-export async function undoConversationTurns(ctx: ToolContext, count?: number): Promise<string> {
-  return undoConversationTurnsCore(ctx, count);
-}
-
-export async function undoConversationTurnsResponse(ctx: ToolContext, count?: number): Promise<AgentResponse> {
-  let deleted = false;
-  let cleanupFailed = false;
-  const content = await undoConversationTurnsCore(ctx, count, (failed) => {
-    deleted = true;
-    cleanupFailed = failed;
-  });
-  return {
-    content,
-    status: deleted ? cleanupFailed ? "partial" : "ok" : "error",
-    retryable: false,
-    outcome: { kind: "conversation_undo", state: deleted ? "succeeded" : "failed", terminal: true },
-  };
-}
-
-async function undoConversationTurnsCore(ctx: ToolContext, count?: number, onDeleted?: (cleanupFailed: boolean) => void): Promise<string> {
-  const threadKey = ctx.threadKey ?? `discord:${ctx.guildId}:${ctx.channelId}`;
-  const undoCount = boundedLimit(count, 1, 1, MAX_UNDO_TURNS);
-  const undoResult = await ctx.repo.deleteMostRecentConversationTurns({ threadKey, count: undoCount });
-  let deletedDiscordReplies = 0;
-  let discordCleanupFailed = false;
-  if (ctx.deleteDiscordMessageIds && undoResult.assistantDiscordMessageIds.length > 0) {
-    try {
-      deletedDiscordReplies = await ctx.deleteDiscordMessageIds(undoResult.assistantDiscordMessageIds);
-    } catch {
-      discordCleanupFailed = true;
-    }
-  }
-
-  await ctx.repo.auditTool({
-    guildId: ctx.guildId,
-    channelId: ctx.channelId,
-    userId: ctx.userId,
-    toolName: "undoConversationTurns",
-    argumentsSummary: summarizeForAudit({ threadKey, count: undoCount }),
-    resultSummary: summarizeForAudit({
-      deletedTurns: undoResult.deletedTurns,
-      deletedMemoryRows: undoResult.deletedRows,
-      deletedDiscordReplies,
-      discordCleanupFailed,
-      targetDiscordMessageIds: undoResult.assistantDiscordMessageIds
-    })
-  }).catch(() => undefined);
-
-  if (undoResult.deletedRows === 0) return "I do not have a previous reply in this channel to undo.";
-  onDeleted?.(discordCleanupFailed);
-  const result = `Undid my last ${formatTurnCount(undoResult.deletedTurns)} in this channel and removed ${formatRowCount(
-    undoResult.deletedRows
-  )} from memory.`;
-  return discordCleanupFailed
-    ? `${result} The saved conversation was removed, but I could not delete every older Discord reply.`
-    : result;
-}
+import { boundedLimit, formatAgentMemoryStats, formatRecentAgentMemory } from "./discordToolShared.js";
 
 export async function getRecentAgentMemory(
   ctx: ToolContext,

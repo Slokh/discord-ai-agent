@@ -21,10 +21,8 @@ describe("tool contract validation", () => {
   it("rejects empty and whitespace-only required strings", () => {
     for (const [name, argumentsValue] of [
       ["generateImage", { prompt: "" }],
-      ["searchSpotify", { query: "   " }],
       ["findDiscordUsers", { query: "" }],
       ["getDiscordMessageContext", { messageIdOrUrl: "\t" }],
-      ["runSandboxAgent", { request: "fix it", title: " " }],
     ] as const) {
       expect(validateToolCallArguments({
         name,
@@ -36,20 +34,29 @@ describe("tool contract validation", () => {
 
   it("validates against the same deployment-narrowed schema shown to the model", () => {
     const base = loadConfig();
-    const config = { ...base, discord: { ...base.discord, premiumSkuIds: [] } };
+    const wager = { playerUserId: "user-1", stakeUsd: 1, maxPayoutUsd: 2, game: "coin", interactionMode: "automatic", rule: { kind: "coin_side", side: "heads" } };
+    const argumentsValue = { kind: "coin", wager };
+    const disabled = { ...base, payments: { ...base.payments, userWalletsEnabled: false } };
+    const enabled = { ...base, payments: { ...base.payments, userWalletsEnabled: true } };
     expect(validateToolCallArguments({
-      name: "composeDiscordResponse",
-      argumentsText: JSON.stringify({ components: [{ type: "action_row", components: [{ type: "button", style: "premium", skuId: "123456789012345678" }] }] }),
-      arguments: { components: [{ type: "action_row", components: [{ type: "button", style: "premium", skuId: "123456789012345678" }] }] },
-      config,
+      name: "drawRandom",
+      argumentsText: JSON.stringify(argumentsValue),
+      arguments: argumentsValue,
+      config: disabled,
     }).ok).toBe(false);
+    expect(validateToolCallArguments({
+      name: "drawRandom",
+      argumentsText: JSON.stringify(argumentsValue),
+      arguments: argumentsValue,
+      config: enabled,
+    }).ok).toBe(true);
   });
 
   it("returns a contract-owned valid example after structured argument errors", () => {
     const response = invalidToolCallResponse({
-      name: "composeDiscordResponse",
-      argumentsText: JSON.stringify({ components: [{ type: 1 }] }),
-      arguments: { components: [{ type: 1 }] },
+      name: "setMyTimezone",
+      argumentsText: JSON.stringify({ action: "clear" }),
+      arguments: { action: "clear" },
       config: loadConfig(),
     });
 
@@ -59,8 +66,6 @@ describe("tool contract validation", () => {
       retryable: true,
       content: expect.stringContaining("Canonical valid example"),
     }));
-    expect(response?.content).toContain('"type":"action_row"');
-    expect(response?.content).toContain('"action":{"type":"continue"');
-    expect(response?.content).not.toContain("custom_id");
+    expect(response?.content).toContain('{"action":"set","timezone":"America/New_York"}');
   });
 });

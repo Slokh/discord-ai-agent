@@ -1,19 +1,13 @@
 import { drawRandomResponse, revealRandomnessResponse } from "../randomTools.js";
 import { settleRandomWagerResponse } from "../randomWagerTools.js";
-import { undoConversationTurnsResponse } from "../agentMemoryTools.js";
-import { updateBotAvatar } from "../botProfileTools.js";
 import { createDiscordPoll } from "../discordPollTools.js";
 import { addDiscordReaction } from "../discordReactionTools.js";
-import { createDiscordEmoji } from "../guildEmojiTools.js";
-import { composeDiscordResponse } from "../discordPresentationTools.js";
 import { cleanToolResponse } from "../responseFormatting.js";
 import { booleanArgument, stringArgument, stringArrayArgument, numberArgument, recordArgument } from "./arguments.js";
 import type { ToolName } from "../toolDefinition.js";
 import type { LocalToolHandler } from "./types.js";
 
 export const discordActionToolHandlers = {
-  "composeDiscordResponse": async (ctx, route, _originalText) =>
-    composeDiscordResponse(ctx, route.arguments ?? {}),
   "addDiscordReaction": async (ctx, route, originalText) => {
     const response = await addDiscordReaction(ctx, {
       messageIdOrUrl: stringArgument(route.arguments, "messageIdOrUrl"),
@@ -28,31 +22,6 @@ export const discordActionToolHandlers = {
       durationHours: numberArgument(route.arguments, "durationHours"),
       allowMultiselect: booleanArgument(route.arguments, "allowMultiselect"),
     });
-    return { ...response, content: cleanToolResponse(response.content, ctx.config.maxReplyChars) };
-  },
-  "updateBotAvatar": async (ctx, route, _originalText) => {
-    const response = await updateBotAvatar(ctx, {
-      imageUrl: stringArgument(route.arguments, "imageUrl"),
-      messageIdOrUrl: stringArgument(route.arguments, "messageIdOrUrl"),
-      useContextImage: booleanArgument(route.arguments, "useContextImage"),
-    });
-    return { ...response, content: cleanToolResponse(response.content, ctx.config.maxReplyChars) };
-  },
-  "createDiscordEmoji": async (ctx, route, _originalText) => {
-    const response = await createDiscordEmoji(ctx, {
-      name: stringArgument(route.arguments, "name"),
-      imageUrl: stringArgument(route.arguments, "imageUrl"),
-      messageIdOrUrl: stringArgument(route.arguments, "messageIdOrUrl"),
-      useContextImage: booleanArgument(route.arguments, "useContextImage"),
-      requireTransparent: booleanArgument(route.arguments, "requireTransparent"),
-    });
-    return { ...response, content: cleanToolResponse(response.content, ctx.config.maxReplyChars) };
-  },
-  "undoConversationTurns": async (ctx, route, _originalText) => {
-    const response = await undoConversationTurnsResponse(
-              ctx,
-              numberArgument(route.arguments, "count"),
-            );
     return { ...response, content: cleanToolResponse(response.content, ctx.config.maxReplyChars) };
   },
   "drawRandom": async (ctx, route, _originalText) => {

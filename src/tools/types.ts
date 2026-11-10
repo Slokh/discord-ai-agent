@@ -6,7 +6,6 @@ import type { RngRepository } from "../db/rngRepository.js";
 import type { OpenRouterClient } from "../models/openrouter.js";
 import type { JobRuntime } from "../jobs/queue.js";
 import type { WalletService } from "../payments/walletService.js";
-import type { DiscordPresentation } from "../discord/components/types.js";
 
 export type ToolContext = {
   config: AppConfig;
@@ -196,14 +195,11 @@ export type AgentTurnOutput = {
   files: AgentFile[];
   tables: AgentTable[];
   footerLines: string[];
-  presentation?: DiscordPresentation;
   addFooterLines: (...lines: string[]) => void;
-  setPresentation: (presentation: DiscordPresentation) => void;
   snapshot: () => Readonly<{
     files: AgentFile[];
     tables: AgentTable[];
     footerLines: string[];
-    presentation?: DiscordPresentation;
   }>;
 };
 
@@ -225,8 +221,6 @@ export type AgentResponse = {
   };
   files?: AgentFile[];
   tables?: AgentTable[];
-  /** Validated Discord Components V2 presentation rendered by the Discord delivery boundary. */
-  discordPresentation?: DiscordPresentation;
   /** Non-model footer lines rendered as Discord subtext under the reply. */
   footerLines?: string[];
   storedContent?: string;

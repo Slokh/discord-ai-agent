@@ -37,13 +37,11 @@ describe("random outcome guard", () => {
       content: "You win.",
       files: [{ name: "wrong.txt", contentType: "text/plain", data: Buffer.from("wrong") }],
       tables: [{ name: "Wrong", columns: ["x"], rows: [{ x: "y" }] }],
-      discordPresentation: { version: 1, audience: "channel", components: [] },
     })).resolves.toMatchObject({
       content: expect.stringContaining("couldn't complete a verified random draw"),
       status: "error",
       files: undefined,
       tables: undefined,
-      discordPresentation: undefined,
     });
 
     guard.observeToolResult("settleRandomWager", toolResult("settled", {

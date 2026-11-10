@@ -31,7 +31,7 @@ function renderEnvExample() {
     "# Stable models, limits, repository identity, and product behavior live in src/config/env.ts.",
     "",
   ];
-  for (const group of ["core", "github", "access", "integration", "deployment"] as const) {
+  for (const group of ["core", "access", "integration", "deployment"] as const) {
     lines.push(`# ${groupTitle(group)}`);
     for (const variable of variables.filter((candidate) => candidate.group === group)) {
       const prefix = variable.operator && group === "core" ? "" : "# ";
@@ -75,7 +75,6 @@ function renderConfigurationGuide() {
 function groupTitle(group: EnvironmentVariableGroup) {
   return ({
     core: "Required application credentials and identity",
-    github: "GitHub publication (choose token or complete App credentials)",
     access: "Operator access and protected capabilities",
     integration: "Optional integrations (supply complete credential pairs)",
     deployment: "Injected deployment metadata (do not hand-configure locally)",

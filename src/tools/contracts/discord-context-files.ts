@@ -62,29 +62,6 @@ export const discordContextFileToolContracts = [
       additionalProperties: false
     }
   }),
-
-  defineTool({
-    name: "listMyImprovementSignals",
-    description:
-      "List the current requester's active improvement reports, including reports created by their 🐛 reactions. Use for requests about my bugs, friction, reports, marked issues, or improvement inbox. Results are requester-scoped and permission-filtered.",
-    mutates: false,
-    group: "discord-retrieval",
-    category: "discord",
-    toolClass: "retrieval",
-    outputContract: ["requester-scoped active signal count", "case status and severity", "source message link when available"],
-    examples: ["@ai show my reports", "@ai what improvement issues have I reported?"],
-    parameters: {
-      type: "object",
-      properties: {
-        limit: {
-          type: "number",
-          description: "Maximum active markers to return. Defaults to 20 and is capped at 25."
-        }
-      },
-      additionalProperties: false
-    }
-  }),
-
   defineTool({
     name: "searchDiscordAttachments",
     category: "discord",

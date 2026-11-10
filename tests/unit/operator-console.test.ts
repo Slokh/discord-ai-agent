@@ -37,8 +37,8 @@ describe("operator console", () => {
         generatedAt: new Date("2026-08-06T12:00:00.000Z"),
         revision: "revision-a",
         services: [],
-        summary: { healthyServices: 0, serviceCount: 4, serviceTelemetryAvailable: true, activeRuns: 0, activeTasks: 0, openImprovements: 0, needsAttention: 0 },
-        executions: [], tasks: [], improvements: { counts: {}, cases: [] }, deployments: [], producers: [],
+        summary: { healthyServices: 0, serviceCount: 3, serviceTelemetryAvailable: true, activeRuns: 0 },
+        executions: [], deployments: [],
         activity: [{
           id: "runtime-example", kind: "runtime", title: "Example prompt", status: "succeeded",
           occurredAt: new Date("2026-08-06T11:59:00.000Z"), startedAt: new Date("2026-08-06T11:58:59.000Z"),
@@ -63,7 +63,8 @@ describe("operator console", () => {
     expect(pageHtml).toContain('id="environment"');
     expect(pageHtml).toContain('aria-label="System status"');
     expect(pageHtml).toContain('aria-describedby="services-tooltip"');
-    expect(pageHtml).toContain('aria-describedby="producers-tooltip"');
+    expect(pageHtml).not.toContain('producers-tooltip');
+    expect(pageHtml).not.toContain('id="producer-summary"');
     expect(pageHtml).toContain('class="topbar-system" aria-label="System status"');
     expect(pageHtml).not.toContain('id="improvements-panel"');
     expect(pageHtml).not.toContain('id="attention-segment"');
@@ -85,8 +86,11 @@ describe("operator console", () => {
     expect(pageHtml).toContain('id="activity-type-label">Relevant</span>');
     expect(pageHtml).not.toContain('data-activity-type="all"');
     expect(pageHtml).toContain('data-activity-type="conversation" aria-selected="true"');
-    expect(pageHtml).toContain('data-activity-type="improvement" aria-selected="true"');
-    expect(pageHtml).toContain('data-activity-type="code_change" aria-selected="true"');
+    expect(pageHtml).not.toContain('data-activity-type="improvement"');
+    expect(pageHtml).not.toContain('data-activity-type="code_change"');
+    expect(pageHtml).toContain('data-activity-type="message" aria-selected="false"');
+    expect(pageHtml).toContain('data-activity-type="release" aria-selected="false"');
+    expect(pageHtml).toContain('data-activity-type="system" aria-selected="false"');
     expect(pageHtml).toContain("Prompts &amp; replies");
     expect(pageHtml).toContain("Messages");
     expect(pageHtml).not.toContain('id="activity-search-trigger"');
@@ -173,7 +177,8 @@ describe("operator console", () => {
     expect(clientScript).toContain('datetime="');
     expect(clientScript).toContain('activityFilter=["all","running","waiting","issues","done"]');
     expect(clientScript).toContain('filter==="issues"?["blocked","failed"].includes(lifecycle)');
-    expect(clientScript).toContain('defaultActivityTypes=["conversation","improvement","code_change"]');
+    expect(clientScript).toContain('activityTypeKeys=["conversation","message","release","system"]');
+    expect(clientScript).toContain('defaultActivityTypes=["conversation"]');
     expect(clientScript).toContain('let activityTypes=new Set');
     expect(clientScript).toContain('isDefaultActivityTypes()?"Relevant"');
     expect(clientScript).toContain("renderActivityDetail");
@@ -209,12 +214,9 @@ describe("operator console", () => {
     expect(clientScript).toContain("trace-phase-summary");
     expect(clientScript).toContain("phaseTools");
     expect(clientScript).toContain("phaseExceptions");
-    expect(clientScript).toContain("const improvementTraceItems=");
-    expect(clientScript).toContain('type:"trigger"');
-    expect(clientScript).toContain('type:"evidence"');
-    expect(clientScript).toContain('type:"contract"');
-    expect(clientScript).toContain('type:"proof"');
-    expect(clientScript).toContain("items.push(...improvementTraceItems(detail))");
+    expect(clientScript).not.toContain("improvementTraceItems");
+    expect(clientScript).not.toContain("codeChange");
+    expect(clientScript).not.toContain("producer");
     expect(clientScript).not.toContain('id="improvement-story-title"');
     expect(clientScript).toContain("message.directParent");
     expect(clientScript).toContain("trace-toggle");
@@ -267,7 +269,7 @@ describe("operator console", () => {
     expect(clientScript).toContain("items.push(...messageTraceItems(detail))");
     expect(clientScript).toContain("items.push(...releaseTraceItems(detail))");
     expect(clientScript).toContain('story.kind==="message"?"Message":story.title');
-    expect(clientScript).toContain('type:"check"');
+    expect(clientScript).not.toContain('type:"check"');
     expect(clientScript).toContain('type:"embedding"');
     expect(clientScript).toContain('type:"release"');
     expect(clientScript).not.toContain('type:"batch"');
@@ -331,13 +333,15 @@ describe("operator console", () => {
       schemaVersion: 3,
       environment: "test",
       revision: "revision-a",
-      summary: { serviceCount: 4, activeActivity: 0 },
+      summary: { serviceCount: 3, activeActivity: 0 },
     });
     const activityPayload = await fetch(`${baseUrl}/api/activity?types=conversation`).then((response) => response.json()) as { recent: Array<Record<string, unknown>> };
     expect(activityPayload.recent[0]).toMatchObject({ id: "runtime-example" });
     expect(activityPayload.recent[0]).not.toHaveProperty("technicalEvents");
     expect(activityPayload.recent[0]).not.toHaveProperty("lifecycle");
     expect(activityPayload.recent[0]).not.toHaveProperty("runs");
+    const overviewPayload = await fetch(`${baseUrl}/api/overview`).then((response) => response.json()) as Record<string, unknown>;
+    expect(overviewPayload).not.toHaveProperty("producers");
 
     const mutation = await fetch(`${baseUrl}/api/overview`, { method: "POST" });
     expect(mutation.status).toBe(405);
@@ -407,8 +411,8 @@ describe("operator console", () => {
       repository: {
         activityDetail: async () => null,
         snapshot: async () => ({
-          generatedAt: new Date(), revision: "revision-a", services: [], summary: {}, executions: [], tasks: [],
-          improvements: { counts: {}, cases: [] }, deployments: [], producers: [], activity,
+          generatedAt: new Date(), revision: "revision-a", services: [], summary: {}, executions: [],
+          deployments: [], activity,
         }),
       },
     });
@@ -458,8 +462,7 @@ describe("operator console", () => {
       }
       return {
         generatedAt: new Date("2026-08-06T12:00:00.000Z"),
-        services: [], summary: {}, executions: [], tasks: [],
-        improvements: { counts: {}, cases: [] }, deployments: [], producers: [], activity: [],
+        services: [], summary: {}, executions: [], deployments: [], activity: [],
       };
     });
     const runtime = await startOperatorConsole({

@@ -21,30 +21,11 @@ describe("toolRegistry", () => {
   });
 
   it("keeps operational reads behind the strict operator policy", () => {
-    for (const name of ["reportStatus", "getDeploymentStatus", "getSpendSummary"] as const) {
-      expect(toolRegistry.find((tool) => tool.name === name)?.accessPolicy).toBe("strict_ops");
+    expect(toolRegistry.find((tool) => tool.name === "getWalletFeeSummary")?.accessPolicy).toBe("strict_ops");
+    expect(toolRegistry.filter((tool) => tool.accessPolicy === "strict_ops").map((tool) => tool.name)).toEqual(["getWalletFeeSummary"]);
+    for (const name of ["inspectAgentLogs", "reportStatus", "getDeploymentStatus", "getSpendSummary"]) {
+      expect(toolRegistry.some((tool) => String(tool.name) === name)).toBe(false);
     }
-    expect(toolRegistry.some((tool) => String(tool.name) === "inspectAgentLogs")).toBe(false);
-  });
-
-  it("derives the rich presentation tool contract from the exhaustive runtime schema", () => {
-    const tool = toolRegistry.find((entry) => entry.name === "composeDiscordResponse");
-    const schema = JSON.stringify(tool?.parameters);
-
-    expect(schema).toContain('"media_gallery"');
-    expect(schema).toContain('"mentionable_select"');
-    expect(schema).toContain('"file_upload"');
-    expect(schema).toContain('"radio_group"');
-    expect(schema).toContain('"checkbox_group"');
-    expect(schema).not.toContain('"additionalProperties":true');
-    expect(Buffer.byteLength(schema, "utf8")).toBeLessThan(30_000);
-    expect(tool?.argumentExamples[0]).toEqual(expect.objectContaining({
-      components: expect.any(Array),
-    }));
-    const definition = localToolDefinitionsForModel([tool!])[0];
-    expect(definition?.function.description).not.toContain("Example arguments:");
-    expect(definition?.function.description).not.toContain('"type":"action_row"');
-    expect(definition?.function.parameters).toBe(tool?.parameters);
   });
 
   it("routes wallet balances through verified onchain USD", () => {
@@ -86,15 +67,13 @@ describe("toolRegistry", () => {
     expect(tool?.description).toContain("without substituting unsolicited personal or relationship advice");
   });
 
-  it("exposes explicit image alpha controls and transparent emoji validation", () => {
+  it("exposes explicit image alpha controls", () => {
     const imageProperties = toolRegistry.find((entry) => entry.name === "generateImage")?.parameters.properties;
-    const emojiProperties = toolRegistry.find((entry) => entry.name === "createDiscordEmoji")?.parameters.properties;
 
     expect(imageProperties).toHaveProperty("background");
     expect(imageProperties).toHaveProperty("outputFormat");
     expect(imageProperties).toHaveProperty("aspectRatio");
     expect(imageProperties).toHaveProperty("requiredText");
-    expect(emojiProperties).toHaveProperty("requireTransparent");
     expect(toolRegistry.find((entry) => entry.name === "generateImage")?.description)
       .toContain("Do not call it for diagnosis-only questions");
   });
@@ -112,16 +91,6 @@ describe("toolRegistry", () => {
     expect(contracts.map((tool) => tool.name)).toEqual(toolRegistry.map((tool) => tool.name));
     expect(contracts).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({
-          name: "runSandboxAgent",
-          category: "coding",
-          toolClass: "coding",
-          mutates: true,
-          outputContract: expect.arrayContaining(["PR link or failure reason"]),
-          permissionRequirements: expect.arrayContaining(["explicit_user_request"]),
-          auditEvents: expect.arrayContaining(["tool_audit_logs", "agent_runtime_events"]),
-          examples: expect.arrayContaining(["@ai debug the failing CI on that PR"])
-        }),
         expect.objectContaining({
           name: "searchDiscordHistory",
           category: "discord",
@@ -151,19 +120,6 @@ describe("toolRegistry", () => {
     ).toBe(true);
   });
 
-  it("tells the model to preserve code-update action intent", () => {
-    const definition = toolDefinitionsForModel().find((tool) => "function" in tool && tool.function.name === "runSandboxAgent");
-    if (!definition || !("function" in definition)) throw new Error("runSandboxAgent definition not found");
-    const properties = definition.function.parameters.properties as Record<string, { description?: string }>;
-
-    expect(properties.request.description).toContain("Preserve the user's desired outcome");
-    expect(properties.title.description).toContain("Name the intended change");
-    expect(definition.function.description).toContain("Generic requests about my reports");
-    const improvementInbox = toolDefinitionsForModel().find((tool) => "function" in tool && tool.function.name === "listMyImprovementSignals");
-    if (!improvementInbox || !("function" in improvementInbox)) throw new Error("listMyImprovementSignals definition not found");
-    expect(improvementInbox.function.description).toContain("requester's active improvement reports");
-  });
-
   it("exposes bounded batch controls for Discord file inspection", () => {
     const definition = toolDefinitionsForModel().find(
       (tool) => "function" in tool && tool.function.name === "inspectDiscordFile"
@@ -183,7 +139,7 @@ describe("toolRegistry", () => {
   it("classifies local tools into the model-facing taxonomy", () => {
     const contracts = toolRegistry;
     expect(new Set(contracts.map((tool) => tool.toolClass))).toEqual(
-      new Set(["resolver", "retrieval", "memory", "stats", "summary", "image", "generation", "coding", "ops", "external"])
+      new Set(["resolver", "retrieval", "memory", "stats", "summary", "image", "generation", "ops", "external"])
     );
     expect(contracts.find((tool) => tool.name === "findDiscordUsers")?.toolClass).toBe("resolver");
     expect(contracts.find((tool) => tool.name === "getDiscordStats")?.toolClass).toBe("stats");
@@ -193,14 +149,6 @@ describe("toolRegistry", () => {
     expect(contracts.find((tool) => tool.name === "summarizeDiscordHistory")?.toolClass).toBe("summary");
     expect(contracts.find((tool) => tool.name === "inspectDiscordImages")?.toolClass).toBe("image");
     expect(contracts.find((tool) => tool.name === "inspectDiscordImages")?.repeatPolicy).toBe("reuse_identical_success");
-    expect(contracts.find((tool) => tool.name === "getSpotifyPlaylistTracks")?.toolClass).toBe("external");
-    expect(contracts.find((tool) => tool.name === "getSpotifyPlaylistTracks")?.category).toBe("external");
-    expect(contracts.find((tool) => tool.name === "getSpotifyAlbumTracks")?.toolClass).toBe("external");
-    expect(contracts.find((tool) => tool.name === "getSpotifyArtistDiscography")?.toolClass).toBe("external");
-    expect(contracts.find((tool) => tool.name === "getSpotifyPlaylistStats")?.toolClass).toBe("external");
-    expect(contracts.find((tool) => tool.name === "compareSpotifyPlaylists")?.toolClass).toBe("external");
-    expect(contracts.find((tool) => tool.name === "searchSpotify")?.toolClass).toBe("external");
-    expect(contracts.find((tool) => tool.name === "getSpotifyItem")?.toolClass).toBe("external");
   });
 
   it("turns long latency budgets into Code Mode wait guidance", () => {
@@ -287,65 +235,6 @@ describe("toolRegistry", () => {
         expect.objectContaining({
           type: "function",
           function: expect.objectContaining({
-            name: "runSandboxAgent",
-            description: expect.stringContaining("failing CI, checks, or tests")
-          })
-        }),
-        expect.objectContaining({
-          type: "function",
-          function: expect.objectContaining({
-            name: "getSpotifyPlaylistTracks",
-            description: expect.stringContaining("Do not use web_fetch on open.spotify.com"),
-            parameters: expect.objectContaining({
-              required: ["playlistIdOrUrl"],
-              properties: expect.objectContaining({
-                format: expect.objectContaining({
-                  enum: ["text", "csv", "both"],
-                  description: expect.stringContaining("Defaults to both")
-                })
-              })
-            })
-          })
-        }),
-        expect.objectContaining({
-          type: "function",
-          function: expect.objectContaining({
-            name: "getSpotifyItem",
-            parameters: expect.objectContaining({
-              required: ["itemIdOrUrl"],
-              properties: expect.objectContaining({
-                type: expect.objectContaining({ enum: ["track", "artist", "album", "playlist", "show", "episode", "audiobook", "chapter"] })
-              })
-            })
-          })
-        }),
-        expect.objectContaining({
-          type: "function",
-          function: expect.objectContaining({
-            name: "getSpotifyAlbumTracks",
-            parameters: expect.objectContaining({
-              required: ["albumIdOrUrl"],
-              properties: expect.objectContaining({
-                format: expect.objectContaining({ enum: ["text", "csv", "both"] })
-              })
-            })
-          })
-        }),
-        expect.objectContaining({
-          type: "function",
-          function: expect.objectContaining({
-            name: "getSpotifyArtistDiscography",
-            parameters: expect.objectContaining({
-              required: ["artistIdOrUrl"],
-              properties: expect.objectContaining({
-                includeGroups: expect.objectContaining({ type: "array" })
-              })
-            })
-          })
-        }),
-        expect.objectContaining({
-          type: "function",
-          function: expect.objectContaining({
             name: "readGeneratedFile",
             parameters: expect.objectContaining({
               properties: expect.objectContaining({
@@ -382,15 +271,6 @@ describe("toolRegistry", () => {
               })
             })
           })
-        }),
-        expect.objectContaining({
-          type: "function",
-          function: expect.objectContaining({
-            name: "compareSpotifyPlaylists",
-            parameters: expect.objectContaining({
-              required: ["playlistAIdOrUrl", "playlistBIdOrUrl"]
-            })
-          })
         })
       ])
     );
@@ -399,9 +279,7 @@ describe("toolRegistry", () => {
   it("keeps the stable complete model contract compact", () => {
     const definitions = toolDefinitionsForModel();
     const totalBytes = Buffer.byteLength(JSON.stringify(definitions));
-    const presentation = definitions.find((tool) => "function" in tool && tool.function.name === "composeDiscordResponse");
     expect(totalBytes).toBeLessThan(82_000);
-    expect(Buffer.byteLength(JSON.stringify(presentation))).toBeLessThan(5_500);
   });
 
   it("enables the initial hosted OpenRouter tools", () => {
@@ -410,18 +288,5 @@ describe("toolRegistry", () => {
       "openrouter:web_fetch"
     ]);
     expect(openRouterServerToolRegistry.every((tool) => tool.toolClass === "external" && tool.outputContract.length > 0)).toBe(true);
-  });
-
-  it("detects local tools that expose a CSV attachment format", () => {
-    const supportsCsv = (name: string) => {
-      const properties = toolRegistry.find((tool) => tool.name === name)?.parameters.properties as Record<string, unknown> | undefined;
-      const format = properties?.format as { enum?: unknown[] } | undefined;
-      return Array.isArray(format?.enum) && format.enum.includes("csv");
-    };
-    expect(supportsCsv("getSpotifyPlaylistTracks")).toBe(true);
-    expect(supportsCsv("getSpotifyAlbumTracks")).toBe(true);
-    expect(supportsCsv("getSpotifyArtistDiscography")).toBe(true);
-    expect(supportsCsv("searchSpotify")).toBe(false);
-    expect(supportsCsv("queryGeneratedCsv")).toBe(false);
   });
 });

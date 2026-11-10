@@ -2,16 +2,13 @@ import type { DbPool } from "./pool.js";
 import { releaseActivityDetail } from "./operatorActivityDetailRepository.js";
 import { conversationActivityDetail, conversationToolResult } from "./operatorConversationActivityRepository.js";
 import { messageActivityDetail, recentMessageActivities } from "./operatorMessageActivityRepository.js";
-import { improvementActivityContext, improvementActivityTrace } from "./operatorImprovementActivityRepository.js";
-import { codeChangeActivityDetail } from "./operatorCodeChangeActivityRepository.js";
-import { RELATED_CASES_FOR_EXECUTION_SQL, RELATED_CASES_FOR_IMPROVEMENT_SQL } from "./operatorActivityLinks.js";
 import { projectActivitySources } from "./operatorDashboardProjection.js";
-import { OPERATOR_ACTIVITY_WINDOW_DAYS, recentTaskActivityQuery } from "./operatorDashboardActivityQueries.js";
+import { OPERATOR_ACTIVITY_WINDOW_DAYS } from "./operatorDashboardActivityQueries.js";
 import { executionActivityTrace } from "./operatorRuntimeActivityRepository.js";
 import { discordMentionLabels, resolvedDiscordSourceTitle } from "./operatorDiscordIdentity.js";
-import { deriveOperatorActivity, retainOpenImprovementActivity, summarizeOperatorActivity } from "../console/activity.js";
+import { deriveOperatorActivity, summarizeOperatorActivity } from "../console/activity.js";
 import { paginateActivity, type ActivityPageRequest } from "../console/server.js";
-const COMPONENTS = ["bot", "worker", "api", "console"] as const;
+const COMPONENTS = ["bot", "worker", "console"] as const;
 export class OperatorDashboardRepository {
   constructor(private readonly pool: DbPool) {}
   async overview(input: { revision: string }) {
@@ -20,22 +17,18 @@ export class OperatorDashboardRepository {
       generatedAt: snapshot.generatedAt,
       revision: snapshot.revision,
       services: snapshot.services,
-      producers: snapshot.producers,
       deployments: snapshot.deployments,
       summary: snapshot.summary,
     };
   }
   async activityPage(input: ActivityPageRequest & { revision: string }) {
-    const activityTypes = input.types?.length ? input.types : ["conversation", "improvement", "code_change"];
+    const activityTypes = input.types?.length ? input.types : ["conversation"];
     const snapshot = await this.snapshot({
       revision: input.revision,
       activityOnly: true,
       activityTypes,
     });
-    const activity = summarizeOperatorActivity(retainOpenImprovementActivity(
-      deriveOperatorActivity(snapshot),
-      snapshot.improvements,
-    ));
+    const activity = summarizeOperatorActivity(deriveOperatorActivity(snapshot));
     return paginateActivity(activity, input);
   }
   async activityDetail(input: { kind: string; id: string; revision: string }) {
@@ -60,26 +53,6 @@ export class OperatorDashboardRepository {
     if (input.kind === "message" && input.id.startsWith("message-")) {
       const message = await messageActivityDetail(this.pool, input.id.slice("message-".length));
       return message ? { ...detail, message } : null;
-    }
-    if (input.kind === "improvement" && input.id.startsWith("improvement-")) {
-      const caseId = input.id.slice("improvement-".length);
-      const related = await this.pool.query(
-        `SELECT case_id,merged_into_case_id FROM improvement_cases
-         WHERE case_id = $1 OR merged_into_case_id = $1
-         ORDER BY CASE WHEN case_id = $1 THEN 0 ELSE 1 END,case_id`,
-        [caseId],
-      );
-      const caseIds = [...new Set(related.rows.flatMap((row) => [nullable(row.case_id), nullable(row.merged_into_case_id)]).filter((value): value is string => Boolean(value)))];
-      if (!caseIds.length) return null;
-      const [traceEvents, improvement] = await Promise.all([
-        improvementActivityTrace(this.pool, caseIds),
-        improvementActivityContext(this.pool, caseIds, caseId),
-      ]);
-      return { ...detail, traceEvents, improvement };
-    }
-    if (input.kind === "code_change" && input.id.startsWith("code-change-")) {
-      const codeChange = await codeChangeActivityDetail(this.pool, input.id);
-      return codeChange ? { ...detail, ...codeChange } : null;
     }
     if (input.kind === "system") {
       if (input.id.startsWith("system-rollup-")) {
@@ -134,10 +107,8 @@ export class OperatorDashboardRepository {
     const activityEventLimit = 1;
     const activityOnly = input.activityOnly === true;
     const includeRecentActivity = input.includeRecentActivity !== false;
-    const activityTypes = new Set(input.activityTypes ?? ["conversation", "improvement", "code_change", "message", "release", "system"]);
+    const activityTypes = new Set(input.activityTypes ?? ["conversation", "message", "release", "system"]);
     const includeConversation = activityTypes.has("conversation");
-    const includeCodeChanges = activityTypes.has("code_change");
-    const includeImprovements = activityTypes.has("improvement");
     const includeMessages = activityTypes.has("message");
     const includeReleases = activityTypes.has("release");
     const includeSystem = activityTypes.has("system");
@@ -157,11 +128,11 @@ export class OperatorDashboardRepository {
         [now],
       )
       : Promise.resolve({ rows: [] });
-    const [heartbeats, executions, tasks, cases, caseCounts, runtimeEvents, taskEvents, caseEvents, deployments, producers, messages] = await Promise.all([
+    const [heartbeats, executions, runtimeEvents, deployments, messages] = await Promise.all([
       heartbeatQuery,
       !activityOnly || includeConversation || includeSystem ? this.pool.query(
-        `SELECT execution.execution_id,execution.session_id,execution.task_id,execution.status,
-                execution.model,execution.provider,execution.pr_url,execution.started_at,
+        `SELECT execution.execution_id,execution.session_id,execution.status,
+                execution.model,execution.provider,execution.started_at,
                 execution.created_at,execution.updated_at,
                 coalesce(nullif(execution.metadata->>'title',''),session.title) AS title,
                 left(session.request,240) AS request_preview,
@@ -193,102 +164,11 @@ export class OperatorDashboardRepository {
            ORDER BY sequence DESC LIMIT 1
          ) latest ON true
          WHERE execution.status IN ('queued','running')
+           AND execution.task_id IS NULL
            AND coalesce(nullif(execution.metadata->>'qualityCohort',''),nullif(session.metadata->>'qualityCohort','')) IS DISTINCT FROM 'synthetic'
            AND coalesce(nullif(execution.metadata->>'source',''),nullif(session.metadata->>'source','')) IS DISTINCT FROM 'cli.prompt'
          ORDER BY execution.updated_at DESC LIMIT 30`,
       ) : emptyRows(),
-      !activityOnly || includeCodeChanges || includeSystem ? this.pool.query(
-        `WITH RECURSIVE task_roots AS (
-           SELECT task_id,task_id AS root_task_id
-           FROM agent_tasks WHERE retried_from_task_id IS NULL
-           UNION ALL
-           SELECT child.task_id,parent.root_task_id
-           FROM agent_tasks child
-           JOIN task_roots parent ON child.retried_from_task_id = parent.task_id
-         ), catalog AS (
-           SELECT task.*,
-                  coalesce(root.root_task_id,task.task_id) AS root_task_id,
-                  CASE
-                    WHEN task.task_type = 'improvement_report' THEN 'system:' || coalesce(root.root_task_id,task.task_id)
-                    WHEN task.improvement_case_id IS NOT NULL THEN 'case:' || task.improvement_case_id
-                    ELSE 'task:' || coalesce(root.root_task_id,task.task_id)
-                  END AS story_id
-           FROM agent_tasks task
-           LEFT JOIN task_roots root USING (task_id)
-           WHERE task.task_type <> 'post-deploy-canary'
-         ), active_groups AS (
-           SELECT story_id,count(*)::int AS active_count,max(updated_at) AS updated_at
-           FROM catalog WHERE status IN ('queued','running') GROUP BY story_id
-         ), anchor AS (
-           SELECT DISTINCT ON (catalog.story_id) catalog.*
-           FROM catalog JOIN active_groups USING (story_id)
-           WHERE catalog.status IN ('queued','running')
-           ORDER BY catalog.story_id,catalog.updated_at DESC,catalog.created_at DESC,catalog.task_id DESC
-         )
-         SELECT anchor.task_id,anchor.root_task_id,anchor.story_id,anchor.improvement_case_id,
-                anchor.task_type,coalesce(case_row.title,anchor.title) AS title,
-                anchor.status,anchor.current_step,anchor.status_message,
-                anchor.branch_name,anchor.pr_url,anchor.verify_passed,
-                anchor.guild_id,anchor.channel_id,anchor.trace_id,
-                anchor.discord_response_channel_id,anchor.discord_response_message_id,
-                anchor.created_at,anchor.started_at,anchor.updated_at,
-                stats.attempts,stats.failed_attempts,
-                count(*) OVER ()::int AS total_count
-         FROM anchor
-         LEFT JOIN improvement_cases case_row ON case_row.case_id = anchor.improvement_case_id
-         LEFT JOIN LATERAL (
-           SELECT count(*)::int AS attempts,
-                  count(*) FILTER (WHERE candidate.status = 'failed')::int AS failed_attempts
-           FROM catalog candidate WHERE candidate.story_id = anchor.story_id
-         ) stats ON true
-         ORDER BY anchor.updated_at DESC LIMIT 30`,
-      ) : emptyRows(),
-      !activityOnly || includeImprovements ? this.pool.query(
-        `SELECT case_row.case_id,case_row.title,case_row.status,case_row.classification,
-                case_row.severity,case_row.owning_domain,case_row.automation_state,
-                case_row.automation_blocker,case_row.automation_next_action,
-                case_row.automation_retry_trigger,case_row.automation_retry_at,
-                case_row.automation_last_progress_at,case_row.first_seen_at,case_row.last_seen_at,
-                work.pull_request_url,work.status AS work_status,related.related_case_ids,
-                report.preview AS report_preview,report.author_is_bot AS report_author_is_bot,
-                report.has_execution AS report_has_execution
-         FROM improvement_cases case_row
-         LEFT JOIN LATERAL (
-           SELECT pull_request_url,status FROM improvement_work_attempts attempt
-           WHERE attempt.case_id = case_row.case_id
-           ORDER BY attempt.created_at DESC LIMIT 1
-         ) work ON true
-         LEFT JOIN LATERAL (
-           SELECT left(regexp_replace(message.content,'\\s+',' ','g'),240) AS preview,
-                  coalesce(author.is_bot,false) AS author_is_bot,
-                  signal.execution_id IS NOT NULL AS has_execution
-           FROM improvement_signals signal
-           JOIN messages message
-             ON message.id = signal.message_id
-            AND message.guild_id = signal.guild_id
-            AND message.channel_id = signal.channel_id
-           JOIN discord_users author ON author.id = message.author_id
-           WHERE signal.case_id = case_row.case_id
-             AND signal.source = 'member_report'
-             AND signal.active = true
-             AND message.deleted_at IS NULL
-             AND message.normalized_content <> ''
-           ORDER BY signal.observed_at DESC,signal.signal_id DESC
-           LIMIT 1
-         ) report ON true
-         ${RELATED_CASES_FOR_IMPROVEMENT_SQL}
-         WHERE case_row.merged_into_case_id IS NULL
-           AND case_row.status NOT IN ('resolved','dismissed')
-         ORDER BY
-           CASE case_row.severity WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 ELSE 3 END,
-           case_row.updated_at DESC LIMIT 40`,
-      ) : emptyRows(),
-      activityOnly ? emptyRows() : this.pool.query(
-        `SELECT status,count(*)::int AS count,
-                count(*) FILTER (WHERE automation_state = 'blocked' OR severity = 'critical')::int AS attention_count
-         FROM improvement_cases
-         WHERE merged_into_case_id IS NULL GROUP BY status ORDER BY status`,
-      ),
       includeRecentActivity && (includeConversation || includeSystem) ? this.pool.query(
         `WITH execution_rollup AS (
            SELECT execution.execution_id,execution.session_id,execution.attempt,
@@ -326,7 +206,7 @@ export class OperatorDashboardRepository {
                 delivery.status_channel_id,delivery.status_message_id,
                 (source_message.referenced_message_id IS NOT NULL) AS has_parent,
                 event.id,event.event_name,event.level,event.created_at,
-                event.group_event_count,linked.related_case_ids
+                event.group_event_count
          FROM execution_rollup recent
          JOIN agent_runtime_executions execution ON execution.execution_id = recent.execution_id
          JOIN agent_runtime_sessions session ON session.session_id = recent.session_id
@@ -338,7 +218,6 @@ export class OperatorDashboardRepository {
          LEFT JOIN guild_members source_member
            ON source_member.guild_id = source_message.guild_id AND source_member.user_id = source_message.author_id
           AND NOT EXISTS (SELECT 1 FROM privacy_deletions deletion WHERE deletion.user_id = source_message.author_id)
-         ${RELATED_CASES_FOR_EXECUTION_SQL}
          LEFT JOIN LATERAL (
            SELECT candidate.id,candidate.event_name,candidate.level,candidate.created_at,
                   count(*) OVER ()::int AS group_event_count
@@ -350,90 +229,12 @@ export class OperatorDashboardRepository {
          ORDER BY recent.story_updated_at DESC,event.created_at DESC,event.id DESC`,
         [now, includeConversation, includeSystem],
       ) : emptyRows(),
-      includeRecentActivity && (includeCodeChanges || includeSystem)
-        ? this.pool.query(recentTaskActivityQuery(activityEventLimit, includeSystem), [now])
-        : emptyRows(),
-      includeRecentActivity && includeImprovements ? this.pool.query(
-        `WITH recent_cases AS (
-           SELECT event.case_id,max(event.created_at) AS story_updated_at
-           FROM improvement_case_events event
-           JOIN improvement_cases case_row USING (case_id)
-           WHERE event.created_at >= $1::timestamptz - make_interval(days => ${OPERATOR_ACTIVITY_WINDOW_DAYS})
-             AND case_row.merged_into_case_id IS NULL
-             AND event.event_name NOT IN ('signal.received','signal.withdrawn','signal.reactivated','case.coalesced','evidence.attached','reconciliation.health_changed')
-           GROUP BY event.case_id
-           ORDER BY story_updated_at DESC
-         )
-         SELECT recent.case_id,recent.story_updated_at,
-                case_row.title,case_row.status,case_row.first_seen_at,
-                event.event_id,event.event_name,event.actor_kind,event.created_at,event.group_event_count,
-                work.pull_request_url,
-                conversation.guild_id AS conversation_guild_id,
-                conversation.source_channel_id,conversation.source_message_id,
-                conversation.delivery_kind,conversation.delivery_channel_id,conversation.delivery_message_id,
-                related.related_case_ids,
-                report.preview AS report_preview,report.author_is_bot AS report_author_is_bot,
-                report.has_execution AS report_has_execution
-         FROM recent_cases recent
-         JOIN improvement_cases case_row USING (case_id)
-         LEFT JOIN LATERAL (
-           SELECT candidate.event_id,candidate.event_name,candidate.actor_kind,candidate.created_at,
-                  count(*) OVER ()::int AS group_event_count
-           FROM improvement_case_events candidate
-           WHERE candidate.case_id = recent.case_id
-             AND candidate.event_name NOT IN ('signal.received','signal.withdrawn','signal.reactivated','case.coalesced','evidence.attached','reconciliation.health_changed')
-           ORDER BY candidate.created_at DESC,candidate.event_id DESC
-           LIMIT ${activityEventLimit}
-         ) event ON true
-         LEFT JOIN LATERAL (
-           SELECT pull_request_url FROM improvement_work_attempts attempt
-           WHERE attempt.case_id = case_row.case_id AND attempt.pull_request_url IS NOT NULL
-           ORDER BY attempt.created_at DESC LIMIT 1
-         ) work ON true
-         LEFT JOIN LATERAL (
-           SELECT guild_id,source_channel_id,source_message_id,delivery_kind,delivery_channel_id,delivery_message_id
-           FROM improvement_reporter_conversations candidate
-           WHERE candidate.case_id = case_row.case_id
-           ORDER BY candidate.updated_at DESC LIMIT 1
-         ) conversation ON true
-         LEFT JOIN LATERAL (
-           SELECT left(regexp_replace(message.content,'\\s+',' ','g'),240) AS preview,
-                  coalesce(author.is_bot,false) AS author_is_bot,
-                  signal.execution_id IS NOT NULL AS has_execution
-           FROM improvement_signals signal
-           JOIN messages message
-             ON message.id = signal.message_id
-            AND message.guild_id = signal.guild_id
-            AND message.channel_id = signal.channel_id
-           JOIN discord_users author ON author.id = message.author_id
-           WHERE signal.case_id = case_row.case_id
-             AND signal.source = 'member_report'
-             AND signal.active = true
-             AND message.deleted_at IS NULL
-             AND message.normalized_content <> ''
-           ORDER BY signal.observed_at DESC,signal.signal_id DESC
-           LIMIT 1
-         ) report ON true
-         ${RELATED_CASES_FOR_IMPROVEMENT_SQL}
-         ORDER BY recent.story_updated_at DESC,event.created_at DESC,event.event_id DESC`,
-        [now],
-      ) : emptyRows(),
       !activityOnly || includeRecentActivity && includeReleases ? this.pool.query(
         `SELECT revision,deployment_id,verified_at FROM deployment_verifications
          WHERE verified_at >= $1::timestamptz - make_interval(days => ${OPERATOR_ACTIVITY_WINDOW_DAYS})
          ORDER BY verified_at DESC`,
         [now],
       ) : emptyRows(),
-      activityOnly ? emptyRows() : this.pool.query(
-        `SELECT producer.trigger,producer.activated_at,run.status,run.revision,
-                run.outcome_code,run.started_at,run.completed_at
-         FROM improvement_proof_producers producer
-         LEFT JOIN LATERAL (
-           SELECT * FROM improvement_proof_producer_runs candidate
-           WHERE candidate.trigger = producer.trigger
-           ORDER BY candidate.started_at DESC,candidate.run_id DESC LIMIT 1
-         ) run ON true ORDER BY producer.trigger`,
-      ),
       includeRecentActivity && includeMessages ? recentMessageActivities(this.pool, now) : Promise.resolve([]),
     ]);
 
@@ -457,21 +258,6 @@ export class OperatorDashboardRepository {
         lastSeenAt: latest?.lastSeenAt ?? null,
       };
     });
-    const improvementCounts = Object.fromEntries(caseCounts.rows.map((row) => [String(row.status), number(row.count)]));
-    const openImprovementCount = caseCounts.rows
-      .filter((row) => !["resolved", "dismissed"].includes(String(row.status)))
-      .reduce((total, row) => total + number(row.count), 0);
-    const attentionCount = caseCounts.rows.reduce((total, row) => total + number(row.attention_count), 0);
-    const improvementRows = cases.rows.map((row) => ({
-      caseId: String(row.case_id), title: improvementConsoleTitle(row), status: String(row.status),
-      classification: String(row.classification), severity: String(row.severity),
-      owningDomain: nullable(row.owning_domain), automationState: String(row.automation_state),
-      blocker: nullable(row.automation_blocker), nextAction: String(row.automation_next_action),
-      retryTrigger: nullable(row.automation_retry_trigger), retryAt: nullableDate(row.automation_retry_at),
-      lastProgressAt: date(row.automation_last_progress_at), firstSeenAt: date(row.first_seen_at), lastSeenAt: date(row.last_seen_at),
-      pullRequestUrl: nullable(row.pull_request_url), workStatus: nullable(row.work_status),
-      relatedImprovementCaseIds: textArray(row.related_case_ids),
-    }));
     const promptMentionLabels = await discordMentionLabels(this.pool, [...executions.rows, ...runtimeEvents.rows].map((row) => ({
       guild_id: row.delivery_guild_id, content: row.source_message_content, raw: row.source_message_raw,
     })));
@@ -479,7 +265,7 @@ export class OperatorDashboardRepository {
       ...row,
       title: resolvedDiscordSourceTitle(row.source_message_content, row.delivery_guild_id, row.title, promptMentionLabels),
     }));
-    const activities = projectActivitySources(runtimeActivityRows, taskEvents.rows, caseEvents.rows);
+    const activities = projectActivitySources(runtimeActivityRows);
     return {
       generatedAt: now,
       revision: input.revision,
@@ -489,14 +275,10 @@ export class OperatorDashboardRepository {
         serviceCount: services.length,
         serviceTelemetryAvailable: heartbeatAvailable,
         activeRuns: number(executions.rows[0]?.total_count),
-        activeTasks: number(tasks.rows[0]?.total_count),
-        openImprovements: openImprovementCount,
-        needsAttention: attentionCount,
       },
       executions: executions.rows.map((row) => ({
-        executionId: String(row.execution_id), sessionId: String(row.session_id), taskId: nullable(row.task_id),
+        executionId: String(row.execution_id), sessionId: String(row.session_id),
         status: String(row.status), model: nullable(row.model), provider: nullable(row.provider),
-        pullRequestUrl: nullable(row.pr_url),
         title: resolvedDiscordSourceTitle(row.source_message_content, row.delivery_guild_id, row.title, promptMentionLabels),
         authorLabel: nullable(row.source_author_label),
         requestPreview: String(row.request_preview),
@@ -509,28 +291,9 @@ export class OperatorDashboardRepository {
         startedAt: nullableDate(row.started_at),
         createdAt: date(row.created_at), updatedAt: date(row.updated_at),
       })),
-      tasks: tasks.rows.map((row) => ({
-        taskId: String(row.task_id), improvementCaseId: nullable(row.improvement_case_id),
-        storyId: nullable(row.story_id), rootTaskId: nullable(row.root_task_id),
-        taskType: String(row.task_type), title: String(row.title), status: String(row.status),
-        currentStep: nullable(row.current_step), statusMessage: nullable(row.status_message),
-        branchName: nullable(row.branch_name), pullRequestUrl: nullable(row.pr_url),
-        attempts: number(row.attempts), failedAttempts: number(row.failed_attempts),
-        sourceUrl: discordUrl(row.guild_id, row.channel_id, row.trace_id),
-        responseUrl: discordUrl(row.guild_id, row.discord_response_channel_id, row.discord_response_message_id),
-        responseKind: row.discord_response_message_id == null ? null : "reply",
-        verifyPassed: row.verify_passed == null ? null : Boolean(row.verify_passed),
-        createdAt: date(row.created_at), startedAt: nullableDate(row.started_at), updatedAt: date(row.updated_at),
-      })),
-      improvements: { counts: improvementCounts, cases: improvementRows },
       messages,
       deployments: deployments.rows.map((row) => ({
         revision: String(row.revision), deploymentId: String(row.deployment_id), verifiedAt: date(row.verified_at),
-      })),
-      producers: producers.rows.map((row) => ({
-        trigger: String(row.trigger), status: row.status == null ? "unobserved" : String(row.status),
-        revision: nullable(row.revision), outcomeCode: nullable(row.outcome_code),
-        activatedAt: date(row.activated_at), startedAt: nullableDate(row.started_at), completedAt: nullableDate(row.completed_at),
       })),
       activity: activities,
     };
@@ -551,25 +314,6 @@ function nullableDate(value: unknown): Date | null {
 function number(value: unknown): number {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : 0;
-}
-function textArray(value: unknown): string[] {
-  return Array.isArray(value) ? value.filter((item) => item != null).map(String) : [];
-}
-function improvementConsoleTitle(row: Record<string, unknown>): string {
-  const preview = consoleReportPreview(row.report_preview);
-  if (!preview) return String(row.title);
-  const subject = row.report_author_is_bot ? "reply" : row.report_has_execution ? "prompt" : "message";
-  return `Reported ${subject}: ${preview}`;
-}
-function consoleReportPreview(value: unknown): string | null {
-  const compact = nullable(value)
-    ?.replace(/\s+-#\s+\d+(?:\.\d+)?s\s*$/i, "")
-    .replaceAll("**", "")
-    .replaceAll("`", "")
-    .replace(/\s+/g, " ")
-    .trim();
-  if (!compact) return null;
-  return compact.length > 140 ? `${compact.slice(0, 137).trimEnd()}…` : compact;
 }
 function executionIdFromActivityId(id: string): string | null {
   if (id.startsWith("runtime-")) return id.slice("runtime-".length) || null;

@@ -2,15 +2,10 @@ import { describe, expect, it } from "vitest";
 import { installedToolHandlers } from "../../src/capabilities/catalog.js";
 import { coreToolHandlers } from "../../src/tools/handlers/core.js";
 import { userSettingsToolHandlers } from "../../src/tools/handlers/user-settings.js";
-import { reminderToolHandlers } from "../../src/tools/handlers/reminders.js";
 import { discordRetrievalToolHandlers } from "../../src/tools/handlers/discord-retrieval.js";
-import { opsToolHandlers } from "../../src/tools/handlers/ops.js";
-import { improvementToolHandlers } from "../../src/tools/handlers/improvements.js";
 import { discordActionToolHandlers } from "../../src/tools/handlers/discord-action.js";
-import { codegenToolHandlers } from "../../src/tools/handlers/codegen.js";
 import { imageToolHandlers } from "../../src/tools/handlers/image.js";
 import { generatedDataToolHandlers } from "../../src/tools/handlers/generated-data.js";
-import { spotifyToolHandlers } from "../../src/tools/handlers/spotify.js";
 import { walletToolHandlers } from "../../src/tools/handlers/wallet.js";
 import { externalResearchToolHandlers } from "../../src/tools/handlers/external-research.js";
 import { toolRegistry, type ToolName } from "../../src/tools/registry.js";
@@ -19,15 +14,10 @@ import { bindToolHandlers } from "../../src/tools/toolDefinition.js";
 const handlerFamilies = {
   core: coreToolHandlers,
   userSettings: userSettingsToolHandlers,
-  reminders: reminderToolHandlers,
   discordRetrieval: discordRetrievalToolHandlers,
-  ops: opsToolHandlers,
-  improvements: improvementToolHandlers,
   discordAction: discordActionToolHandlers,
-  codegen: codegenToolHandlers,
   image: imageToolHandlers,
   generatedData: generatedDataToolHandlers,
-  spotify: spotifyToolHandlers,
   wallet: walletToolHandlers,
   externalResearch: externalResearchToolHandlers,
 } as const;
@@ -35,33 +25,20 @@ const handlerFamilies = {
 const expectedFamilyTools = {
   core: ["loadSkillContext"],
   userSettings: ["setMyTimezone"],
-  reminders: ["setReminder", "listMyReminders"],
   discordRetrieval: [
-    "findDiscordUsers", "findDiscordChannels", "listMyImprovementSignals", "inspectDiscordFile",
+    "findDiscordUsers", "findDiscordChannels", "inspectDiscordFile",
     "summarizeDiscordThread", "getRecentDiscordMessages", "getRecentAgentMemory", "getAgentMemoryStats",
     "getDiscordMessageContext", "searchDiscordAttachments", "getDiscordStats", "getDiscordChannelTopics",
     "summarizeDiscordHistory", "searchDiscordHistory",
   ],
-  ops: [
-    "reportStatus", "setAgentModel",
-    "getDeploymentStatus", "getSpendSummary",
-  ],
-  improvements: ["reportImprovementSignal"],
   discordAction: [
-    "composeDiscordResponse", "addDiscordReaction", "createDiscordPoll", "updateBotAvatar", "createDiscordEmoji",
-    "undoConversationTurns", "drawRandom", "revealRandomness", "settleRandomWager",
+    "addDiscordReaction", "createDiscordPoll", "drawRandom", "revealRandomness", "settleRandomWager",
   ],
-  codegen: ["runSandboxAgent", "getAgentTaskStatus", "listAgentTasks", "retryAgentTask", "cancelAgentTask"],
   image: ["generateImage", "inspectDiscordImages", "getDiscordUserAvatar"],
   generatedData: ["readGeneratedFile", "queryGeneratedCsv", "queryGeneratedTable"],
-  spotify: [
-    "getSpotifyPlaylistTracks", "getSpotifyAlbumTracks", "getSpotifyArtistDiscography",
-    "getSpotifyPlaylistStats", "compareSpotifyPlaylists", "searchSpotify", "getSpotifyItem",
-  ],
   wallet: [
     "awaitRandomWagerAction", "getWalletBalance", "listWalletBalances", "getWagerHistory",
-    "transferWalletFunds", "requestStarterFunds", "adminTransferWalletFunds",
-    "adminSetWalletStarterAmount", "getWalletFeeSummary", "reconcileWalletTransfers",
+    "transferWalletFunds", "requestStarterFunds", "getWalletFeeSummary",
   ],
   externalResearch: ["web__run"],
 } satisfies Record<keyof typeof handlerFamilies, ToolName[]>;

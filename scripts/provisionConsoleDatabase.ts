@@ -20,7 +20,7 @@ async function main() {
   requireConsoleDatabaseProvisionConfirmation(process.argv.slice(2));
   const tunnel = await startProductionDatabaseTunnel({
     credentialVariable: "DATABASE_URL",
-    component: "api",
+    component: "worker",
     mode: "administrative",
   });
   const config = loadConfig(["node", "provision-console-database", "console"]);

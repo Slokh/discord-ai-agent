@@ -4,7 +4,6 @@ export function createAgentTurnOutput(): AgentTurnOutput {
   const files: AgentTurnOutput["files"] = [];
   const tables: AgentTurnOutput["tables"] = [];
   const footerLines: string[] = [];
-  let presentation: AgentTurnOutput["presentation"];
   return {
     files,
     tables,
@@ -14,13 +13,10 @@ export function createAgentTurnOutput(): AgentTurnOutput {
         if (!footerLines.includes(line)) footerLines.push(line);
       }
     },
-    setPresentation: (value) => { presentation = value; },
-    get presentation() { return presentation; },
     snapshot: () => Object.freeze({
       files: [...files],
       tables: [...tables],
       footerLines: [...footerLines],
-      ...(presentation ? { presentation } : {}),
     }),
   };
 }

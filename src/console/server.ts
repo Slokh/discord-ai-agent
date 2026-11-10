@@ -2,7 +2,7 @@ import { brotliCompressSync, constants as zlibConstants, gzipSync } from "node:z
 import { createServer, type IncomingMessage, type Server } from "node:http";
 import { assertConsoleAuthConfig, type AppConfig } from "../config/env.js";
 import { logger } from "../util/logger.js";
-import { deriveOperatorActivity, retainOpenImprovementActivity, summarizeOperatorActivity, type ActivitySummary } from "./activity.js";
+import { deriveOperatorActivity, summarizeOperatorActivity, type ActivitySummary } from "./activity.js";
 import { createDiscordConsoleAuthenticator, type ConsoleAuthenticator } from "./auth.js";
 import { dashboardClient } from "./client.js";
 import { renderDashboardPage } from "./page.js";
@@ -204,11 +204,7 @@ async function projectConsoleProjection(input: {
   const baseActivity = projectedActivity && Array.isArray(projectedActivity.active) && Array.isArray(projectedActivity.recent)
     ? { active: projectedActivity.active, recent: projectedActivity.recent }
     : deriveOperatorActivity(snapshot);
-  const detailedActivity = retainOpenImprovementActivity(
-    baseActivity as ReturnType<typeof deriveOperatorActivity>,
-    snapshot.improvements,
-  );
-  const activity = summarizeOperatorActivity(detailedActivity as ReturnType<typeof deriveOperatorActivity>);
+  const activity = summarizeOperatorActivity(baseActivity as ReturnType<typeof deriveOperatorActivity>);
   const summary = snapshot.summary && typeof snapshot.summary === "object" && !Array.isArray(snapshot.summary)
     ? snapshot.summary as Record<string, unknown>
     : {};
@@ -217,13 +213,11 @@ async function projectConsoleProjection(input: {
     activeRows: activity.active.length,
     recentRows: activity.recent.length,
     serviceRows: Array.isArray(snapshot.services) ? snapshot.services.length : 0,
-    producerRows: Array.isArray(snapshot.producers) ? snapshot.producers.length : 0,
   }, "Operator console projection completed");
   return { overview: {
     generatedAt: snapshot.generatedAt,
     revision: snapshot.revision,
     services: snapshot.services,
-    producers: snapshot.producers,
     deployments: snapshot.deployments,
     summary: { ...summary, activeActivity: activity.active.length },
   }, activity };
@@ -243,13 +237,13 @@ function activityPageRequest(url: URL): ActivityPageRequest {
 }
 
 export function paginateActivity(activity: ConsoleProjection["activity"], input: ActivityPageRequest) {
-  const allowedTypes = new Set(input.types?.length ? input.types : ["conversation", "improvement", "code_change"]);
+  const allowedTypes = new Set(input.types?.length ? input.types : ["conversation"]);
   const search = input.search?.trim().toLowerCase() ?? "";
   const activeKeys = new Set(activity.active.map((story) => `${story.kind}:${story.id}`));
   const all = [...new Map([...activity.active, ...activity.recent].map((story) => [`${story.kind}:${story.id}`, story])).values()]
     .filter((story) => allowedTypes.has(story.kind))
     .filter((story) => !input.selectedId || story.id === input.selectedId && (!input.selectedKind || story.kind === input.selectedKind))
-    .filter((story) => !search || [story.title, story.authorLabel, story.summary, story.status, story.branchName]
+    .filter((story) => !search || [story.title, story.authorLabel, story.summary, story.status]
       .filter(Boolean).join(" ").toLowerCase().includes(search));
   const state = (story: ActivitySummary) => activityState(story, activeKeys.has(`${story.kind}:${story.id}`));
   const matches = (story: ActivitySummary, filter = input.filter) => filter === "all"

@@ -1,45 +1,29 @@
 import { coreToolContracts } from "../tools/contracts/core.js";
 import { userSettingsToolContracts } from "../tools/contracts/user-settings.js";
-import { reminderToolContracts } from "../tools/contracts/reminders.js";
-import { presentationToolContracts } from "../tools/contracts/presentation.js";
 import { discordResolverHistoryToolContracts } from "../tools/contracts/discord-resolvers-history.js";
 import { discordContextFileToolContracts } from "../tools/contracts/discord-context-files.js";
 import { discordStatsSummaryToolContracts } from "../tools/contracts/discord-stats-summaries.js";
 import { imageToolContracts } from "../tools/contracts/image.js";
 import { generatedDataToolContracts } from "../tools/contracts/generated-data.js";
-import { skillDiagnosticToolContracts } from "../tools/contracts/skills-diagnostics.js";
-import { improvementToolContracts } from "../tools/contracts/improvements.js";
-import { runtimeAdminToolContracts } from "../tools/contracts/runtime-admin.js";
-import { codegenToolContracts } from "../tools/contracts/codegen.js";
 import { discordActionToolContracts } from "../tools/contracts/discord-actions.js";
 import { randomWagerActionToolContracts } from "../tools/contracts/random-wager-actions.js";
 import { walletUserToolContracts } from "../tools/contracts/wallet-user.js";
 import { walletAdminToolContracts } from "../tools/contracts/wallet-admin.js";
-import { spotifyCollectionToolContracts } from "../tools/contracts/spotify-collections.js";
-import { spotifyCatalogToolContracts } from "../tools/contracts/spotify-catalog.js";
 import { externalResearchToolContracts } from "../tools/contracts/external-research.js";
 import { MUTATING_TOOL_NAMES, TOOL_NAMES, type ToolName, type ToolRegistryEntry } from "../tools/toolDefinition.js";
 
 const definitions = [
   ...coreToolContracts,
   ...userSettingsToolContracts,
-  ...reminderToolContracts,
-  ...presentationToolContracts,
   ...discordResolverHistoryToolContracts,
   ...discordContextFileToolContracts,
   ...discordStatsSummaryToolContracts,
   ...imageToolContracts,
   ...generatedDataToolContracts,
-  ...skillDiagnosticToolContracts,
-  ...improvementToolContracts,
-  ...runtimeAdminToolContracts,
-  ...codegenToolContracts,
   ...discordActionToolContracts,
   ...randomWagerActionToolContracts,
   ...walletUserToolContracts,
   ...walletAdminToolContracts,
-  ...spotifyCollectionToolContracts,
-  ...spotifyCatalogToolContracts,
   ...externalResearchToolContracts,
 ];
 
@@ -54,21 +38,9 @@ const mutationDrift = definitions
   .map((tool) => tool.name);
 if (mutationDrift.length) throw new Error(`Tool mutation taxonomy drift: ${mutationDrift.join(", ")}.`);
 
-const DISABLED_PRODUCTION_TOOLS = new Set<ToolName>([
-  "setReminder", "listMyReminders", "composeDiscordResponse", "listMyImprovementSignals",
-  "getDeploymentStatus", "getSpendSummary", "reportStatus", "setAgentModel",
-  "reportImprovementSignal", "undoConversationTurns", "createDiscordEmoji",
-  "updateBotAvatar", "adminTransferWalletFunds", "adminSetWalletStarterAmount",
-  "reconcileWalletTransfers", "getSpotifyPlaylistTracks", "getSpotifyAlbumTracks",
-  "getSpotifyArtistDiscography", "getSpotifyPlaylistStats", "compareSpotifyPlaylists",
-  "searchSpotify", "getSpotifyItem",
-]);
 
 export const installedToolContracts: readonly ToolRegistryEntry[] = Object.freeze(
-  TOOL_NAMES.map((name) => {
-    const contract = requiredContract(name);
-    return DISABLED_PRODUCTION_TOOLS.has(name) ? { ...contract, available: () => false } : contract;
-  }),
+  TOOL_NAMES.map((name) => requiredContract(name)),
 );
 
 function requiredContract(name: ToolName): ToolRegistryEntry {

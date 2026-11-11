@@ -295,7 +295,12 @@ export class NanocodeHost implements NanocodeHostClient {
         return;
       }
       case "failed": {
-        if (!message.request_id) return;
+        if (!message.request_id) {
+          // Not tied to a turn (for example a message the host could not
+          // parse), but it means something on the protocol is wrong.
+          logger.error({ error: message.error }, "nanocode host reported a protocol error");
+          return;
+        }
         const pending = this.turns.get(message.request_id);
         if (!pending) return;
         void pending.events.then(() => pending.reject(new Error(`nanocode turn failed: ${message.error}`)));

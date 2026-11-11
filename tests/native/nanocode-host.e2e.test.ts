@@ -84,7 +84,13 @@ function turn(host: NanocodeHost, requestId: string, sessionKey: string, text: s
         const args = call.arguments as { a: number; b: number };
         await new Promise((resolve) => setTimeout(resolve, 150));
         concurrent -= 1;
-        return { success: true, output: String(args.a + args.b) };
+        // The same shape production sends: metadata and a Code Mode value.
+        return {
+          success: true,
+          output: String(args.a + args.b),
+          codeModeValue: { sum: args.a + args.b },
+          metadata: { status: "ok", fileCount: 0, tableCount: 0 },
+        };
       },
       ...extra,
     }),
@@ -95,10 +101,18 @@ describe.skipIf(!existsSync(binary))("nanocode host (real binary, fake model)", 
   it("runs parallel Code Mode tool calls concurrently and continues the session", async () => {
     const { fake, start } = await harness(addTwice);
     const host = start();
+    const startedAt = Date.now();
     const first = turn(host, "req-1", "thread:user:a", "first");
     await expect(first.result).resolves.toMatchObject({ finalMessage: "done after 7 items", resumed: false });
     expect(first.started).toHaveLength(2);
     expect(first.maxConcurrent()).toBe(2);
+    // A tool result the host cannot read leaves the call waiting minutes for
+    // Code Mode to give up; a delivered one finishes in well under that.
+    expect(Date.now() - startedAt).toBeLessThan(15_000);
+    // The model must see both tools' results, not a cell still waiting on them.
+    const cellOutput = JSON.stringify(lastItem(fake.requests[1]!));
+    expect(cellOutput).toContain("Script completed");
+    expect(cellOutput).toContain("42");
 
     const second = turn(host, "req-2", "thread:user:a", "second");
     const result = await second.result;

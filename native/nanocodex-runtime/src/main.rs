@@ -35,7 +35,7 @@ use crate::{
     bridge::{Bridge, ProtocolTool},
     protocol::{
         CancelRequest, Configure, Inbound, Outbound, PROTOCOL_VERSION, PromptPayload, SteerRequest,
-        TurnRequest, encode,
+        ToolResultMessage, TurnRequest, encode,
     },
     store::PostgresHost,
 };
@@ -130,6 +130,12 @@ async fn serve(outbound: mpsc::UnboundedSender<Value>) -> Result<(), HostError> 
         let message = match serde_json::from_str::<Inbound>(&line) {
             Ok(message) => message,
             Err(error) => {
+                eprintln!("nanocode host: invalid inbound message: {error}");
+                // A tool result the host cannot read must still end its call;
+                // otherwise the turn waits until Code Mode gives up on it.
+                if let Some(result) = unreadable_tool_result(&line, &error) {
+                    bridge.resolve(result);
+                }
                 send(
                     &outbound,
                     &Outbound::Failed {
@@ -551,6 +557,23 @@ async fn sweep_idle_sessions(host: std::sync::Weak<Host>) {
     }
 }
 
+/// Turns a tool result that failed to parse into a failed result for the same
+/// call, when its session and call IDs can still be read.
+fn unreadable_tool_result(line: &str, error: &serde_json::Error) -> Option<ToolResultMessage> {
+    let value: Value = serde_json::from_str(line).ok()?;
+    if value.get("type")?.as_str()? != "tool_result" {
+        return None;
+    }
+    Some(ToolResultMessage {
+        session_id: value.get("session_id")?.as_str()?.to_owned(),
+        call_id: value.get("call_id")?.as_str()?.to_owned(),
+        success: false,
+        output: format!("The application tool result could not be read by the host: {error}"),
+        code_mode_value: None,
+        metadata: None,
+    })
+}
+
 fn prompt(payload: PromptPayload) -> Prompt {
     if payload.images.is_empty() {
         return Prompt::new(payload.text);
@@ -602,6 +625,23 @@ async fn write_outbound(mut receiver: mpsc::UnboundedReceiver<Value>) -> std::io
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_unreadable_tool_result_still_fails_its_call() {
+        let line = r#"{"type":"tool_result","session_id":"s","call_id":"c","success":"yes"}"#;
+        let error = serde_json::from_str::<Inbound>(line).expect_err("malformed");
+        let result = unreadable_tool_result(line, &error).expect("ids are readable");
+        assert_eq!(
+            (
+                result.session_id.as_str(),
+                result.call_id.as_str(),
+                result.success
+            ),
+            ("s", "c", false)
+        );
+        assert!(unreadable_tool_result(r#"{"type":"cancel"}"#, &error).is_none());
+        assert!(unreadable_tool_result("not json", &error).is_none());
+    }
 
     #[test]
     fn text_only_prompts_stay_plain_text() {

@@ -2,6 +2,7 @@ import { EventEmitter } from "node:events";
 import { PassThrough, Writable } from "node:stream";
 import { describe, expect, it, vi } from "vitest";
 import { NANOCODE_HOST_PROTOCOL_VERSION, NanocodeHost, nanocodeModel, nanocodeSessionId } from "../../src/agent/nanocodeHost.js";
+import { logger } from "../../src/util/logger.js";
 
 const V = NANOCODE_HOST_PROTOCOL_VERSION;
 
@@ -201,6 +202,27 @@ describe("NanocodeHost client", () => {
     expect(spawned).toHaveLength(2);
     expect(host.durable).toBe(false);
     await host.stop();
+  });
+
+  it("logs host protocol errors that are not tied to a turn", async () => {
+    const error = vi.spyOn(logger, "error").mockImplementation(() => undefined as never);
+    const host = new NanocodeHost({
+      tools: [],
+      spawnProcess: () => fakeProcess({
+        onMessage: (message, process) => {
+          if (message.type !== "turn") return;
+          process.send({ type: "failed", request_id: null, error: "invalid inbound message: bad tool result" });
+          process.send({ type: "completed", request_id: message.request_id, session_id: message.session_id, final_message: "ok", usage: {}, resumed: false });
+        },
+      }) as never,
+    });
+    try {
+      await expect(host.runTurn(turnInput())).resolves.toMatchObject({ finalMessage: "ok" });
+      expect(error).toHaveBeenCalledWith({ error: "invalid inbound message: bad tool result" }, "nanocode host reported a protocol error");
+    } finally {
+      error.mockRestore();
+      await host.stop();
+    }
   });
 
   it("rejects a host speaking another protocol version", async () => {

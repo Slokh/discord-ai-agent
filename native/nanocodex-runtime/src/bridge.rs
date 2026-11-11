@@ -131,7 +131,7 @@ pub fn tool_output(result: ToolResultMessage) -> Result<ToolOutput, serde_json::
         output = output.with_structured_result(value);
     }
     if let Some(metadata) = result.metadata {
-        output = output.with_metadata(serde_json::from_str::<Value>(metadata.get())?);
+        output = output.with_metadata(metadata);
     }
     Ok(output)
 }

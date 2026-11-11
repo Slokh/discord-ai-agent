@@ -7,7 +7,7 @@
 
 use nanocode::tool_contract::ToolDefinition;
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, value::RawValue};
+use serde_json::Value;
 
 pub const PROTOCOL_VERSION: u32 = 2;
 
@@ -70,8 +70,11 @@ pub struct ToolResultMessage {
     pub output: String,
     #[serde(default)]
     pub code_mode_value: Option<Value>,
+    /// A plain `Value`: serde_json's `RawValue` cannot be decoded inside an
+    /// internally tagged enum, which made every tool result with metadata
+    /// fail to parse.
     #[serde(default)]
-    pub metadata: Option<Box<RawValue>>,
+    pub metadata: Option<Value>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -155,6 +158,19 @@ mod tests {
         };
         assert_eq!(turn.bootstrap.as_deref(), Some("b"));
         assert_eq!(turn.prompt.images.len(), 1);
+    }
+
+    #[test]
+    fn parses_tool_results_shaped_like_the_worker_sends_them() {
+        let message: Inbound = serde_json::from_str(
+            r#"{"type":"tool_result","session_id":"s","call_id":"c","success":true,"output":"ok","code_mode_value":{"n":1},"metadata":{"status":"ok","fileCount":0,"tableCount":0}}"#,
+        )
+        .expect("tool result parses");
+        let Inbound::ToolResult(result) = message else {
+            panic!("expected a tool result")
+        };
+        assert_eq!(result.metadata.expect("metadata")["status"], "ok");
+        assert_eq!(result.code_mode_value.expect("value")["n"], 1);
     }
 
     #[test]

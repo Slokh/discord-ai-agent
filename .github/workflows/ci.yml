@@ -213,7 +213,7 @@ jobs:
       MANIFEST: native/nanocodex-runtime/Cargo.toml
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/cache@v4
+      - uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry
